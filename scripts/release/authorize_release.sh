@@ -36,6 +36,11 @@ fail() { echo "STOP: $*" >&2; exit 1; }
 
 cd "$ROOT"
 [ -z "$(git status --porcelain)" ] || fail "the worktree is not clean"
+# one private copy of the document and of the public key: everything below (verify, digest, sign, apply) works on THESE bytes only
+WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf "$WORK"' EXIT
+[ "$(wc -c < "$PUB")" -le 4096 ] || fail "the public key file is too large"
+grep -q "PRIVATE" "$PUB" && fail "that file looks like a private key (nothing was read from it)"
+cp "$DOC" "$WORK/doc.md"; cp "$PUB" "$WORK/key.pub"; DOC="$WORK/doc.md"; PUB="$WORK/key.pub"
 BASE="$(sed -n 's/^base-commit: //p' "$DOC" | head -1)"
 [ "$(git rev-parse HEAD)" = "$BASE" ] || fail "HEAD $(git rev-parse HEAD) is not the commit the document names ($BASE)"
 "${PY[@]}" verify --doc "$DOC" --commit "$BASE" || fail "the document does not match its commit"
@@ -43,7 +48,6 @@ DIGEST="$("${PY[@]}" digest --doc "$DOC")"
 FPR="$(/usr/bin/ssh-keygen -l -f "$PUB" | awk '{print $2}')"
 [ -n "$FPR" ] || fail "cannot read the public key"
 [ "$FPR" != "SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA" ] || fail "that is the published release key; use a separate legal-decision key"
-grep -q "PRIVATE" "$PUB" && fail "that file looks like a private key"
 IDS="$(sed -n 's/^decision: \([^ ]*\) .*/\1/p' "$DOC" | tr '\n' ' ')"
 echo "document : $DOC"
 echo "sha256   : $DIGEST"
@@ -61,27 +65,30 @@ read -r -p "Type the full sha256 of the document to approve THIS document: " T1 
 [ "$T1" = "$DIGEST" ] || fail "the typed digest differs from the document's digest"
 read -r -p "Type the key fingerprint (SHA256:...) of your legal-decision key (confirm it against your independent record): " T2 < /dev/tty
 [ "$T2" = "$FPR" ] || fail "the typed fingerprint differs from the key file's"
-read -r -p "Name that signs (as on your earlier form) [Alex Rybachek]: " NAME < /dev/tty
-NAME="${NAME:-Alex Rybachek}"
+DOCNAME="$(sed -n 's/^\* Owner name as signing.*`____\(.*\)____`.*/\1/p' "$DOC" | head -1)"
+[ -n "$DOCNAME" ] || fail "cannot read the signing name from section 11 of the document"
+read -r -p "Type the name that signs, exactly as written in section 11 of the document: " NAME < /dev/tty
+[ "$NAME" = "$DOCNAME" ] || fail "the typed name differs from the name in the document (to sign under another name, change owner.signature_name_on_prior_forms in the manifest and render a new document)"
 [ -n "${SSH_AUTH_SOCK:-}" ] || fail "no ssh-agent (SSH_AUTH_SOCK is empty): the private key must be in your agent"
 /usr/bin/ssh-add -L 2>/dev/null | grep -qF "$(awk '{print $2}' "$PUB")" || fail "your agent does not hold that key"
-TMP="$(mktemp -d)"; trap 'rm -f "$TMP/key.pub" "$TMP/doc" "$TMP/doc.sig"; rmdir "$TMP" 2>/dev/null || true' EXIT
-cp "$PUB" "$TMP/key.pub"; cp "$DOC" "$TMP/doc"
-[ "$(shasum -a 256 "$TMP/doc" | awk '{print $1}')" = "$DIGEST" ] || fail "the document changed while being copied"
-env -i PATH=/usr/bin:/bin SSH_AUTH_SOCK="$SSH_AUTH_SOCK" /usr/bin/ssh-keygen -Y sign -f "$TMP/key.pub" -n redevops-legal-decision@v1 "$TMP/doc" || fail "signing failed"
+[ "$(shasum -a 256 "$DOC" | awk '{print $1}')" = "$DIGEST" ] || fail "the document changed after its digest was shown"
+env -i PATH=/usr/bin:/bin SSH_AUTH_SOCK="$SSH_AUTH_SOCK" /usr/bin/ssh-keygen -Y sign -f "$PUB" -n redevops-legal-decision@v1 "$DOC" || fail "signing failed"
 DATE="$(date -u +%F)"
 "${PY[@]}" apply --doc "$DOC" --pubkey "$PUB" --decided-by "$NAME (owner), consolidated approval $DIGEST" --date "$DATE"
-cp "$TMP/doc.sig" "$ROOT/docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig"
+cp "$DOC.sig" "$ROOT/docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig"
 if ! "${PY[@]}" check; then
   git checkout -- packaging/distribution-gate.json packaging/legal-allowed-signers 2>/dev/null || true
   rm -f docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig
   fail "the gate does not accept the signature; everything was rolled back"
 fi
 git add docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig packaging/legal-allowed-signers packaging/distribution-gate.json
-git commit -q -m "release 0.6.0: consolidated owner approval $DIGEST (signed $DATE by $NAME, key $FPR)
+git commit -q -m "release 0.6.0: consolidated owner approval $DIGEST (signed $DATE by $NAME)
 
+Signer-key-fingerprint: $FPR
+Approval-sha256: $DIGEST
 Owner-only decisions: $IDS
 Base commit F: $BASE
 Counsel decisions are NOT covered and stay OPEN."
 echo "RELEASE COMMIT R: $(git rev-parse HEAD)"
-echo "Next: scripts/release/release_orchestrate.sh --dry-run   (nothing was pushed)"
+echo "Next: scripts/release/release_orchestrate.sh --dry-run --expect-signer-fingerprint $FPR   (nothing was pushed)"
+echo "Record $FPR from an independent channel now; the orchestrator trusts only the value you pass it."

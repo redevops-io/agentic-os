@@ -14,6 +14,10 @@ legal-decision key listed in packaging/legal-allowed-signers (packaging/check-di
 """
 from __future__ import annotations
 
+import sys
+
+sys.dont_write_bytecode = True        # loading the gate by path must not leave __pycache__ in the (clean-checked) worktree
+
 import argparse
 import hashlib
 import json
@@ -54,14 +58,42 @@ def load(commit: str, root: Path = ROOT):
     return man_raw, json.loads(man_raw), gate
 
 
-def owner_only(gate: dict) -> list[dict]:
+_GATE_MOD = {}
+
+
+def gate_mod(root: Path = ROOT):
+    """The release gate module (packaging/check-distribution-gate.py of `root`), loaded by path: the bundle parser, the frozen set of
+    counsel-named decisions and the signature verification are the gate's own, not copies."""
+    key = str(root)
+    if key not in _GATE_MOD:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(f"_gate_{len(_GATE_MOD)}", root / "packaging" / "check-distribution-gate.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        _GATE_MOD[key] = mod
+    return _GATE_MOD[key]
+
+
+def owner_only(gate: dict, root: Path = ROOT) -> list[dict]:
+    """Owner-only decisions. Refuses a gate file in which a decision that the gate freezes as counsel-named says `decides: owner`."""
+    frozen = getattr(gate_mod(root), "COUNSEL_NAMED", None)
+    if frozen is None:
+        raise SystemExit("the gate in this tree has no frozen COUNSEL_NAMED set; refusing to treat any decision as owner-only")
+    bad = sorted(d["id"] for d in gate["decisions"] if d["id"] in frozen and d["decides"] == "owner")
+    if bad:
+        raise SystemExit(f"the gate file marks counsel-named decisions as owner-only: {bad}")
+    named = sorted(d["id"] for d in gate["decisions"] if "counsel" in d["decides"] and d["id"] not in frozen)
+    if named:
+        raise SystemExit(f"the gate file names counsel on decisions that the gate does not freeze as counsel-named: {named}")
     return [d for d in gate["decisions"] if d["decides"] == "owner"]
 
 
-def header_lines(commit: str, tree: str, man_sha: str, man: dict, gate: dict) -> list[str]:
+def header_lines(commit: str, tree: str, man_sha: str, man: dict, gate: dict, include: set | None = None, root: Path = ROOT) -> list[str]:
     out = ["redevops-legal-decision: 2", f"bundle: {BUNDLE_NAME}", f"base-commit: {commit}", f"base-tree: {tree}", f"manifest-sha256: {man_sha}"]
-    for d in owner_only(gate):
-        out.append(f"decision: {d['id']} {man['decisions'][d['id']]['option']}")
+    for d in owner_only(gate, root):
+        if include is None or d["id"] in include:
+            out.append(f"decision: {d['id']} {man['decisions'][d['id']]['option']}")
     return out
 
 
@@ -76,7 +108,7 @@ def esc(s: str) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ")
 
 
-def render(commit: str, root: Path = ROOT) -> str:
+def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
     commit = git("rev-parse", commit + "^{commit}", root=root)
     tree = git("rev-parse", commit + "^{tree}", root=root)
     man_raw, man, gate = load(commit, root)
@@ -88,11 +120,15 @@ def render(commit: str, root: Path = ROOT) -> str:
     for i, m in man["decisions"].items():
         if i not in decs or m["option"] not in [o["key"] for o in decs[i]["options"]]:
             raise SystemExit(f"manifest names an unknown decision or option: {i} {m['option']}")
-    ob = owner_only(gate)
+    all_ob = owner_only(gate, root)
+    if include is not None and (not include or not include <= {d["id"] for d in all_ob}):
+        raise SystemExit("include must be a non-empty subset of the owner-only decisions")
+    ob = [d for d in all_ob if include is None or d["id"] in include]
+    struck = [d for d in all_ob if d not in ob]
     other = [d for d in gate["decisions"] if d["decides"] != "owner"]
     L: list[str] = []
     w = L.append
-    L += header_lines(commit, tree, man_sha, man, gate)
+    L += header_lines(commit, tree, man_sha, man, gate, include, root)
     w("")
     w("# RELEASE OWNER APPROVAL 0.6.0")
     w("")
@@ -105,10 +141,10 @@ def render(commit: str, root: Path = ROOT) -> str:
     w("")
     w(f"By signing this document once you would, **for release 0.6.0 built from the release commit derived from `{commit}`** (tree `{tree}`):")
     w("")
-    w(f"1. **Record {len(ob)} owner-only decisions** ({', '.join(d['id'] for d in ob)}) with the options in section 4. They are mapped onto their existing gate identifiers; each stays a separate entry in `packaging/distribution-gate.json`.")
+    w(f"1. **Record {len(ob)} owner-only decisions** ({', '.join(d['id'] for d in ob)}) with the options in section 4. They are mapped onto their existing gate identifiers; each stays a separate entry in `packaging/distribution-gate.json`." + (f" Struck by the owner, NOT recorded and still OPEN: {', '.join(d['id'] for d in struck)}." if struck else ""))
     w("2. **State the facts in section 4 as the owner's own** (marked *attests*): first-party authorship of the hero placeholder and of the launcher icons, and the licence intent for the sibling packages.")
     w("3. **Accept the exceptions and risks in section 7** for this release.")
-    w("4. **Authorize the release workflow in section 6 to run at your terminal**: build macOS, Windows and Linux from the release commit; sign macOS with the Developer ID identity and notarize with the `redevops` profile; sign Windows through Azure Artifact Signing with your own `az` login; apply the Linux policy you choose in P-LIN; and, only after every gate passes, **push the release commit and the tag `v0.6.0` to the public repository** (pins-04). Nothing is uploaded, released or deployed by it.")
+    w("4. **Authorize the release workflow in section 6 to run at your terminal**: build macOS, Windows and Linux from the release commit; sign macOS with the Developer ID identity and notarize with the `redevops` profile; sign Windows through Azure Artifact Signing with your own `az` login; apply the Linux policy you choose in P-LIN; and, only after every stage has passed and with your typed confirmation, **push the release commit as the branch `release/0.6.0` and the tag `v0.6.0` to the remote you name** (pins-04). Nothing is uploaded, released or deployed by it.")
     w("")
     w("**You are NOT authorizing**, and this signature cannot supply:")
     w("")
@@ -197,7 +233,7 @@ def render(commit: str, root: Path = ROOT) -> str:
         if extra:
             w(f"* **{d['id']}.** " + " ".join(extra))
     w("")
-    w("The gate classes these decisions as owner decisions. Several of them list counsel questions (last column); counsel has not answered them and this approval does not claim otherwise. The owner who prefers to wait for counsel on D-LIC-2 (Q7, Q8, Q4) can strike it from the header before signing (the document then has a different digest).")
+    w("The gate classes these decisions as owner decisions (the set of counsel-named decisions is frozen inside the gate, not read from the gate file). Several of them list counsel questions (last column); counsel has not answered them and this approval does not claim otherwise. An owner who prefers to wait for counsel on D-LIC-2 (Q7, Q8, Q4) or on any other row can have the document re-rendered without that decision (`approval.py render --strike ID`); the struck decision then stays OPEN and the document has a different digest. A hand-edited document is refused.")
     w("")
     w("## 5. Decisions that name counsel (NOT covered; stay OPEN)")
     w("")
@@ -236,10 +272,10 @@ def render(commit: str, root: Path = ROOT) -> str:
     w("")
     w("### Release actions authorized by a valid signature (and only these)")
     w("")
-    w("1. Run `scripts/release/release_orchestrate.sh` at the owner's terminal; it refuses to start unless the gate's checks pass and the commit is the release commit of section 2.")
+    w("1. Run `scripts/release/release_orchestrate.sh --run` at the owner's terminal; it stops at the first stage that fails or is blocked, and its first stage (S0) requires the release commit to be F plus exactly the approval files, signed by the key fingerprint you pass in `--expect-signer-fingerprint`. The release gate itself refuses a distribution build whatever the orchestrator does.")
     w("2. Build the artifacts of section 2 and verify their checksums.")
     w("3. Sign them per P-MAC, P-WIN and P-LIN; every real signing step prints its scope hash and needs the owner's own login or keychain.")
-    w(f"4. After every gate passes and before any binary is distributed: push the release commit and the tag `{man['source']['tag_proposal']}` to the public repository (pins-04). The push is performed by the orchestrator at the owner's terminal with the owner's own git credentials.")
+    w(f"4. After stages S0 to S7 have passed in the same run, with `--push --remote NAME` and your typed confirmation: tag the release commit `{man['source']['tag_proposal']}` and push the branch `release/0.6.0` and that tag to the remote you name, with your own git credentials (pins-04). The orchestrator then reads the remote back (`git ls-remote`). Recording the pins-04 decision does not publish anything; the publication happens only at this step.")
     w("5. Write the consolidated release manifest and evidence report.")
     w("")
     w("Not authorized: uploading or publishing artifacts, creating a GitHub release, deploying, changing other repositories, using any key an agent can reach.")
@@ -272,14 +308,15 @@ def render(commit: str, root: Path = ROOT) -> str:
     w("")
     w("1. The owner reads this document and its sha256 (printed by `scripts/release/authorize_release.sh`, shown separately from the file).")
     w("2. The owner says explicitly that they approve this exact document.")
-    w("3. The owner runs `scripts/release/authorize_release.sh --doc <file> --pubkey <legal-decision public key>` at their own terminal. It re-checks the document against the commit, shows the digest and the key fingerprint, asks the owner to type both, signs the document with `ssh-keygen -Y sign` (namespace `redevops-legal-decision@v1`, agent-held key), verifies the signature, then writes the gate entries and the signer list for the bundled decisions. It signs nothing else and pushes nothing.")
-    w("4. `packaging/check-distribution-gate.py` verifies the signature and maps each decision of the signed header to its gate entry; an entry that is not listed, that names counsel, or whose option differs is refused.")
+    w("3. The owner runs `scripts/release/authorize_release.sh --doc <file> --pubkey <legal-decision public key>` at their own terminal. It copies the document to a private directory and works only on that copy, re-checks it against the commit, shows the digest and the key fingerprint, asks the owner to type both and to type the signing name (which must equal the name in section 11), signs the copy once with `ssh-keygen -Y sign` (namespace `redevops-legal-decision@v1`, agent-held key), then writes the document, its signature, the signer list and the gate entries of the bundled decisions, asks the release gate itself to verify them, and commits exactly those four paths (rolling everything back if the gate refuses). It signs nothing else and pushes nothing.")
+    w("4. `packaging/check-distribution-gate.py` verifies the signature and maps each decision of the signed header to its gate entry; an entry that is not listed, that names counsel (a set frozen inside the gate), or whose option differs is refused.")
+    w("5. The owner records the fingerprint of the legal-decision key from an independent channel and passes it to the orchestrator (`--expect-signer-fingerprint`). Without that value the orchestrator cannot tell the owner's signature from a signature by whatever key the release commit lists. To make a process that holds your agent socket unable to sign silently, load the key with `ssh-add -c` (confirmation on every use).")
     w("")
     w("## 11. Signature block (prefilled DRAFT)")
     w("")
     w("The values below are prefilled from the owner's earlier signed form so that the format is the established one. **They are not an act of the owner and not a signature.** The date is never prefilled; `authorize_release.sh` records the date when the owner runs it.")
     w("")
-    w(f"* Owner name as signing (from the 2026-11-10 form): `____{o['signature_name_on_prior_forms']}____`  *(prefilled, DRAFT)*")
+    w(f"* Owner name as signing (from the 2026-11-10 form): `____{o['signature_name_on_prior_forms']}____`  *(prefilled, DRAFT; `authorize_release.sh` makes the owner type exactly this name, so it is part of the signed bytes)*")
     w(f"* Initials: `_{o['initials_on_prior_forms']}_`  *(prefilled, DRAFT)*")
     w("* Date: `____________`  *(left blank; set at the signing run)*")
     w(f"* Status: **{BANNER}**")
@@ -288,26 +325,22 @@ def render(commit: str, root: Path = ROOT) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------------- verify
-def parse_header(text: str) -> dict:
-    head = text.split("\n\n", 1)[0].split("\n")
-    out = {"decisions": {}}
-    if not head or head[0] != "redevops-legal-decision: 2":
-        raise SystemExit("not a consolidated approval (header line 1)")
-    for ln in head[1:]:
-        k, _, v = ln.partition(": ")
-        if k == "decision":
-            i, _, o = v.partition(" ")
-            out["decisions"][i] = o
-        else:
-            out[k] = v
-    return out
+def parse_header(text: str, root: Path = ROOT) -> dict:
+    """The gate's own strict bundle parser (no slot lines, no unknown keys, no duplicates, at least one decision)."""
+    hdr, probs = gate_mod(root).parse_bundle_record(text.encode("utf-8"))
+    if probs:
+        raise SystemExit("not a valid consolidated approval header: " + "; ".join(probs))
+    return hdr
 
 
 def verify(doc: Path, commit: str | None = None, root: Path = ROOT) -> list[str]:
+    """The document must be byte-identical to what `render` produces for its commit and its (possibly struck) decision set."""
     errs: list[str] = []
-    raw = doc.read_bytes()
-    text = raw.decode("utf-8")
-    h = parse_header(text)
+    text = doc.read_bytes().decode("utf-8")
+    try:
+        h = parse_header(text, root)
+    except SystemExit as e:
+        return [str(e)]
     commit = commit or h.get("base-commit", "")
     try:
         full = git("rev-parse", commit + "^{commit}", root=root)
@@ -320,18 +353,14 @@ def verify(doc: Path, commit: str | None = None, root: Path = ROOT) -> list[str]
     man_raw, man, gate = load(full, root)
     if h.get("manifest-sha256") != sha(man_raw):
         errs.append("header manifest-sha256 does not match the manifest at the commit")
-    want = {d["id"]: man["decisions"][d["id"]]["option"] for d in owner_only(gate)}
-    if h["decisions"] != want and not (set(h["decisions"]) <= set(want) and all(want[i] == o for i, o in h["decisions"].items())):
-        errs.append(f"header decisions differ from the owner-only decisions of the manifest: {sorted(set(h['decisions']) ^ set(want))}")
-    for i in h["decisions"]:
-        d = next((x for x in gate["decisions"] if x["id"] == i), None)
-        if d is None or d["decides"] != "owner":
-            errs.append(f"{i}: not an owner-only gate decision")
-    if BANNER not in text:
-        errs.append("the draft banner is missing (the document is not the generated one)")
-    # a document that was not rendered by this tool for this commit is refused when no decision was struck
-    if set(h["decisions"]) == set(want) and text != render(full, root):
-        errs.append("the document is not byte-identical to what `render` produces for this commit")
+    want = {d["id"]: man["decisions"][d["id"]]["option"] for d in owner_only(gate, root)}
+    for i, o in h["decisions"].items():
+        if want.get(i) != o:
+            errs.append(f"{i}: not an owner-only decision of the manifest with option {o!r}")
+    if errs:
+        return errs
+    if text != render(full, root, include=set(h["decisions"])):
+        errs.append("the document is not byte-identical to what `render` produces for this commit and this decision set")
     return errs
 
 
@@ -346,7 +375,11 @@ def apply(doc: Path, pubkey: Path, decided_by: str, date: str, root: Path = ROOT
     import datetime
     datetime.date.fromisoformat(date)
     raw = doc.read_bytes()
-    h = parse_header(raw.decode("utf-8"))
+    h = parse_header(raw.decode("utf-8"), root)
+    if pubkey.stat().st_size > 4096:
+        raise SystemExit("the public key file is too large")
+    if "PRIVATE" in pubkey.read_text(encoding="utf-8", errors="replace"):
+        raise SystemExit("that file looks like a private key")
     fp = fingerprint(pubkey)
     if fp == RELEASE_KEY_FPR:
         raise SystemExit("refusing: that is the published RELEASE key; use a separate legal-decision key")
@@ -354,21 +387,29 @@ def apply(doc: Path, pubkey: Path, decided_by: str, date: str, root: Path = ROOT
     if not re.fullmatch(r"(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]+( [^\n]*)?", pk) or "PRIVATE" in pk or "\n" in pk:
         raise SystemExit("the public key file must hold exactly one public key line")
     target = root / DOC_REL
+    for q in (root / "docs", root / "docs/legal", root / "docs/legal/approved", target, Path(str(target) + ".sig"), root / GATE, root / ALLOWED):
+        if q.is_symlink():
+            raise SystemExit(f"refusing to write through a symlink: {q}")
     target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists() or target.read_bytes() != raw:
         target.write_bytes(raw)
     gate_path = root / GATE
-    g = json.loads(gate_path.read_text(encoding="utf-8"))
+    orig = gate_path.read_text(encoding="utf-8")
+    g = json.loads(orig)
     changed = []
+    frozen = gate_mod(root).COUNSEL_NAMED
     for d in g["decisions"]:
         if d["id"] in h["decisions"]:
-            if d["decides"] != "owner":
+            if d["decides"] != "owner" or d["id"] in frozen:
                 raise SystemExit(f"{d['id']} is not owner-only")
             d.update(status="DECIDED", chosen_option=h["decisions"][d["id"]], decision_reference=DOC_REL, decision_sha256=sha(raw),
                      decided_by=decided_by, decided_on=date)
             changed.append(d["id"])
     g["legal_signer_fingerprints"] = sorted(set(g.get("legal_signer_fingerprints", [])) | {fp})
-    gate_path.write_text(json.dumps(g, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    unchanged = json.dumps(json.loads(orig), indent=1, ensure_ascii=False) + "\n"
+    if unchanged != orig:
+        raise SystemExit("the gate file is not in its canonical one-space-indent form; refusing to reformat it")
+    gate_path.write_text(json.dumps(g, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     al = root / ALLOWED
     lines = al.read_text(encoding="utf-8").splitlines() if al.exists() else []
     entry = f'redevops-legal-decision namespaces="redevops-legal-decision@v1" {" ".join(pk.split()[:2])}'
@@ -379,30 +420,48 @@ def apply(doc: Path, pubkey: Path, decided_by: str, date: str, root: Path = ROOT
 
 
 def check(root: Path = ROOT) -> list[str]:
-    """Run the release gate's own signature verification (packaging/check-distribution-gate.py) and return the problems that concern the
-    decisions bundled in the committed approval document. The gate decides; this only filters its answer."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("_gate", root / "packaging" / "check-distribution-gate.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
+    """Verify, with the release gate's own functions, that the committed approval document carries a valid signature by a listed signer and that
+    EVERY decision of its signed header (blocking or not) is DECIDED in the gate file with matching option, reference and hash. Also runs the gate's
+    signer-list anchor and release-key separation checks."""
+    mod = gate_mod(root)
     g = json.loads((root / GATE).read_text(encoding="utf-8"))
     doc = root / DOC_REL
     if not doc.is_file():
         return [f"{DOC_REL} is missing"]
-    ids = set(parse_header(doc.read_text(encoding="utf-8"))["decisions"])
-    probs = mod.signature_problems(g["decisions"], root=root, allowed_signers=root / ALLOWED, platform="all", signers=g.get("legal_signer_fingerprints", []))
-    bad = [p for p in probs if any(p.startswith(i) for i in ids) or p.startswith("signer list")]
-    for d in g["decisions"]:
-        if d["id"] in ids and d["blocks_distribution"] and (d.get("status") != "DECIDED" or mod._decided_problems(d, [o["key"] for o in d["options"]], root)):
-            bad.append(f"{d['id']}: not DECIDED completely")
-    return bad
+    try:
+        h = parse_header(doc.read_text(encoding="utf-8"), root)
+    except SystemExit as e:
+        return [str(e)]
+    out: list[str] = []
+    signers = g.get("legal_signer_fingerprints", [])
+    out += [f"signer list: {m}" for m in mod.anchor_problems(root / ALLOWED, signers)]
+    out += [f"signer list: {m}" for m in mod.separation_problems(root / ALLOWED)]
+    if not signers:
+        out.append("signer list: the gate file lists no legal-decision signer")
+    _, why = mod.verify_sshsig_bytes(root, DOC_REL, root / ALLOWED, signers)
+    if why:
+        out.append(f"signature: {why}")
+    by_id = {d["id"]: d for d in g["decisions"]}
+    raw_sha = sha(doc.read_bytes())
+    cache: dict = {}
+    for i, o in h["decisions"].items():
+        d = by_id.get(i)
+        if d is None:
+            out.append(f"{i}: not a decision of the gate file")
+            continue
+        if d.get("status") != "DECIDED" or d.get("chosen_option") != o or d.get("decision_reference") != DOC_REL or d.get("decision_sha256") != raw_sha:
+            out.append(f"{i}: the gate entry does not record this bundle (status, option, reference, hash)")
+            continue
+        out += mod._record_problems(d, root, root / ALLOWED, signers, cache)
+        out += mod._decided_problems(d, [x["key"] for x in d["options"]], root)
+    return list(dict.fromkeys(out))
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("render"); r.add_argument("--commit", default="HEAD"); r.add_argument("--out", type=Path, required=True)
+    r.add_argument("--strike", action="append", default=[], help="owner-only decision id to leave out (stays OPEN); repeatable")
     v = sub.add_parser("verify"); v.add_argument("--doc", type=Path, required=True); v.add_argument("--commit")
     a = sub.add_parser("apply"); a.add_argument("--doc", type=Path, required=True); a.add_argument("--pubkey", type=Path, required=True)
     a.add_argument("--decided-by", required=True); a.add_argument("--date", required=True)
@@ -410,7 +469,14 @@ def main(argv=None) -> int:
     sub.add_parser("check")
     a_ = ap.parse_args(argv)
     if a_.cmd == "render":
-        a_.out.write_text(render(a_.commit), encoding="utf-8")
+        inc = None
+        if a_.strike:
+            full = git("rev-parse", a_.commit + "^{commit}")
+            ids = {d["id"] for d in owner_only(load(full)[2])}
+            if not set(a_.strike) <= ids:
+                raise SystemExit(f"--strike names a decision that is not owner-only: {sorted(set(a_.strike) - ids)}")
+            inc = ids - set(a_.strike)
+        a_.out.write_text(render(a_.commit, include=inc), encoding="utf-8")
         print(sha(a_.out.read_bytes()), a_.out)
         return 0
     if a_.cmd == "verify":

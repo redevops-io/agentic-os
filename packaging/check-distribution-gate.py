@@ -389,6 +389,11 @@ def parse_decision_record(raw: bytes) -> tuple[dict, list[str]]:
 
 
 BUNDLE_VERSION = "2"
+# Decisions that name counsel. Frozen here, NOT read from the gate file: `decides` is repository data (editable together with the entry), so a
+# consolidated owner approval refuses these ids whatever the gate file says. A new counsel decision is added here deliberately
+# (tests/test_release_approval_bundle.py fails if the gate file and this set disagree).
+COUNSEL_NAMED = frozenset({"D-LIC-1", "D-LIC-3", "D-LIC-4", "D-LIC-5", "D-LIC-6", "D-LIC-9", "D-LIC-10", "D-LIC-12", "D-LIC-16", "D-LIC-18",
+                           "pins-03", "pins-08"})
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _BUNDLE_HDR_LINE = re.compile(r"^([a-z0-9-]+): (.+)$")
@@ -463,7 +468,7 @@ def bundle_binding_problems(d: dict, hdr: dict) -> list[str]:
         errs.append(f"{i}: the signed bundle does not list this decision")
     elif hdr["decisions"][i] != d.get("chosen_option"):
         errs.append(f"{i}: the signed bundle names option {hdr['decisions'][i]!r}, the gate entry {d.get('chosen_option')!r}")
-    if d.get("decides") != "owner":
+    if d.get("decides") != "owner" or i in COUNSEL_NAMED:
         errs.append(f"{i}: decides is {d.get('decides')!r}; a consolidated owner approval covers owner-only decisions, never one that names counsel")
     if d.get("slot_texts"):
         errs.append(f"{i}: a consolidated owner approval authorizes no About-slot text, but the gate entry names slot_texts")

@@ -18,7 +18,7 @@ import pytest
 from .about_fixture import ROOT
 
 FILES = ["scripts/release/approval.py", "scripts/release/authorize_release.sh", "packaging/check-distribution-gate.py", "packaging/distribution-gate.json",
-         "packaging/legal-allowed-signers", "packaging/release/decision-manifest-0.6.0.json", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"]
+         "packaging/legal-allowed-signers", "packaging/release/decision-manifest-0.6.0.json", "scripts/release/release_orchestrate.py", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"]
 GENV = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "HOME": "/nonexistent", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
@@ -127,7 +127,7 @@ def test_verify_refuses_a_tampered_document_and_a_wrong_commit(repo, tmp_path):
     doc3 = render(repo, tmp_path)
     doc3.write_text(doc3.read_text().replace("decision: D-LIC-8 a", "decision: D-LIC-8 a\ndecision: D-LIC-3 d", 1))
     r = run([sys.executable, "-I", "scripts/release/approval.py", "verify", "--doc", str(doc3)], repo)
-    assert r.returncode == 1 and "not an owner-only gate decision" in r.stderr
+    assert r.returncode == 1 and "not an owner-only decision of the manifest" in r.stderr
 
 
 def test_dry_run_changes_nothing(repo, tmp_path, key):
@@ -143,7 +143,7 @@ def test_one_signature_one_commit_and_the_gate_accepts_exactly_the_owner_only_de
     doc = render(repo, tmp_path)
     f = run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
     digest = run([sys.executable, "-I", "scripts/release/approval.py", "digest", "--doc", str(doc)], repo).stdout.strip()
-    code, out = drive(repo, doc, key, [digest, key["fpr"], ""])
+    code, out = drive(repo, doc, key, [digest, key["fpr"], "Alex Rybachek"])
     assert code == 0, out
     r = run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
     assert r != f and run(["git", "rev-parse", "HEAD^"], repo).stdout.strip() == f
@@ -190,3 +190,139 @@ def test_the_scripts_never_read_a_private_key_or_ssh_directory():
         src = (ROOT / rel).read_text()
         for bad in ("expanduser", "Path.home", "$HOME/.ssh", ".ssh/id_", "BEGIN OPENSSH PRIVATE KEY", "cat \"$HOME"):
             assert bad not in src, (rel, bad)
+
+
+# ---------------------------------------------------------------------------------------------------- review findings (independent review of the release tooling)
+def sign_and_commit_with(repo, tmp_path, key, doc):
+    """Make a release commit exactly as authorize_release.sh does, but with whatever key and document the caller chooses (an 'agent forgery')."""
+    sk = tmp_path / "attacker"
+    sk.mkdir(exist_ok=True)
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(sk / "k")], check=True, env={"PATH": "/usr/bin:/bin"})
+    (repo / "docs/legal/approved").mkdir(parents=True, exist_ok=True)
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "apply", "--doc", str(doc), "--pubkey", str(sk / "k.pub"), "--decided-by", "x", "--date", "2026-12-01"], repo)
+    assert r.returncode == 0, r.stderr
+    subprocess.run(["ssh-keygen", "-Y", "sign", "-q", "-f", str(sk / "k"), "-n", "redevops-legal-decision@v1", str(doc)], check=True, env={"PATH": "/usr/bin:/bin"})
+    shutil.copyfile(str(doc) + ".sig", repo / "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig")
+    fp = subprocess.run(["ssh-keygen", "-l", "-f", str(sk / "k.pub")], capture_output=True, text=True).stdout.split()[1]
+    run(["git", "add", "-A"], repo)
+    run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", f"forged\n\nSigner-key-fingerprint: {fp}\n"], repo)
+    return fp
+
+
+def s0_rows(repo, expect):
+    r = run([sys.executable, "-I", "scripts/release/release_orchestrate.py", "--run", "--stages", "S0", "--expect-signer-fingerprint", expect, "--workspace", str(repo), "--evidence-dir", str(repo.parent / "ev")], repo)
+    return r.stdout
+
+
+def test_s0_rejects_a_release_commit_signed_by_a_key_the_owner_did_not_name(repo, tmp_path, key):
+    doc = render(repo, tmp_path)
+    forged_fp = sign_and_commit_with(repo, tmp_path, key, doc)
+    out = s0_rows(repo, key["fpr"])                                   # the owner's real fingerprint
+    assert "`FAIL` exactly one signer was added" in out or "`FAIL` signer list" in out
+    out2 = s0_rows(repo, forged_fp)                                   # only the fingerprint the commit itself chose would pass that row
+    assert "`PASS` exactly one signer was added, and it is the key you named" in out2
+    no_expect = run([sys.executable, "-I", "scripts/release/release_orchestrate.py", "--run", "--stages", "S0", "--workspace", str(repo), "--evidence-dir", str(repo.parent / "ev")], repo).stdout
+    assert "no --expect-signer-fingerprint" in no_expect
+
+
+def test_s0_notices_a_deleted_last_decision_and_extra_files(repo, tmp_path, key):
+    doc = render(repo, tmp_path)
+    sign_and_commit_with(repo, tmp_path, key, doc)
+    g = json.loads((repo / "packaging/distribution-gate.json").read_text())
+    g["decisions"].pop()                                              # pins-08 is last
+    (repo / "packaging/distribution-gate.json").write_text(json.dumps(g, indent=1, ensure_ascii=False) + "\n")
+    (repo / "packaging/distribution-gate.json packaging_legal-allowed-signers").write_text("x")
+    run(["git", "add", "-A"], repo)
+    run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit"], repo)
+    out = s0_rows(repo, "SHA256:" + "A" * 43)
+    assert "`FAIL` gate file: unexpected changes" in out and "decision list" in out
+    assert "`FAIL` R differs from F=HEAD^ in exactly the four approval paths" in out
+
+
+def test_verify_refuses_a_struck_document_with_rewritten_prose_but_accepts_the_rendered_strike(repo, tmp_path):
+    base = [sys.executable, "-I", "scripts/release/approval.py"]
+    struck = tmp_path / "struck.md"
+    assert run([*base, "render", "--commit", "HEAD", "--out", str(struck), "--strike", "D-LIC-2"], repo).returncode == 0
+    assert "decision: D-LIC-2" not in struck.read_text().split("\n\n")[0] and "Struck by the owner" in struck.read_text()
+    assert run([*base, "verify", "--doc", str(struck)], repo).returncode == 0
+    struck.write_text(struck.read_text().replace("You are NOT authorizing", "You are authorizing anything"))
+    r = run([*base, "verify", "--doc", str(struck)], repo)
+    assert r.returncode == 1 and "byte-identical" in r.stderr
+
+
+@pytest.mark.parametrize("edit", [
+    lambda h: "\n".join(l for l in h.split("\n") if not l.startswith("decision: ")),                          # zero decisions
+    lambda h: h.replace("\n\n", "\nslot: LEGAL.NO_WARRANTY sha256 " + "d" * 64 + "\n\n", 1),                # slot line
+    lambda h: h.replace("\n\n", "\nsurprise: 1\n\n", 1),                                                   # unknown key
+])
+def test_verify_uses_the_gates_strict_header_parser(repo, tmp_path, edit):
+    doc = render(repo, tmp_path)
+    doc.write_text(edit(doc.read_text()))
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "verify", "--doc", str(doc)], repo)
+    assert r.returncode == 1
+
+
+def test_check_fails_without_a_signature_and_for_non_blocking_or_unknown_ids(repo, tmp_path, key):
+    doc = render(repo, tmp_path)
+    run([sys.executable, "-I", "scripts/release/approval.py", "apply", "--doc", str(doc), "--pubkey", str(key["pub"]), "--decided-by", "x", "--date", "2026-12-01"], repo)
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "check"], repo)
+    assert r.returncode == 1 and "signature" in r.stderr                       # applied, never signed
+    # a header listing only a non-blocking and an unknown decision
+    text = doc.read_text().split("\n\n", 1)
+    head = [l for l in text[0].split("\n") if not l.startswith("decision: ")] + ["decision: D-LIC-7 b", "decision: D-LIC-99 a"]
+    (repo / "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md").write_text("\n".join(head) + "\n\n" + text[1])
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "check"], repo)
+    assert r.returncode == 1 and "D-LIC-99" in r.stderr
+
+
+def test_a_gate_file_that_flips_a_counsel_decision_to_owner_is_refused(repo, tmp_path, key):
+    g = json.loads((repo / "packaging/distribution-gate.json").read_text())
+    for d in g["decisions"]:
+        if d["id"] in ("D-LIC-3", "pins-03"):
+            d["decides"] = "owner"
+    (repo / "packaging/distribution-gate.json").write_text(json.dumps(g, indent=1, ensure_ascii=False) + "\n")
+    run(["git", "add", "-A"], repo)
+    run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "flip"], repo)
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "render", "--commit", "HEAD", "--out", str(tmp_path / "x.md")], repo)
+    assert r.returncode != 0 and "counsel-named" in r.stderr
+
+
+def test_the_frozen_counsel_set_equals_the_gate_files_counsel_decisions():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_g", ROOT / "packaging/check-distribution-gate.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    named = {d["id"] for d in json.loads((ROOT / "packaging/distribution-gate.json").read_text())["decisions"] if "counsel" in d["decides"]}
+    assert named == set(mod.COUNSEL_NAMED)
+
+
+def test_the_name_typed_must_equal_the_name_in_the_document(repo, tmp_path, key):
+    doc = render(repo, tmp_path)
+    digest = run([sys.executable, "-I", "scripts/release/approval.py", "digest", "--doc", str(doc)], repo).stdout.strip()
+    code, out = drive(repo, doc, key, [digest, key["fpr"], "Someone Else"])
+    assert code != 0 and "typed name differs" in out
+    assert run(["git", "status", "--porcelain"], repo).stdout == ""
+
+
+def test_authorize_with_a_struck_document_records_only_the_remaining_decisions(repo, tmp_path, key):
+    doc = tmp_path / "struck.md"
+    assert run([sys.executable, "-I", "scripts/release/approval.py", "render", "--commit", "HEAD", "--out", str(doc), "--strike", "D-LIC-2"], repo).returncode == 0
+    digest = run([sys.executable, "-I", "scripts/release/approval.py", "digest", "--doc", str(doc)], repo).stdout.strip()
+    code, out = drive(repo, doc, key, [digest, key["fpr"], "Alex Rybachek"])
+    assert code == 0, out
+    g = gate_state(repo)
+    assert g["D-LIC-2"]["status"] == "OPEN" and g["D-LIC-8"]["status"] == "DECIDED"
+    assert run([sys.executable, "-I", "scripts/release/approval.py", "check"], repo).returncode == 0
+
+
+def test_the_gate_file_formatting_is_preserved(repo, tmp_path, key):
+    before = (repo / "packaging/distribution-gate.json").read_text()
+    doc = render(repo, tmp_path)
+    digest = run([sys.executable, "-I", "scripts/release/approval.py", "digest", "--doc", str(doc)], repo).stdout.strip()
+    code, _ = drive(repo, doc, key, [digest, key["fpr"], "Alex Rybachek"])
+    assert code == 0
+    after = (repo / "packaging/distribution-gate.json").read_text()
+    import difflib
+    changed = sum(1 for ln in difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0) if ln[:1] in "+-" and ln[:3] not in ("+++", "---"))
+    assert changed < 120, changed                       # the status fields of nine entries and one fingerprint, not a reformat of the file

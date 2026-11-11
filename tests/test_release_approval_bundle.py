@@ -195,3 +195,19 @@ def test_version_1_records_are_unchanged_and_the_release_key_is_still_refused(en
     doc["legal_signer_fingerprints"] = [GATE.RELEASE_KEY_FPR]
     assert GATE.separation_problems(root / "packaging/legal-allowed-signers") == []   # the shipped file lists no key
     assert NAMESPACE == GATE.SIG_NAMESPACE
+
+
+def test_a_bundle_refuses_frozen_counsel_decisions_even_if_the_gate_file_says_owner(env):
+    root, s = env
+    ids, opts = firsts(root)
+    doc = read_gate(root)
+    for d in doc["decisions"]:
+        if d["id"] in ("D-LIC-3", "pins-03", "D-LIC-4"):
+            d["decides"] = "owner"
+    write_gate(root, doc)
+    o = dict(opts)
+    o.update({"D-LIC-3": "d", "pins-03": "a", "D-LIC-4": "a"})
+    decide_bundle(root, s, header(o), ids + ["D-LIC-3", "pins-03", "D-LIC-4"])
+    msgs = " ".join(problems(root, s))
+    for cid in ("D-LIC-3", "pins-03", "D-LIC-4"):
+        assert f"{cid}: decides is" in msgs and "never one that names counsel" in msgs
