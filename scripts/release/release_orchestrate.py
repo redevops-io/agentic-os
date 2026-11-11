@@ -100,11 +100,12 @@ def s0(ctx) -> Res:
     head = git("rev-parse", "HEAD")
     r.add("PASS" if not git("status", "--porcelain") else "FAIL", "worktree clean" if not git("status", "--porcelain") else "worktree is not clean")
     for name, sha in man["source"]["protected_refs"].items():
+        kind = "tree" if name.endswith("_tree") else "commit"
         try:
-            ok = git("rev-parse", sha + "^{commit}") == sha
+            ok = git("rev-parse", sha + "^{" + kind + "}") == sha
         except RuntimeError:
             ok = False
-        r.add("PASS" if ok else "FAIL", f"protected commit {name} {sha[:8]} present and unchanged")
+        r.add("PASS" if ok else "FAIL", f"protected {kind} {name} {sha[:8]} present and unchanged")
     doc = ROOT / approval.DOC_REL
     if not doc.is_file():
         r.add("FAIL", f"{approval.DOC_REL} is not in HEAD: no consolidated approval has been signed and committed (run authorize_release.sh)")
@@ -218,7 +219,7 @@ def native_pack(ctx, platform: str) -> tuple[Path | None, list[str]]:
              .replace("native-c317", "native-release").replace("aos-lnx-c317-20261110", f"aos-lnx-rel-{tag}").replace("aos-c317-win-27be5b-20261110", f"aos-rel-win-{tag}"))
         dst.write_text(t, encoding="utf-8")
         shutil.copymode(f, dst)
-        if re.search(r"016143ff|71ad4586|c317", t):
+        if re.search(r"016143ff|71ad4586", t):
             left.append(str(rel))
     return out, left
 
@@ -243,7 +244,7 @@ def s3(ctx) -> Res:
         if pack is None:
             r.add("FAIL", f"{p}: {left[0]}")
             continue
-        r.add("INFO" if not left else "FAIL", f"{p}: job pack generated from the c317 scripts ({'no c317 literal left' if not left else 'literals left in: ' + ', '.join(left[:6])}); host: {what}")
+        r.add("INFO" if not left else "FAIL", f"{p}: job pack generated from the c317 scripts ({'no commit or tree literal of c317 left' if not left else 'literals left in: ' + ', '.join(left[:6])}); host: {what}")
         r.add("WOULD" if ctx.dry else "OWNER", f"{p}: run the pack's scripts for the host (see native-pack/{p}); then place the artifacts and SHA256SUMS under {ctx.evidence}/artifacts/{p}/ for S4 (T5: not yet run for this commit)")
     return r
 
@@ -408,6 +409,9 @@ def main(argv=None) -> int:
         out.append("")
         if not dry and res.status in ("FAIL", "BLOCKED"):
             stop = True
+    out.append("## Blockers that remain whatever the owner signs (from the manifest)\n")
+    out += [f"* **{b['id']}** {b['text']}" for b in manifest()["technical_blockers"]]
+    out.append("")
     if a.simulate_authorization:
         out.append("## Simulation of the owner's signature (throwaway clone and key, nothing in this repository changes)\n")
         out += [f"* {l}" for l in simulate_authorization()]

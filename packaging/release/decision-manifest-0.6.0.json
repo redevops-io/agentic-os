@@ -139,7 +139,7 @@
     {"id": "T3", "text": "The About page has five legal slots (copyright line, licence statement, source offer, no-warranty, section 13 notice). Each needs an approved text file with its own detached signature, and each slot lists decisions that include counsel decisions. A distribution build is refused until they are filled."},
     {"id": "T4", "text": "pins-04 needs the release commit and tag to be pushed to the public repository before a binary is distributed; no push has been made."},
     {"id": "T5", "text": "The Windows and Linux native build hosts are driven by per-pass script packs under native-c317/ (an Azure VM and a Lima VM). They are not parametrized for a new commit; the orchestrator generates a pack by substituting the commit, tree and host names and the pack has not yet been run for the release commit."},
-    {"id": "T6", "text": "A new macOS signing scope (input hashes of the new dmg) has to be generated for the new build; the tooling of package revision 4.1 is reused unchanged, so its independent review still applies, but verifier check 4 stays defective (X-2)."},
+    {"id": "T6", "text": "The macOS signing package of the c317 run (revision 4.1) cannot be reused unchanged for a distribution run: verify_prerun asserts that the distribution gate REFUSES and pins the c317 commit and hashes, make_scope writes distribution=no and the c317 file names, and verify_postrun check 4 is defective (X-2). A package revision 5 with those changes, its tests and an independent review is required before the macOS signing step can run. The signing script itself and the scope format are reused."},
     {"id": "T7", "text": "The release orchestrator itself (this branch) is new and has not been independently reviewed."}
   ]
 }
