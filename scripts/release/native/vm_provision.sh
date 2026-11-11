@@ -14,5 +14,6 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
 sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain "$RUST_VERSION"
 . "$HOME/.cargo/env"
 cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 echo "--- versions"
 uv --version; rustc --version; cargo --version; cargo tauri --version
