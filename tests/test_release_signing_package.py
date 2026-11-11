@@ -459,7 +459,6 @@ def test_windows_output_verification_accepts_what_the_script_writes_and_needs_th
     py, ok_v = stub_verifier(tmp_path, 0)
     r = vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", pkg, py, ok_v)
     assert r.failed == 0, r.rows
-    assert any("only the verifier looks" not in t for s, t in r.rows)
     # no verifier, no package, no CN: each is a FAIL, not an INFO
     assert any("no Authenticode verification" in t for s, t in vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", pkg, None, None).rows if s == "FAIL")
     assert any("no signed package" in t for s, t in vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", None, py, ok_v).rows if s == "FAIL")
@@ -712,8 +711,8 @@ def test_macos_verifier_on_the_real_c317_signed_pair_fails_only_the_private_cand
     dmg = next((C317 / "in").glob("*.dmg"))
     r = vs.macos(C317 / "out-real", dmg, "Q8A92DM4T7", "016143ff1a8ab39524d1f042916dcf01298d9d04", tmp_path / "w", src=ROOT, offline=True)
     failed = [t for s, t in r.rows if s == "FAIL"]
-    assert len(failed) == 3, failed
-    assert any("enforced distribution gate" in t for t in failed) and any("PRIVATE-CANDIDATE" in t for t in failed) and any("about.json: mode 'private-candidate'" in t for t in failed)
+    assert all("enforced distribution gate" in t or "PRIVATE-CANDIDATE" in t or t.startswith("app: about.json") for t in failed), failed
+    assert any("enforced distribution gate" in t for t in failed) and any("PRIVATE-CANDIDATE" in t for t in failed) and any("mode is 'private-candidate'" in t for t in failed)
     assert sum(1 for s, t in r.rows if s == "PASS" and "byte-identical to the unsigned input" in t and "__LINKEDIT" in t) == 2
 
 
@@ -732,3 +731,45 @@ def test_commits_must_be_40_hex_everywhere():
     assert vs.is_commit("a" * 40)
     assert vs.macos(Path("/x"), Path("/y"), "ABCDE12345", "abc", Path("/z")).failed == 1
     assert vs.sshsig(Path("/x"), Path("/y"), Path("/z"), "", None).failed == 1
+
+
+def test_every_option_the_runbooks_pass_to_a_signing_script_exists_in_that_script(repo, tmp_path):
+    """The runbooks are text; this is the cheap guard against a flag that the pinned script does not know (the first review found several wrong arguments)."""
+    c = commit(repo, "r", rc=0)
+    a = art(tmp_path, c)
+    e = evid(repo, c, a, tmp_path)
+    m = tmp_path / "m.json"
+    m.write_text(json.dumps({"release_commit": c, "platforms": {}}))
+    pk = {"macos": sp.build("macos", repo, c, tmp_path / "a", artifacts=a, evid=e), "windows": sp.build("windows", repo, c, tmp_path / "b", stage="inner", inputs=win_inputs(_sub(tmp_path, "wi")), evid=e),
+          "sshsig": sp.build("sshsig", repo, c, tmp_path / "c", release_manifest=m)}
+    scripts = {"macos": "sign_and_notarize_r0prime_macos_v3.sh", "windows": "sign_windows_r0prime_v3.sh", "sshsig": "sign_manifest_sshsig.sh"}
+    import re
+    for plat, pkg in pk.items():
+        rb = (pkg / "OPERATOR_RUNBOOK.md").read_text().replace("\\\n", " ")
+        src = (ROOT / "packaging/signing" / scripts[plat]).read_text()
+        cmd = next(ln for ln in rb.splitlines() if scripts[plat] in ln and "--real" in rb)
+        block = rb[rb.index(scripts[plat]):].split("```", 1)[0]
+        opts = set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", block))
+        assert opts, plat
+        for o in opts:
+            assert f"{o})" in src or f"{o} " in src or f"{o}|" in src, (plat, o)
+    wb = (pk["windows"] / "OPERATOR_RUNBOOK.md").read_text()
+    assert "R0P_TOOLS_DIR=/opt" not in wb and 'R0P_TOOLS_DIR="$BASE/az-bin"' in wb and "mkdir -m 700" in wb          # the script refuses a group-writable tools folder
+    assert "--expect-commit" in (pk["macos"] / "OPERATOR_RUNBOOK.md").read_text()
+
+
+def test_verify_cli_can_bind_the_package_to_the_release_commit(built, capsys):
+    repo, c, a, e, out = built
+    assert sp.main(["verify", "--package", str(out), "--repo", str(repo), "--artifacts", str(a), "--expect-commit", c]) == 0
+    assert sp.main(["verify", "--package", str(out), "--repo", str(repo), "--artifacts", str(a), "--expect-commit", "0" * 40]) == 1
+    assert "another release commit" in capsys.readouterr().out
+    assert sp.main(["verify", "--package", str(out), "--repo", str(repo), "--expect-commit", "abc"]) == 1
+
+
+def test_a_truncated_macho_and_a_timeout_are_failures_not_tracebacks(monkeypatch):
+    import struct
+    with pytest.raises(ValueError, match="malformed"):
+        vs.macho_normalize(struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 2, 5, 400, 0, 0))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("x", 1)))
+    q = vs.sh(["/usr/bin/true"])
+    assert q.returncode == 124 and "timed out" in q.stderr

@@ -40,7 +40,10 @@ SYS = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
 
 
 def sh(args, **kw):
-    return subprocess.run(args, capture_output=True, text=True, env=kw.pop("env", SYS), timeout=kw.pop("timeout", 600), **kw)
+    try:
+        return subprocess.run(args, capture_output=True, text=True, env=kw.pop("env", SYS), timeout=kw.pop("timeout", 600), **kw)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 124, "", "timed out")
 
 
 class Rows:
@@ -85,6 +88,13 @@ def is_commit(c: str) -> bool:
 def macho_normalize(b: bytes) -> bytes:
     """Zero the vmsize of the __LINKEDIT segment in every 64-bit little-endian Mach-O slice (thin or fat). Nothing else is touched. `codesign --remove-signature`
     leaves that field page-rounded differently depending on how the signature was written; a change anywhere else still changes the hash."""
+    try:
+        return _macho_normalize(b)
+    except (struct.error, IndexError) as e:
+        raise ValueError(f"truncated or malformed Mach-O ({type(e).__name__})") from e
+
+
+def _macho_normalize(b: bytes) -> bytes:
     b = bytearray(b)
 
     def one(off: int) -> None:
@@ -276,14 +286,10 @@ def macos(out: Path, input_dmg: Path, team: str, commit: str, work: Path, src: P
                     r.bad(f"{n}: {e}")
                     continue
                 r.cond(a == b, f"{n}: with the signature removed from both and the __LINKEDIT vmsize field zeroed, the code is byte-identical to the unsigned input", f"{n}: the code differs from the unsigned input after signature removal on both (and __LINKEDIT vmsize zeroed)")
-            abt = app / "Contents" / "Resources" / "Licenses" / "about.json"
-            if abt.is_file():
-                d = json.loads(abt.read_text())
-                b = d.get("build", {})
-                pend = [k for k, v in d.get("legal", {}).get("slots", {}).items() if v.get("state") != "approved-verified"]
-                r.cond(b.get("mode") == "distribution" and b.get("source", {}).get("commit") == commit and str(b.get("source", {}).get("dirty_files", "0")) in ("0", "False") and not pend,
-                       f"about.json: distribution mode, commit {commit[:8]}, 0 dirty files, every legal slot approved-verified",
-                       f"about.json: mode {b.get('mode')!r}, commit {str(b.get('source', {}).get('commit'))[:8]}, dirty {b.get('source', {}).get('dirty_files')}, slots not approved-verified {pend}")
+            lic = app / "Contents" / "Resources" / "Licenses"
+            if (lic / "about.json").is_file():
+                for s, text in sp.about_findings(lic, commit):
+                    r.rows.append((s, "app: " + text))
             else:
                 r.bad("no Contents/Resources/Licenses/about.json in the signed app")
     except RuntimeError as e:
