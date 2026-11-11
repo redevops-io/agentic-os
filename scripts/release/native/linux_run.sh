@@ -42,7 +42,7 @@ log "provisioning (pins from packaging/toolchain.env)"; S 'bash ~/vm_provision.s
 S 'uname -a; lsb_release -d; . ~/.cargo/env; rustc --version; cargo --version; cargo tauri --version; ~/.local/bin/uv --version; git --version' > "$OUT/evidence/vm-versions.txt" 2>&1 || true
 build() { # LABEL NAME [SDE]
   log "build $1 -> $2 ${3:+(SOURCE_DATE_EPOCH=$3)}"
-  S "bash ~/vm_build.sh $1 $COMMIT $TREE $3" >"$OUT/evidence/build-$2.out" 2>&1 && S "bash ~/vm_collect.sh $1 $2" >"$OUT/evidence/collect-$2.out" 2>&1
+  S "bash ~/vm_build.sh $1 $COMMIT $TREE ${3:-}" >"$OUT/evidence/build-$2.out" 2>&1 && S "bash ~/vm_collect.sh $1 $2" >"$OUT/evidence/collect-$2.out" 2>&1
 }
 build b1 b1;  build b2 b2           # two directories, no SOURCE_DATE_EPOCH: the c317 comparison
 build bx x1;  build bx x2           # ONE directory built twice, no SOURCE_DATE_EPOCH: separates path effects from time effects
