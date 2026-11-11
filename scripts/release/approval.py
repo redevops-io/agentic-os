@@ -274,7 +274,7 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
     w("")
     w("1. Run `scripts/release/release_orchestrate.sh --run` at the owner's terminal; it stops at the first stage that fails or is blocked, and its first stage (S0) requires the release commit to be F plus exactly the approval files, signed by the key fingerprint you pass in `--expect-signer-fingerprint`. The release gate itself refuses a distribution build whatever the orchestrator does.")
     w("2. Build the artifacts of section 2 and verify their checksums.")
-    w("3. Sign them per P-MAC, P-WIN and P-LIN; every real signing step prints its scope hash and needs the owner's own login or keychain.")
+    w("3. Sign them per P-MAC, P-WIN and P-LIN; each real signing step needs the owner's own keychain, `az` login or ssh-agent, at the owner's terminal.")
     w(f"4. After stages S0 to S7 have passed in the same run, with `--push --remote NAME` and your typed confirmation: tag the release commit `{man['source']['tag_proposal']}` and push the branch `release/0.6.0` and that tag to the remote you name, with your own git credentials (pins-04). The orchestrator then reads the remote back (`git ls-remote`). Recording the pins-04 decision does not publish anything; the publication happens only at this step.")
     w("5. Write the consolidated release manifest and evidence report.")
     w("")
@@ -302,7 +302,7 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
     w("|---|---|")
     for x in man["technical_blockers"]:
         w(f"| {x['id']} | {esc(x['text'])} |")
-    w(f"| L1 | The decisions of section 5 are OPEN: {', '.join(d['id'] for d in other)}. |")
+    w(f"| L1 | The decisions of section 5 are OPEN: {', '.join(d['id'] for d in other)}. (D-LIC-16 applies to the QA bundle only, not to the three desktop platforms; D-LIC-18 to macOS only; D-LIC-9 and pins-08 to Windows only.) |")
     w("")
     w("## 10. How this approval becomes effective")
     w("")

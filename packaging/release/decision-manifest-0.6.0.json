@@ -161,7 +161,7 @@
   "platform_signing": {
     "macos": {
       "decision_id": "P-MAC",
-      "scope": "Developer ID Application signing, notarization with the keychain profile, stapling of the dmg only; reuses the proven c317 procedure and tools (signing package revision 4.1 tooling, inputs replaced by the hashes of the new build).",
+      "scope": "Developer ID Application signing, notarization with the keychain profile, stapling of the dmg only. Reuses the c317 signing script and scope format; it cannot run until a signing package revision 5 exists (T6), because the c317 package's checks assume a private candidate.",
       "identity": "Developer ID Application: ReDevOps.io LLC (Q8A92DM4T7)",
       "identity_sha256": "8ee6c415e6960823c248718496b89e7e08dcf8414ee95282aeabf2b36b0d7ed3",
       "team_id": "Q8A92DM4T7",
@@ -301,7 +301,7 @@
     },
     {
       "id": "T7",
-      "text": "The release orchestrator itself (this branch) is new and has not been independently reviewed."
+      "text": "The release tooling of this branch (gate bundle record, approval renderer, authorization command, orchestrator) had two independent adversarial reviews; their findings, including two defects of the first fixes, are closed and each reproduction is a regression test. The last fix commit was re-verified by those tests only, not by a third review."
     },
     {
       "id": "T8",
