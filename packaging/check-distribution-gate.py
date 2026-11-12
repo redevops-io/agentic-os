@@ -572,15 +572,20 @@ def binding_problems(d: dict, hdr: dict) -> list[str]:
 _KEYTYPE = re.compile(r"^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)$")
 
 
-def allowed_signer_fingerprints(path: Path) -> tuple[list[str], list[str]]:
-    """The SHA256 fingerprints (ssh-keygen -l style) of the keys listed in an allowed-signers file, and parse problems."""
-    fps: list[str] = []
+def parse_allowed_signers(path: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """The keys of an allowed-signers file as (key type, base64 key, SHA256 fingerprint) and the parse problems. The file must be printable ASCII
+    (plus TAB and LF): ssh-keygen splits lines and tokens differently from Python (a control character, a quote or a Unicode line separator can make
+    one tool see a comment where the other sees a key), so anything else is refused outright."""
+    keys: list[tuple[str, str, str]] = []
     probs: list[str] = []
     try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return [], [f"allowed-signers file {path} is unreadable"]
-    for n, ln in enumerate(lines, 1):
+        text = Path(path).read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return [], [f"allowed-signers file {path} is unreadable or not UTF-8"]
+    odd = sorted({hex(ord(c)) for c in text if ord(c) not in (9, 10) and not 32 <= ord(c) <= 126})
+    if odd:
+        return [], [f"legal-allowed-signers holds characters that are not printable ASCII ({', '.join(odd[:4])}); ssh-keygen and this gate would read it differently"]
+    for n, ln in enumerate(text.split("\n"), 1):
         if not ln.strip() or ln.lstrip().startswith("#"):
             continue
         try:
@@ -597,8 +602,21 @@ def allowed_signer_fingerprints(path: Path) -> tuple[list[str], list[str]]:
         except ValueError:
             probs.append(f"legal-allowed-signers line {n} holds an invalid key")
             continue
-        fps.append("SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("="))
-    return fps, probs
+        keys.append((toks[idx], toks[idx + 1], "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")))
+    return keys, probs
+
+
+def allowed_signer_fingerprints(path: Path) -> tuple[list[str], list[str]]:
+    """The SHA256 fingerprints (ssh-keygen -l style) of the keys listed in an allowed-signers file, and parse problems."""
+    keys, probs = parse_allowed_signers(path)
+    return [k[2] for k in keys], probs
+
+
+def rebuilt_allowed_signers(path: Path) -> str:
+    """The allowed-signers text handed to ssh-keygen: ONLY the keys this gate parsed and fingerprinted, one canonical line each, restricted to
+    the legal-decision namespace. The repository file itself is never given to ssh-keygen."""
+    keys, _ = parse_allowed_signers(path)
+    return "".join(f'redevops-legal-decision namespaces="{SIG_NAMESPACE}" {kt} {b64}\n' for kt, b64, _ in keys)
 
 
 def anchor_problems(allowed_signers: Path, signers) -> list[str]:
@@ -645,10 +663,12 @@ def verify_sshsig_bytes(root: Path, rel: str, allowed_signers: Path, signers=())
         with tempfile.TemporaryDirectory(prefix="legal-sig-") as td:
             sig = Path(td) / "record.sig"
             sig.write_bytes(sigbytes)
-            fp = subprocess.run([kg, "-Y", "find-principals", "-s", str(sig), "-f", str(allowed_signers)], capture_output=True, timeout=30, env=env)
+            clean = Path(td) / "allowed-signers"
+            clean.write_text(rebuilt_allowed_signers(allowed_signers), encoding="ascii")
+            fp = subprocess.run([kg, "-Y", "find-principals", "-s", str(sig), "-f", str(clean)], capture_output=True, timeout=30, env=env)
             principals = [x.strip() for x in fp.stdout.decode("utf-8", "replace").splitlines() if x.strip()] if fp.returncode == 0 else []
             for who in principals:
-                vr = subprocess.run([kg, "-Y", "verify", "-f", str(allowed_signers), "-I", who, "-n", SIG_NAMESPACE, "-s", str(sig)],
+                vr = subprocess.run([kg, "-Y", "verify", "-f", str(clean), "-I", who, "-n", SIG_NAMESPACE, "-s", str(sig)],
                                     input=data, capture_output=True, timeout=30, env=env)
                 if vr.returncode == 0:
                     return data, ""
@@ -708,7 +728,7 @@ def _waiver_covers_text(d: dict, slot: str, entry: dict, root: Path, allowed: Pa
 def _text_problems(rel: str, label: str, root: Path, allowed: Path, signers, cache: dict, covered_by=None) -> list[str]:
     """Signature problems of an approved slot text. `covered_by` = (primary decision, slot entry) lets a verified version 3 record
     authorize the text through its slot line (see _waiver_covers_text); otherwise the text needs its own detached signature."""
-    key = ("txt", rel)
+    key = ("txt", rel, label, (covered_by[0].get("id") if covered_by is not None else None))
     if key not in cache:
         if covered_by is not None and _waiver_covers_text(covered_by[0], label, covered_by[1], root, allowed, signers, cache):
             cache[key] = []

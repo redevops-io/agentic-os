@@ -186,9 +186,12 @@ def _delta(a: str, b: str, paths=None):
 
 def _export(commit: str, paths, dest: Path):
     """The listed paths of `commit` extracted into `dest` (git archive; read-only on the repository)."""
-    p = subprocess.run(f"git archive {commit} {' '.join(paths)} | tar -x -C {dest}", shell=True, cwd=ROOT, env=ENV, capture_output=True)
-    if p.returncode:
-        raise RuntimeError(f"cannot export {commit[:12]}: {p.stderr.decode()[:200]}")
+    ga = subprocess.Popen(["git", "archive", commit, *paths], cwd=ROOT, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    tar = subprocess.run(["tar", "-x", "-C", str(dest)], stdin=ga.stdout, env=ENV, capture_output=True)
+    ga.stdout.close()
+    err = ga.stderr.read().decode()[:200]
+    if ga.wait() or tar.returncode:
+        raise RuntimeError(f"cannot export {commit[:12]}: {err or tar.stderr.decode()[:200]}")
 
 
 def _s0_chain(ctx, r: Res, expect: str) -> Res:
@@ -200,7 +203,7 @@ def _s0_chain(ctx, r: Res, expect: str) -> Res:
     f2 = git("rev-parse", "HEAD^")
     pairs = _delta(f2, head)
     delta = {p for _, p in pairs}
-    ok = WAIVER_DELTA_REQUIRED <= delta <= WAIVER_DELTA_REQUIRED | {approval.ALLOWED} and len(pairs) == len(delta) and {s for s, _ in pairs} <= {"A", "M"}
+    ok = delta == WAIVER_DELTA_REQUIRED and len(pairs) == len(delta) and {s for s, _ in pairs} <= {"A", "M"}      # the signer list is NOT among them: the same key signs both
     ok = ok and {p for s, p in pairs if s == "A"} == {waiver.DOC_REL, waiver.DOC_REL + ".sig"}
     r.add("PASS" if ok else "FAIL", f"R2 differs from F2=HEAD^ in exactly the waiver approval paths ({sorted(pairs)})")
     # ---- the first approval: its own commit R
@@ -264,6 +267,9 @@ def _s0_chain(ctx, r: Res, expect: str) -> Res:
         if top(g_new) != top(g_f2) or g_new.get("legal_signer_fingerprints") != g_f2.get("legal_signer_fingerprints"):
             bad2.append("top-level fields or signer list")
         r.add("PASS" if not bad2 else "FAIL", "between R and F2 the gate file changed only by appended options of counsel-named decisions" if not bad2 else f"gate file between R and F2: unexpected changes {bad2}")
+        same_signers = (ROOT / approval.ALLOWED).read_bytes() == (tr / approval.ALLOWED).read_bytes()
+        r.add("PASS" if same_signers else "FAIL", "the signer list in HEAD is byte-identical to the one the first approval recorded (the same key signs both)" if same_signers else
+              "the signer list in HEAD differs from the one at the first approval: a second approval must be signed by the same key and may not change the list")
     # ---- the waiver approval: its own commit R2 = HEAD
     g_f2, g_head = json.loads(approval.show(f2, approval.GATE).decode()), gate_json()
     wdoc = ROOT / waiver.DOC_REL
@@ -319,7 +325,7 @@ def s1(ctx) -> Res:
         r.add("FAIL" if conn["tag"] == "v0.1.0" else "PASS", f"D-LIC-2 (a) needs a new redevops-connectors tag with a licence file; pinned tag is {conn['tag']} (T1)")
     open_counsel = [d["id"] for d in g["decisions"] if d["decides"] != "owner" and d["blocks_distribution"] and d["status"] != "DECIDED"]
     r.add("PASS" if not open_counsel else "FAIL", "counsel decisions all DECIDED" if not open_counsel else f"counsel decisions still OPEN: {', '.join(open_counsel)}")
-    waived = sorted(d["id"] for d in g["decisions"] if str(d.get("counsel_reference") or "").startswith("owner-waiver:"))
+    waived = sorted(d["id"] for d in g["decisions"] if re.fullmatch(r"owner-waiver:[0-9a-f]{64}", str(d.get("counsel_reference") or "")))
     if waived:
         r.add("INFO", f"decided by the owner WITHOUT counsel (counsel_reference owner-waiver:<sha256 of the signed record>; no counsel approval exists): {', '.join(waived)}")
     return r

@@ -39,6 +39,19 @@ BUNDLE_NAME = "OWNER_DECISION_WITHOUT_COUNSEL_0.6.0"
 BANNER = ap.BANNER
 
 
+_ODD = re.compile("[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+
+
+def plain(text: str, what: str) -> str:
+    """Text that is embedded in the document the owner reads and signs: no control, bidi or zero-width characters (they can hide content from a
+    terminal or viewer) and no line that opens or closes a code fence."""
+    if _ODD.search(text):
+        raise SystemExit(f"{what} holds a control, bidirectional or zero-width character")
+    if any(ln.lstrip().startswith(("~~~", "```")) for ln in text.split("\n")):
+        raise SystemExit(f"{what} holds a line that starts a code fence")
+    return text
+
+
 def waiver_section(man: dict) -> dict:
     w = man.get("counsel_waiver")
     if not isinstance(w, dict) or not isinstance(w.get("decisions"), dict) or not isinstance(w.get("slots"), dict):
@@ -63,6 +76,9 @@ def plan(commit: str, root: Path = ROOT, include: set | None = None):
             raise SystemExit(f"counsel_waiver names an unknown decision or option: {i} {m.get('option')}")
         if not str(m.get("owner_statement") or "").strip():
             raise SystemExit(f"counsel_waiver: {i} has no owner_statement")
+        plain(m["owner_statement"], f"the owner statement of {i}")
+        for o in d["options"]:
+            plain(o["text"], f"an option text of {i}")
         if d["status"] != "OPEN":
             raise SystemExit(f"{i} is not OPEN at {commit[:12]}: a decision is recorded once")
     include = set(w["decisions"]) if include is None else include
@@ -81,7 +97,7 @@ def plan(commit: str, root: Path = ROOT, include: set | None = None):
         raw = ap.show(commit, rel, root)
         if not raw.strip() or len(raw) > mod.SLOT_TEXT_MAX_BYTES or b"\r" in raw:
             raise SystemExit(f"slot {slot}: text file {rel} is empty, too large or has CR characters")
-        raw.decode("utf-8")
+        plain(raw.decode("utf-8"), f"the text of {slot}")
         slots[slot] = (rel, ap.sha(raw))
     missing = sorted(sl for sl, s in mod.ABOUT_SLOTS.items() if s["decisions"][0] in include and sl not in slots and not s["omittable"])
     if missing:
@@ -103,6 +119,10 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
     by_id = {d["id"]: d for d in gate["decisions"]}
     w = waiver_section(man)
     o = man["owner"]
+    plain(w["why"], "counsel_waiver.why")
+    for r_ in w["accepted_risks"]:
+        plain(r_, "an accepted risk")
+    plain(o["signature_name_on_prior_forms"] + o["initials_on_prior_forms"], "the owner name")
     L: list[str] = header_lines(commit, tree, man_sha, wanted, slots)
     a = L.append
     a("")
@@ -175,7 +195,7 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
     a(f"| Its source tree | `{tree}` |")
     a(f"| Decision manifest at F2 | `{ap.MANIFEST}`, sha256 `{man_sha}` |")
     a("")
-    a("The release commit rule of the first approval applies: the commit that records this decision differs from F2 in exactly three paths (this document, its signature and the gate file).")
+    a("The release commit rule of the first approval applies: the commit that records this decision differs from F2 in exactly three paths (this document, its signature and the gate file); the signer list does not change.")
     a("")
     a("## 6. How this decision becomes effective")
     a("")
@@ -337,6 +357,13 @@ def check(root: Path = ROOT) -> list[str]:
             continue
         out += mod._record_problems(d, root, root / ap.ALLOWED, signers, cache)
         out += mod._decided_problems(d, [x["key"] for x in d["options"]], root)
+    if out:
+        return list(dict.fromkeys(out))
+    # the About slots of the decisions this document covers must resolve to approved, signature-verified texts (file path, hash, encoding)
+    covered = set(h["decisions"])
+    slots, slot_errs, refusals = mod.resolve_about_slots(g["decisions"], root, True, allowed_signers=root / ap.ALLOWED, signers=signers)
+    out += [f"About slot: {e}" for e in slot_errs]
+    out += [f"About slot: {r_}" for r_ in refusals if any(r_.startswith(sl) for sl, sp_ in mod.ABOUT_SLOTS.items() if sp_["decisions"][0] in covered)]
     return list(dict.fromkeys(out))
 
 

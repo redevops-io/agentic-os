@@ -308,3 +308,89 @@ def test_every_counsel_named_decision_has_the_owner_option_and_a_statement():
     for slot, spec in man["counsel_waiver"]["slots"].items():
         raw = (ROOT / spec["file"]).read_bytes()
         assert raw.isascii() and b"\r" not in raw and raw.strip() and GATE.SLOT_TEXT_RE.match(spec["file"]), slot
+
+
+# ------------------------------------------------------------------------------------------------ review findings (independent adversarial review)
+def _two_signers(tmp_path):
+    from .about_fixture import Signer
+    (tmp_path / "o").mkdir()
+    (tmp_path / "a").mkdir()
+    return Signer(tmp_path / "o"), Signer(tmp_path / "a")
+
+
+def _signed_record(root: Path, signer, name="rec.md"):
+    rec = root / "docs/legal/approved" / name
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text("hello\n")
+    signer.sign(rec)
+    return rec.relative_to(root).as_posix()
+
+
+@pytest.mark.parametrize("trick", ["control-character", "quotes"])
+def test_a_signer_file_that_ssh_keygen_and_the_gate_read_differently_never_accepts_the_attacker(tmp_path, trick):
+    """Review finding 1: a line the gate takes for a comment (or a key) while ssh-keygen takes it for a principal pattern with the attacker's key."""
+    owner, atk = _two_signers(tmp_path)
+    own_line = owner.allowed.read_text().strip().splitlines()[-1]
+    atk_line = atk.allowed.read_text().strip().splitlines()[-1]
+    atk_key = " ".join(atk_line.split()[-2:])
+    own_key = " ".join(own_line.split()[-2:])
+    root = tmp_path / "root"
+    root.mkdir()
+    rel = _signed_record(root, atk)
+    allowed = tmp_path / "allowed"
+    if trick == "control-character":
+        allowed.write_text(own_line + "\n\x1f#,* " + atk_key + "\n", encoding="utf-8")
+    else:
+        allowed.write_text(f"x' {atk_key} ' {own_key}\n", encoding="utf-8")
+    data, why = GATE.verify_sshsig_bytes(root, rel, allowed, [owner.fingerprint])
+    assert why and data == b"", trick                                   # the attacker's signature is refused
+    # the owner's own signature still verifies against a plain file
+    ok_root = tmp_path / "ok"
+    ok_root.mkdir()
+    rel2 = _signed_record(ok_root, owner)
+    clean = tmp_path / "clean"
+    clean.write_text(own_line + "\n")
+    assert GATE.verify_sshsig_bytes(ok_root, rel2, clean, [owner.fingerprint])[1] == ""
+
+
+def test_the_signer_file_must_be_printable_ascii(tmp_path):
+    for bad in ("\x1f", "\x0b", "\x85", "\u2028", "\r"):
+        p = tmp_path / "a"
+        p.write_text("# comment\n" + bad + "# hidden\n", encoding="utf-8", newline="")
+        fps, probs = GATE.allowed_signer_fingerprints(p)
+        assert probs and "printable ASCII" in probs[0], repr(bad)
+
+
+def test_the_text_the_owner_signs_cannot_hide_content_from_a_viewer():
+    import importlib
+    sys.path.insert(0, str(ROOT / "scripts" / "release"))
+    wa = importlib.import_module("waiver_approval")
+    for bad in ("a\x1b[2Jb", "a\u202eb", "a\u200bb", "x\n~~~\ninjected"):
+        with pytest.raises(SystemExit):
+            wa.plain(bad, "text")
+    assert wa.plain("ordinary text\nsecond line", "text")
+
+
+def test_the_orchestrator_refuses_a_changed_signer_list_in_the_waiver_commit(repo, tmp_path, key):
+    first_approval(repo, tmp_path, key)
+    sign_waiver(repo, tmp_path, key)
+    p = repo / "packaging/legal-allowed-signers"
+    p.write_text(p.read_text() + "# a late comment\n")
+    run(["git", "add", "-A"], repo)
+    run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit"], repo)
+    r = run([*PY, "scripts/release/release_orchestrate.py", "--run", "--stages", "S0", "--expect-signer-fingerprint", key["fpr"], "--workspace", str(repo),
+             "--evidence-dir", str(repo.parent / "ev")], repo)
+    assert "`FAIL` R2 differs from F2=HEAD^" in r.stdout
+
+
+def test_check_resolves_the_slots_and_notices_a_wrong_slot_file(repo, tmp_path, key):
+    first_approval(repo, tmp_path, key)
+    sign_waiver(repo, tmp_path, key)
+    gate_path = repo / "packaging/distribution-gate.json"
+    g = json.loads(gate_path.read_text())
+    for d in g["decisions"]:
+        if d["id"] == "D-LIC-12":
+            d["slot_texts"]["LEGAL.SOURCE_OFFER"]["file"] = "docs/legal/approved/no-such-file.txt"
+    gate_path.write_text(json.dumps(g, indent=1, ensure_ascii=False) + "\n")
+    r = run([*PY, "scripts/release/waiver_approval.py", "check"], repo)
+    assert r.returncode == 1 and "About slot" in r.stderr
