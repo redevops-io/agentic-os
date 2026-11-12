@@ -17,7 +17,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -48,12 +48,22 @@
    ],
    "facts_resolved_by_lic2": "Exact texts of LICENSE.md, the Commons Clause and AGPL sections compiled in docs/legal/EXACT_TEXTS.md; all five package fields checked by check_licence_statements.py.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-1",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "slot_texts": {
+    "LEGAL.COPYRIGHT_LINE": {
+     "file": "docs/legal/approved/copyright-line.en.txt",
+     "sha256": "469ce08ad4fa48aa650ed0200e87df7f2b404554daaa7059733f2b0e6382828c"
+    },
+    "LEGAL.LICENCE_STATEMENT": {
+     "file": "docs/legal/approved/licence-statement.en.txt",
+     "sha256": "0d8fd1b58e90214821b813fb1d989c86e4bef999529ebfbc1b13e75987548252"
+    }
+   }
   },
   {
    "id": "D-LIC-2",
@@ -111,7 +121,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -146,12 +156,12 @@
    ],
    "facts_resolved_by_lic2": "Exact AGPL 7 / 10 / Commons Clause / LICENSE.md texts compiled; the list of licences present in the 406-component notices.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-3",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   },
   {
    "id": "D-LIC-4",
@@ -162,7 +172,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -192,12 +202,12 @@
    ],
    "facts_resolved_by_lic2": "cacert.pem sha256 identical in wheel, embedded archive and upstream tag; five MPL crates identified; selectors' repository has no licence file (file headers carry the MPL notice).",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-4",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   },
   {
    "id": "D-LIC-5",
@@ -208,7 +218,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -238,12 +248,18 @@
    ],
    "facts_resolved_by_lic2": "Section 13 and section 0 texts compiled; sidecar bind address and the mounted-path mode recorded (STATIC).",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-5",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "slot_texts": {
+    "LEGAL.SECTION13_NOTICE": {
+     "file": "docs/legal/approved/section13-notice.en.txt",
+     "sha256": "2c8b4a685a93d6d1e238e1fecd0598ec8fd4a06174bdc6cbafbe624d94ba1431"
+    }
+   }
   },
   {
    "id": "D-LIC-6",
@@ -254,7 +270,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -287,12 +303,12 @@
    ],
    "facts_resolved_by_lic2": "OpenSSL has no NOTICE file at tags 3.0.16 / 4.0.2; Python 3.12.10 Windows externals (libffi 3.4.4, OpenSSL 3.0.16) read from the CPython tag; libyaml 0.2.5, libffi 3.4.4 and DuckDB v1.5.5 texts added.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-6",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   },
   {
    "id": "D-LIC-7",
@@ -382,7 +398,7 @@
     "windows"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -411,12 +427,12 @@
    ],
    "facts_resolved_by_lic2": "NSIS COPYING and WiX LICENSE.TXT fetched; tauri-bundler 2.10.4 source read (NSIS 3.13, LZMA default, WiX 3.14.1).",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-9",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   },
   {
    "id": "D-LIC-10",
@@ -427,7 +443,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -457,12 +473,18 @@
    ],
    "facts_resolved_by_lic2": "Section 5(d) and section 0 texts compiled; UI shows no licence statement (OBSERVED).",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-10",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "slot_texts": {
+    "LEGAL.NO_WARRANTY": {
+     "file": "docs/legal/approved/no-warranty.en.txt",
+     "sha256": "2c93e5651d299eedc052c27908a91987775af45ed665d28e8e61647a543bad1c"
+    }
+   }
   },
   {
    "id": "D-LIC-11",
@@ -510,7 +532,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -545,12 +567,18 @@
    ],
    "facts_resolved_by_lic2": "Section 6 and section 1 texts compiled; contents of the candidate checked: no source, no offer inside the app or dmg.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-12",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "slot_texts": {
+    "LEGAL.SOURCE_OFFER": {
+     "file": "docs/legal/approved/source-offer.en.txt",
+     "sha256": "575daba462bb5766106ce139c6f6e74c40a8ea62241bbba33943f51c246ae6cd"
+    }
+   }
   },
   {
    "id": "D-LIC-13",
@@ -675,7 +703,7 @@
     "qa"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -700,12 +728,12 @@
    ],
    "facts_resolved_by_lic2": "Matrix rows and the HTML Dog terms page (unchanged, sha256 6cd966ba...) re-read.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-16",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   },
   {
    "id": "D-LIC-17",
@@ -751,7 +779,7 @@
     "macos"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -780,12 +808,12 @@
    ],
    "facts_resolved_by_lic2": "Crates' own statements quoted; standard MIT/Zlib/Apache texts found at a later upstream commit; Xcode agreement sections 2.4, 2.5, 2.7 excerpted.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-18",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   },
   {
    "id": "pins-03",
@@ -796,7 +824,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -822,12 +850,12 @@
    ],
    "facts_resolved_by_lic2": "Section 6(b) and Commons Clause texts compiled.",
    "package": "docs/legal/DECISION_PACKAGES.md#pins-03",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   },
   {
    "id": "pins-04",
@@ -875,7 +903,7 @@
     "windows"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -908,12 +936,12 @@
    ],
    "facts_resolved_by_lic2": "Microsoft pages and the Visual C++ 2015-2022 Runtime licence read 2026-11-04 (excerpts in docs/legal/sources); the Visual Studio licence 'Distributable Code' section could not be captured (UNVERIFIED).",
    "package": "docs/legal/DECISION_PACKAGES.md#pins-08",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
-   "counsel_reference": null
+   "chosen_option": "o",
+   "decision_reference": "docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md",
+   "decision_sha256": "d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_by": "Alex Rybachek (owner), owner decision without counsel d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27",
+   "decided_on": "2026-11-12",
+   "counsel_reference": "owner-waiver:d4aef338bc638c5cbceac6433b2f7facf0c0faa20ed5e2590d97ec6537d16c27"
   }
  ]
 }
