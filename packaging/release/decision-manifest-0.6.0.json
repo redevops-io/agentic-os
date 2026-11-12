@@ -281,7 +281,7 @@
     },
     {
       "id": "T3",
-      "text": "The About page has five legal slots (copyright line, licence statement, source offer, no-warranty, section 13 notice). Each needs an approved text file with its own detached signature, and each slot lists decisions that include counsel decisions. A distribution build is refused until they are filled."
+      "text": "The About page has five legal slots (copyright line, licence statement, source offer, no-warranty, section 13 notice). Each needs an approved text file whose sha256 is covered by the owner's signature. The texts are drafted in docs/legal/approved/*.en.txt and are approved by the owner-decision-without-counsel document (record header version 3, slot lines), which must be signed after the first approval; until then every slot stays a placeholder and a distribution build is refused. The texts are the owner's wording, not counsel's."
     },
     {
       "id": "T4",
@@ -310,6 +310,10 @@
     {
       "id": "T10",
       "text": "Artwork: D-LIC-8 is prepared as option c (hero image removed from the product) and D-LIC-11 as option b (generated neutral launcher icons, provenance and hashes in docs/legal/ARTWORK_PROVENANCE.md, no authorship or rights asserted). They become decided only if the owner signs the approval. Not covered by any record: apps/social-autopilot/reel/assets/hero.jpg and the 18 images in deploy/assets/repos/ (listed in the provenance record, not part of the desktop product's shipped set). Rights in script output written by an AI coding agent remain a counsel question (Q29). The built UI keeps one sample item whose picture path is /hero.jpg; that picture cannot load."
+    },
+    {
+      "id": "T11",
+      "text": "The gate's signer-list handling was found by an independent review to be exploitable in the commit that carries the first approval (c914ddd, tag v0.6.0): the gate and ssh-keygen read legal-allowed-signers differently, so a repository writer could hide an attacker key in that file and have a forged record accepted. The fix (printable-ASCII file only, ssh-keygen receives only the keys the gate parsed itself, options limited to namespaces/valid-after/valid-before) is on this branch after c914ddd and is NOT in the published tag v0.6.0, which cannot be moved. The tagged tree is therefore a source release with a known weakness in its release gate; binaries should be built from a commit that contains the fix, and a v0.6.1 tag is the clean way to name it. The first approval is not affected as a decision: its signature is valid and the real signer file contains only the owner's key."
     }
   ],
   "owner_direction_2026_11_11": {
@@ -320,7 +324,8 @@
     "kept": "all other owner decisions, the minimal Linux signing option (P-LIN a), and the counsel and security gates.",
     "authorized_engineering": "preparation of the missing signing packages and orchestrator stages S5 to S7. Signing, publishing, pushing and tagging are NOT authorized until the approvals and verification steps are complete.",
     "licensing_model": "No change to the licensing model is authorized.",
-    "engineering_without_counsel": "2026-11-11 later direction: complete the remaining engineering without an external-counsel dependency. The twelve counsel-designated decisions are NOT marked decided by this work: a documented engineering compatibility assessment is produced (docs/legal/COMPATIBILITY_ASSESSMENT.md) and the gate stays until an authorized alternative to a legal opinion is explicitly established."
+    "engineering_without_counsel": "2026-11-11 later direction: complete the remaining engineering without an external-counsel dependency. The twelve counsel-designated decisions are NOT marked decided by this work: a documented engineering compatibility assessment is produced (docs/legal/COMPATIBILITY_ASSESSMENT.md) and the gate stays until an authorized alternative to a legal opinion is explicitly established.",
+    "owner_decides_counsel_named_2026_11_12": "2026-11-12 later direction: there is no counsel and the owner decides the twelve counsel-named decisions himself; the owner confirmed the proposed wording the same day. They are recorded as an explicit owner decision WITHOUT counsel (section counsel_waiver of this manifest; scripts/release/waiver_approval.py; record header version 3): no counsel reference is invented, the counsel questions stay unanswered, and nothing here is a legal conclusion."
   },
   "counsel_waiver": {
     "recorded": "Owner statement of 2026-11-12: there is no counsel and the owner decides the decisions that the gate names as counsel decisions; the owner confirmed the proposed wording the same day. This is an explicit waiver, not a counsel approval.",
