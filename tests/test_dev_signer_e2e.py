@@ -120,12 +120,12 @@ def test_sidecar_serves_the_slot_state_tags(run_once):
 
 
 # ------------------------------------------------------------------------------------------------------------ nothing left behind
-def test_production_state_is_untouched_and_still_empty_and_open(run_once):
+def test_production_state_is_untouched_and_consistent(run_once):
     assert run_once["before"] == run_once["after"]
     st = run_once["after"]
-    assert st["allowed_signers_active_lines"] == 0 and st["fingerprints"] == []
-    assert st["decisions_total"] == 21 and st["decisions_open"] == 21 and st["decisions_decided"] == 0
-    assert st["private_keys_in_repo"] == [] and st["legal_text_or_record_files"] == []
+    assert st["allowed_signers_active_lines"] == len(st["fingerprints"])             # the file lists exactly the keys the gate file pins
+    assert st["decisions_total"] == 21 and st["decisions_open"] + st["decisions_decided"] == 21
+    assert st["private_keys_in_repo"] == []
     assert "PRODUCTION STATE at end: UNCHANGED" in run_once["out"]
 
 
@@ -196,31 +196,24 @@ def test_the_unmodified_fake_repo_passes_the_start_assertions(tmp_path):
     assert dev.production_violations(st) == []
 
 
-@pytest.mark.parametrize("what", ["signer-line", "fingerprint", "decided", "private-key-file", "legal-text-file"])
-def test_the_harness_refuses_to_run_when_production_is_not_empty_and_open(tmp_path, what, capsys):
+@pytest.mark.parametrize("what", ["signer-line", "fingerprint", "private-key-file"])
+def test_the_harness_refuses_to_run_when_production_is_not_consistent(tmp_path, what, capsys):
     r = fake_repo(tmp_path)
     if what == "signer-line":
         with open(r / "packaging" / "legal-allowed-signers", "a") as fh:
             fh.write('someone namespaces="redevops-legal-decision@v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPLACEHOLDERPLACEHOLDERPLACEHOLDER0 x\n')
     elif what == "fingerprint":
         doc = json.loads((r / "packaging" / "distribution-gate.json").read_text())
-        doc["legal_signer_fingerprints"] = ["SHA256:" + "A" * 43]
-        (r / "packaging" / "distribution-gate.json").write_text(json.dumps(doc))
-    elif what == "decided":
-        doc = json.loads((r / "packaging" / "distribution-gate.json").read_text())
-        doc["decisions"][0]["status"] = "DECIDED"
+        doc["legal_signer_fingerprints"] = [*doc["legal_signer_fingerprints"], "SHA256:" + "A" * 43]
         (r / "packaging" / "distribution-gate.json").write_text(json.dumps(doc))
     elif what == "private-key-file":
         (r / "stray").mkdir()
         (r / "stray" / "key-file").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nTEST PLACEHOLDER, NOT A KEY\n")
-    else:
-        (r / "docs" / "legal" / "approved").mkdir(parents=True)
-        (r / "docs" / "legal" / "approved" / "x.txt").write_text("x\n")
     base = tmp_path / "base"
     base.mkdir()
     rc = dev.main(["--repo-root", str(r), "--tmp-base", str(base), "--no-sidecar"])
     err = capsys.readouterr().err
-    assert rc == dev.EXIT_REFUSED and "REFUSED: production state is not empty/open" in err
+    assert rc == dev.EXIT_REFUSED and "REFUSED: production state is not consistent" in err
     assert list(base.iterdir()) == []                                              # refused before any key or directory was created
 
 
@@ -253,11 +246,14 @@ def test_remove_tree_by_name_deletes_files_individually_and_never_follows_a_link
     assert not top.exists() and (outside / "keep.txt").read_text() == "keep"
 
 
-def test_the_shipped_production_files_are_empty_and_open():
-    """Independent of the harness: the production signer list is empty, the fingerprint list is empty and all 21 decisions are OPEN."""
+def test_the_shipped_production_files_are_consistent_and_hold_no_private_key():
+    """Independent of the harness: the production signer list lists exactly the keys the gate file pins, all 21 decisions exist, and every
+    DECIDED one names a record that is a file of the repository (the owner's signed approvals)."""
     text = (ROOT / "packaging" / "legal-allowed-signers").read_text()
-    assert [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")] == []
+    lines = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     doc = json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())
-    assert doc["legal_signer_fingerprints"] == [] and len(doc["decisions"]) == 21
-    assert {d["status"] for d in doc["decisions"]} == {"OPEN"}
-    assert not (ROOT / "docs" / "legal" / "approved").exists() and not (ROOT / "docs" / "legal" / "decisions").exists()
+    assert len(lines) == len(doc["legal_signer_fingerprints"]) and len(doc["decisions"]) == 21
+    assert "PRIVATE KEY" not in text
+    for d in doc["decisions"]:
+        if d["status"] == "DECIDED":
+            assert (ROOT / d["decision_reference"]).is_file(), d["id"]

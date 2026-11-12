@@ -17,7 +17,7 @@ at the end that they are unchanged, that the allowed-signers file lists no key, 
 decision is OPEN, and that no private key file exists in the repository or in the temporary directory.
 
 Exit codes: 0 = every scenario gave the expected outcome and the production state was untouched; 1 = an outcome differed (or the
-production state changed); 4 = the harness refused to start (production state not empty/open, key location inside the repository or in an
+production state changed); 4 = the harness refused to start (production state inconsistent, key location inside the repository or in an
 SSH/GPG directory, ssh-keygen missing). Standard library for the harness itself; the sidecar part needs the project's own dependencies.
 """
 from __future__ import annotations
@@ -204,17 +204,14 @@ def production_state(root: Path) -> dict:
 
 
 def production_violations(st: dict) -> list:
+    """The harness never writes the production files, so it may run in a repository that already carries the owner's signed approvals (it builds
+    its own fixture from the shipped policy). It refuses only when the production signer list and the pinned fingerprints disagree in number
+    (a half-configured policy) or when private key material lies in the repository."""
     v = []
-    if st["allowed_signers_active_lines"] != 0:
-        v.append(f"packaging/legal-allowed-signers lists {st['allowed_signers_active_lines']} signer line(s); production must list none")
-    if st["fingerprints"]:
-        v.append("legal_signer_fingerprints is not empty in the production gate file")
-    if st["decisions_total"] == 0 or st["decisions_open"] != st["decisions_total"]:
-        v.append(f"{st['decisions_decided']} production decision(s) are not OPEN (all must stay OPEN)")
-    if st["decisions_with_decision_fields"]:
-        v.append(f"production decisions carry decision fields: {st['decisions_with_decision_fields']}")
-    if st["legal_text_or_record_files"]:
-        v.append(f"files exist under docs/legal/approved or docs/legal/decisions: {st['legal_text_or_record_files']}")
+    if st["allowed_signers_active_lines"] != len(st["fingerprints"]):
+        v.append(f"packaging/legal-allowed-signers lists {st['allowed_signers_active_lines']} signer line(s) but legal_signer_fingerprints pins {len(st['fingerprints'])}")
+    if st["decisions_total"] == 0:
+        v.append("the production gate file lists no decision")
     if st["private_keys_in_repo"]:
         v.append(f"private key material found in the repository: {st['private_keys_in_repo']}")
     return v
@@ -353,6 +350,9 @@ def build_baseline(slots_spec: dict, tmp: Path, root: Path, signer: Signer, deci
     (root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
     fx = Fixture(root, signer)
     doc = fx.gate()
+    for d in doc["decisions"]:                               # the production file may already carry the owner's signed decisions: the fixture starts clean
+        for k in ("chosen_option", "decision_reference", "decision_sha256", "decided_by", "decided_on", "counsel_reference", "slot_texts"):
+            d.pop(k, None)
     doc["purpose"] = "DEV FIXTURE gate file written by dev_signer_e2e.py: every decision below is a SYNTHETIC fixture entry, not a decision."
     doc["legal_signer_fingerprints"] = [signer.fingerprint]
     fx.allowed_path.write_text(
@@ -796,7 +796,7 @@ def main(argv=None) -> int:
               f"{start['decisions_open']} OPEN, {start['decisions_decided']} DECIDED")
         print(f"  private key files in the repository: {len(start['private_keys_in_repo'])}")
         if viol:
-            raise Refused("production state is not empty/open: " + "; ".join(viol))
+            raise Refused("production state is not consistent: " + "; ".join(viol))
         # ------------------------------------------------------------------ workspace and key
         tmp = Path(tempfile.mkdtemp(prefix="dev-signer-e2e-", dir=base))
         os.chmod(tmp, 0o700)

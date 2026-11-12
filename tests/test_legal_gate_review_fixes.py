@@ -34,11 +34,14 @@ def gate_cli(root, *args, allowed=None):
 
 
 # ---------------------------------------------------------------------------------------------------- RC3-01
-def test_the_shipped_allowed_signers_file_lists_no_key_and_says_so():
+def test_the_shipped_allowed_signers_file_lists_only_the_pinned_public_keys_and_says_so():
     text = (ROOT / "packaging" / "legal-allowed-signers").read_text()
-    assert [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")] == []
+    keys = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+    pinned = json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())["legal_signer_fingerprints"]
+    assert len(keys) == len(pinned) and gate.allowed_signer_fingerprints(ROOT / "packaging" / "legal-allowed-signers")[0] == pinned     # only the owner's pinned keys, public keys only
+    assert all(k.split()[1:2] and k.split()[2].startswith("ssh-ed25519") for k in keys) or not keys
     assert "EMPTY" in text and "redevops-legal-decision@v1" in text and "PUBLIC KEYS ONLY" in text
-    assert "BEGIN OPENSSH PRIVATE KEY" not in text and "ssh-ed25519 " not in text and "ssh-rsa " not in text    # no key of any kind
+    assert "BEGIN OPENSSH PRIVATE KEY" not in text and "ssh-rsa " not in text and all("ssh-ed25519 " not in ln for ln in text.splitlines() if ln.startswith("#"))   # public keys only, never in a comment
 
 
 def test_forgery_all_21_decided_with_invented_files_now_fails_a_distribution_build(tmp_path):

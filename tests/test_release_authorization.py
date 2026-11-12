@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import ROOT
+from .about_fixture import ROOT, copy_shipped
 
 FILES = ["scripts/release/approval.py", "scripts/release/authorize_release.sh", "packaging/check-distribution-gate.py", "packaging/distribution-gate.json",
-         "packaging/legal-allowed-signers", "packaging/release/decision-manifest-0.6.0.json", "scripts/release/release_orchestrate.py", "scripts/release/signing_package.py", "scripts/release/verify_signed.py", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"]
+         "packaging/legal-allowed-signers", "packaging/release/decision-manifest-0.6.0.json", "scripts/release/release_orchestrate.py", "scripts/release/waiver_approval.py", "scripts/release/signing_package.py", "scripts/release/verify_signed.py", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"]
 GENV = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "HOME": "/nonexistent", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
@@ -31,8 +31,7 @@ def run(args, cwd, env=None, **kw):
 def repo(tmp_path):
     r = tmp_path / "repo"
     for rel in FILES:
-        (r / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / rel, r / rel)
+        copy_shipped(rel, r / rel)
     (r / "scripts/release/authorize_release.sh").chmod(0o755)
     for a in (["init", "-q"], ["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-qm", "F"]):
         run(["git", *a], r)

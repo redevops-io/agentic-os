@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import ROOT
+from .about_fixture import ROOT, copy_shipped
 from .test_release_authorization import FILES, GENV, drive, gate_state, key, render, run  # noqa: F401  (key is a fixture)
 
 GATE_PY = ROOT / "packaging" / "check-distribution-gate.py"
@@ -95,8 +95,7 @@ def test_the_waiver_reference_must_be_exactly_the_hash_of_the_signed_record():
 def repo(tmp_path):
     r = tmp_path / "repo"
     for rel in [*FILES, *EXTRA]:
-        (r / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / rel, r / rel)
+        copy_shipped(rel, r / rel)
     (r / "scripts/release/authorize_release.sh").chmod(0o755)
     for a in (["init", "-q"], ["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-qm", "F"]):
         run(["git", *a], r)

@@ -91,14 +91,44 @@ def sign_all(root: Path, signer: Signer) -> None:
                     signer.sign(root / v["file"])
 
 
+
+# ------------------------------------------------------------------------------------------------ the shipped policy BEFORE any owner signature
+def pristine_gate_text(src: Path | None = None) -> str:
+    """The distribution gate file as it ships BEFORE the owner signs anything: every decision OPEN, no record, no signer. The tests build their
+    synthetic repositories from this, so they do not depend on whether the real repository already carries the owner's signed approvals."""
+    doc = json.loads((src or ROOT / "packaging" / "distribution-gate.json").read_text(encoding="utf-8"))
+    for d in doc["decisions"]:
+        if d.get("status") == "DECIDED":
+            d.update(status="OPEN", chosen_option=None, decision_reference=None, decision_sha256=None, decided_by=None, decided_on=None, counsel_reference=None)
+        d.pop("slot_texts", None)
+    doc["legal_signer_fingerprints"] = []
+    return json.dumps(doc, indent=1, ensure_ascii=False) + "\n"
+
+
+def pristine_allowed_text(src: Path | None = None) -> str:
+    """packaging/legal-allowed-signers as it ships before the owner's key is added: the comment lines only."""
+    lines = (src or ROOT / "packaging" / "legal-allowed-signers").read_text(encoding="utf-8").splitlines()
+    return "\n".join(ln for ln in lines if ln.lstrip().startswith("#") or not ln.strip()) + "\n"
+
+
+def copy_shipped(rel: str, dest: Path) -> None:
+    """Copy a repository file into a synthetic root; the gate file and the signer list are copied in their pre-signature form."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if rel == "packaging/distribution-gate.json":
+        dest.write_text(pristine_gate_text(), encoding="utf-8")
+    elif rel == "packaging/legal-allowed-signers":
+        dest.write_text(pristine_allowed_text(), encoding="utf-8")
+    else:
+        shutil.copyfile(ROOT / rel, dest)
+
+
 def make_root(tmp: Path) -> Path:
     """A throw-away repository root (a git repo with one commit) holding copies of what the About tools read."""
     r = tmp / "repo"
     for rel in ("agentic_os/about_record.py", "agentic_os/__init__.py", "pyproject.toml", "packaging/check-distribution-gate.py",
                 "packaging/identity.json", "packaging/distribution-gate.json", "packaging/legal-allowed-signers", "deploy/launcher/src-tauri/tauri.conf.json",
                 "deploy/launcher/src-tauri/Cargo.toml", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"):
-        (r / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / rel, r / rel)
+        copy_shipped(rel, r / rel)
     ui = r / "agentic_os" / "projects_ui"
     (ui / "assets").mkdir(parents=True)
     (ui / "index.html").write_text("<!doctype html><title>x</title>\n")

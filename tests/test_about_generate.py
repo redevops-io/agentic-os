@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import (ALL_SLOT_DECISIONS, signer, trust, NOTICES, ROOT, SLOTS, SYNTH, about_record, chk_about, decide, gate, gen_about,
+from .about_fixture import (ALL_SLOT_DECISIONS, pristine_gate_text, signer, trust, NOTICES, ROOT, SLOTS, SYNTH, about_record, chk_about, decide, gate, gen_about,
                             make_notices, make_root, read_gate, run_generate, stage_folder, write_gate)
 
 FORBIDDEN = ("open source", "cleared", "compliant", "approved by counsel", "legally")
@@ -33,11 +33,14 @@ def _record(notices: Path) -> dict:
 
 
 # ------------------------------------------------------------------------------------------- the committed gate file
-def test_committed_gate_has_every_slot_decision_and_all_stay_open():
-    ids = {d["id"] for d in json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())["decisions"]}
-    assert set(ALL_SLOT_DECISIONS) <= ids
-    for d in json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())["decisions"]:
-        assert d["status"] == "OPEN" and not d.get("slot_texts"), d["id"]      # this change decides nothing and writes no text
+def test_committed_gate_has_every_slot_decision_and_texts_only_where_the_owner_signed():
+    decisions = json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())["decisions"]
+    assert set(ALL_SLOT_DECISIONS) <= {d["id"] for d in decisions}
+    for d in decisions:
+        if d.get("slot_texts"):                      # a slot text is only ever on a DECIDED primary decision whose signed record names it
+            assert d["status"] == "DECIDED" and d["decision_reference"], d["id"]
+    pristine = json.loads(pristine_gate_text())["decisions"]
+    assert all(d["status"] == "OPEN" and not d.get("slot_texts") for d in pristine)       # the policy as it ships before any owner signature
 
 
 def test_slot_tables_agree_between_gate_record_validator_and_tests():

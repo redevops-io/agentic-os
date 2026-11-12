@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+import json
+
 from .about_fixture import chk_about, gate, make_notices, make_root, run_generate, stage_folder
 from .test_scopefix import RELEASE_FPR, SIGN, gate_cli
 
@@ -78,8 +80,10 @@ def test_valid_lines_comments_blank_lines_and_a_missing_file_are_not_problems(tm
     assert gate.separation_problems(tmp_path / "does-not-exist") == []        # unchanged: a missing file is not a line problem
 
 
-def test_the_empty_production_allowed_signers_file_and_the_production_gate_still_pass():
-    assert gate.allowed_signer_fingerprints(ROOT / "packaging" / "legal-allowed-signers") == ([], [])
+def test_the_production_allowed_signers_file_and_the_production_gate_still_pass():
+    """The file ships with comments only before the owner signs; once the owner has signed it lists exactly the keys the gate file pins."""
+    pinned = json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())["legal_signer_fingerprints"]
+    assert gate.allowed_signer_fingerprints(ROOT / "packaging" / "legal-allowed-signers") == (pinned, [])
     assert gate.separation_problems(ROOT / "packaging" / "legal-allowed-signers") == []
     r = gate_cli(ROOT)
     assert r.returncode == 0 and "PRIVATE CANDIDATE" in r.stdout, (r.returncode, r.stdout, r.stderr)

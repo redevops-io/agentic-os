@@ -80,7 +80,7 @@ def orch(tmp_path):
     for rel in set(sp.PIN_FILES) - {sp.APPROVAL, sp.APPROVAL + ".sig", "packaging/check-distribution-gate.py"}:
         (r / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, r / rel)
-    for f in ("approval.py", "release_orchestrate.py", "release_orchestrate.sh", "arrange_native.py"):
+    for f in ("approval.py", "waiver_approval.py", "release_orchestrate.py", "release_orchestrate.sh", "arrange_native.py"):
         shutil.copy2(ROOT / "scripts/release" / f, r / "scripts/release" / f)
     (r / sp.APPROVAL).parent.mkdir(parents=True, exist_ok=True)
     (r / sp.APPROVAL).write_text("synthetic approval\n")

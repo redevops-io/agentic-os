@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import chk_about, decide, gate, make_notices, make_root, read_gate, run_generate, signer, trust, write_gate
+from .about_fixture import chk_about, decide, gate, make_notices, make_root, pristine_gate_text, read_gate, run_generate, signer, trust, write_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 SIGN = ROOT / "packaging" / "signing"
@@ -89,7 +89,8 @@ def test_a_throwaway_signer_still_works_and_separation_problems_are_empty(tmp_pa
 
 def test_the_shipped_policy_is_empty_and_the_separation_is_documented():
     g = json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())
-    assert g["legal_signer_fingerprints"] == [] and RELEASE_FPR not in json.dumps(g["legal_signer_fingerprints"])
+    assert RELEASE_FPR not in json.dumps(g["legal_signer_fingerprints"])           # the release key is never a legal signer
+    assert json.loads(pristine_gate_text())["legal_signer_fingerprints"] == []     # and the policy ships without any signer before the owner signs
     t = " ".join((ROOT / "docs" / "ABOUT_LEGAL_UI.md").read_text().split())
     assert "separate legal-decision key" in t and "release key" in t and "any namespace" in t
     assert "separate" in " ".join(g["signers_policy"].split()) and "release key" in g["signers_policy"]

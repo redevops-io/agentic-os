@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import Signer, signer  # noqa: F401  (signer is a pytest fixture)
+from .about_fixture import Signer, pristine_gate_text, signer  # noqa: F401  (signer is a pytest fixture)
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_PY = ROOT / "packaging" / "check-distribution-gate.py"
@@ -47,7 +47,7 @@ def _run(*args, gate_file=None, allowed=None, **env):
 
 
 def _decisions():
-    return json.loads(GATE_JSON.read_text(encoding="utf-8"))["decisions"]
+    return json.loads(pristine_gate_text())["decisions"]       # the policy before any owner signature (the real file may already carry signed decisions)
 
 
 def _decided(d, tmp_path, signer=None):

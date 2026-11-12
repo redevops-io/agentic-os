@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import Signer, decide, licenses_for, read_gate, signer, trust  # noqa: F401  (signer is a pytest fixture)
+from .about_fixture import Signer, decide, licenses_for, pristine_allowed_text, pristine_gate_text, read_gate, signer, trust  # noqa: F401  (signer is a pytest fixture)
 
 ROOT = Path(__file__).resolve().parents[1]
 SIGN = ROOT / "packaging" / "signing"
@@ -104,7 +104,7 @@ def make_tree(dest: Path) -> Path:
     (dest / "notices").mkdir()
     for n in ("check_about.py", "generate_about.py"):
         shutil.copy(ROOT / "packaging" / "notices" / n, dest / "notices" / n)
-    shutil.copy(ROOT / "packaging" / "legal-allowed-signers", dest / "legal-allowed-signers")
+    (dest / "legal-allowed-signers").write_text(pristine_allowed_text(), encoding="utf-8")
     (root / "agentic_os" / "projects_ui").mkdir(exist_ok=True)
     (root / "agentic_os" / "projects_ui" / "index.html").write_text("<!doctype html>\n")
     return dest
@@ -121,7 +121,10 @@ def _make_tree(dest: Path) -> Path:
             shutil.copy(p, dest / "signing" / p.name)
     shutil.copytree(SIGN / "tools", dest / "signing" / "tools")
     for src in (IDJSON, GATE_JSON, GATE_PY):
-        shutil.copy(src, dest / src.name)
+        if src == GATE_JSON:
+            (dest / src.name).write_text(pristine_gate_text(), encoding="utf-8")      # the shipped policy before any owner signature
+        else:
+            shutil.copy(src, dest / src.name)
     shutil.copy(ENT, dest / "macos" / ENT.name)
     def patch(path, mapping):
         lines = path.read_text().splitlines(keepends=True)

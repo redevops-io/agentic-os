@@ -236,8 +236,7 @@ def test_fingerprint_computation_matches_ssh_keygen(signer):
 
 def test_shipped_policy_is_empty_and_documented():
     g = json.loads((ROOT / "packaging" / "distribution-gate.json").read_text())
-    assert g["legal_signer_fingerprints"] == []
-    assert gate.allowed_signer_fingerprints(ROOT / "packaging" / "legal-allowed-signers") == ([], [])
+    assert gate.allowed_signer_fingerprints(ROOT / "packaging" / "legal-allowed-signers") == (g["legal_signer_fingerprints"], [])     # the policy pins exactly the keys the file lists
     p = g["signers_policy"]
     assert "BOTH files are repository data" in p and "independent channel" in p and "procedure step, not a code guarantee" in p
 

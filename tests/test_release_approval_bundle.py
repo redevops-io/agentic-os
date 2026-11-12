@@ -138,7 +138,7 @@ def test_option_and_listing_must_match_the_gate_entry(env):
 
 
 @pytest.mark.parametrize("mutate,needle", [
-    (lambda h: h.replace("redevops-legal-decision: 2", "redevops-legal-decision: 3"), "start with the header"),
+    (lambda h: h.replace("redevops-legal-decision: 2", "redevops-legal-decision: 4"), "start with the header"),
     (lambda h: h.replace("base-commit: " + C, "base-commit: xyz"), "base-commit"),
     (lambda h: h.replace("manifest-sha256: " + M, ""), "manifest-sha256"),
     (lambda h: h.replace("bundle: TEST-BUNDLE\n", "bundle: A\nbundle: B\n"), "given twice"),
