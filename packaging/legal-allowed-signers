@@ -13,3 +13,4 @@
 #   ssh-keygen -Y sign -f <private key file> -n redevops-legal-decision@v1 <record>      (writes <record>.sig)
 # Changes to this file, to packaging/distribution-gate.json and to docs/legal/** should need the owner's review (see
 # docs/legal/CODEOWNERS.proposed). A signature proves who signed the file, not that the decision is right.
+redevops-legal-decision namespaces="redevops-legal-decision@v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPTbGNUXDY5HYTXWyn4P92a7qLqiHI/kuaeK1OR8UJAA

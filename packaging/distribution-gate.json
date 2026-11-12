@@ -3,7 +3,9 @@
  "purpose": "Every decision that must be taken in writing before any DISTRIBUTION of an R0-prime artifact. A private candidate build may proceed while decisions are OPEN. status is OPEN until the owner (and counsel where 'decides' names counsel) has decided; only a person can change it. A DECIDED entry must carry chosen_option, decision_reference (the signed docs/legal/OWNER_DECISION_FORM.md record), decision_sha256 (sha256 of that record), decided_by and decided_on (YYYY-MM-DD) and, when counsel decides, counsel_reference. TRUST BOUNDARY: a DECIDED entry is plain repository data. The hashes in it (decision_sha256, the sha256 of a slot text) prove CONSISTENCY between the entry and the files it names, a tripwire against drift and mistakes; they prove no authenticity: any editor of the repository can write a DECIDED entry with invented files and matching hashes. A DISTRIBUTION build therefore additionally requires a detached SSHSIG (namespace redevops-legal-decision@v1) next to every record and approved text, made by a key listed in packaging/legal-allowed-signers (ships empty: until the owner supplies a public key, every DECIDED entry fails a distribution build).",
  "wording_rule": "No entry says that anything is cleared, compliant or permitted.",
  "slot_texts_schema": "OPTIONAL object `slot_texts` on a DECIDED entry: {\"<slot id>\": {\"file\": \"docs/legal/approved/<name>.txt\", \"sha256\": \"<64 hex of that file>\"}} or, only for LEGAL.SECTION13_NOTICE, {\"not_applicable\": true}. The About page has five legal slots (LEGAL.COPYRIGHT_LINE: D-LIC-1; LEGAL.LICENCE_STATEMENT: D-LIC-1, D-LIC-15; LEGAL.SOURCE_OFFER: D-LIC-12, pins-03, pins-04; LEGAL.NO_WARRANTY: D-LIC-10; LEGAL.SECTION13_NOTICE: D-LIC-5). A slot is filled only when EVERY decision it lists is DECIDED (with its written record) and the FIRST decision listed carries the slot_texts entry for it and the named file hashes to that sha256; otherwise the About page shows a neutral placeholder in a private candidate and a distribution build fails (packaging/check-distribution-gate.py --about-slots; packaging/notices/generate_about.py exits 3). An OPEN entry must not carry slot_texts; a DECIDED slot whose text is missing or does not match is an error in every build mode. No text file exists yet and no decision is DECIDED. The sha256 in slot_texts proves consistency between this entry and the text file, not authenticity or approval; the detached signature `<file>.sig` (namespace redevops-legal-decision@v1, key in packaging/legal-allowed-signers) is what a distribution build checks for authenticity.",
- "legal_signer_fingerprints": [],
+ "legal_signer_fingerprints": [
+  "SHA256:6Xh02LGKSk5Igxh79tMyio4GaNpyLed0C06jHC3xzIQ"
+ ],
  "signers_policy": "legal_signer_fingerprints lists the SHA256 fingerprints (ssh-keygen -l style) of EVERY key in packaging/legal-allowed-signers and nothing else; the gate refuses to verify any signature unless the two lists are identical. It ships EMPTY (no key chosen, none generated). BOTH files are repository data: the pairing makes a silent addition of a key in one place visible, it does not authenticate the owner. Before any distribution build the owner confirms the fingerprints against an independent channel (their published key page); that is a procedure step, not a code guarantee. A signed decision record starts with a machine-readable header (see the docstring of packaging/check-distribution-gate.py): redevops-legal-decision: 1, decision: <id>, option: <chosen option key>, and one 'slot: <slot id> sha256 <hex of the approved text>' (or 'slot: <slot id> not-applicable') line per slot it authorizes. The gate compares those fields, taken from the SIGNED bytes, with the gate entry, so one signed record or text cannot stand for another decision, option or slot. The owner's ssh-agent signs any namespace, so the published RELEASE key must NOT be a legal-decision signer: the gate refuses its fingerprint (SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA) in this list and in legal-allowed-signers, in every build mode. Choose a separate legal-decision key (the release key is not it).",
  "decisions": [
   {
@@ -58,7 +60,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -89,11 +91,11 @@
    ],
    "facts_resolved_by_lic2": "Facts re-read 2026-11-04 from the public repositories (tags, trees, commit messages); cost of option (b) measured.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-2",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "a",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -281,7 +283,7 @@
     "all"
    ],
    "blocks_distribution": false,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -303,11 +305,11 @@
    ],
    "facts_resolved_by_lic2": "Bundle scanned: the only @license/Copyright strings are 4 React banners (OBSERVED).",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-7",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "b",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -319,7 +321,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -344,11 +346,11 @@
    ],
    "facts_resolved_by_lic2": "The original (C2PA: Black Forest Labs API) is no longer shipped. The neutral generated placeholder and its generator script have been removed from the repository and from the pinned UI artifact (history: commit e9742de; artifact sha256 b4a7d83c... carries no image).",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-8",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "c",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -443,7 +445,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -464,11 +466,11 @@
    ],
    "facts_resolved_by_lic2": "None: authorship is not discoverable from the files.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-11",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "b",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -527,7 +529,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -553,11 +555,11 @@
    ],
    "facts_resolved_by_lic2": "r-efi: AUTHORS verbatim (package and upstream tag identical); objc2 family: standard texts from a later upstream commit; selectors: no upstream licence file at the packaged commit (OBSERVED); webview2-com*/alloc-stdlib: upstream LICENSE at packaged commits.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-13",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "a",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -569,7 +571,7 @@
     "all"
    ],
    "blocks_distribution": false,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -588,11 +590,11 @@
    "counsel_questions": [],
    "facts_resolved_by_lic2": "Proven earlier (blocked-import and frozen runs); knowledge-frontier v0.2.0 exists since 2026-09-23, still without a licence file at the tag.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-14",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "a",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -604,7 +606,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -625,11 +627,11 @@
    ],
    "facts_resolved_by_lic2": "None.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-15",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "a",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -678,7 +680,7 @@
     "all"
    ],
    "blocks_distribution": false,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -697,11 +699,11 @@
    "counsel_questions": [],
    "facts_resolved_by_lic2": "Frozen baseline vs excluded: 63/63 smoke, locales 8/8, lifecycle PASS, bootstrap byte-identical.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-17",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "a",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
@@ -792,7 +794,7 @@
     "all"
    ],
    "blocks_distribution": true,
-   "status": "OPEN",
+   "status": "DECIDED",
    "options": [
     {
      "key": "a",
@@ -813,11 +815,11 @@
    ],
    "facts_resolved_by_lic2": "Public repository has v0.3.2 -> feeca065 and no R0-prime commit (OBSERVED, pins-04).",
    "package": "docs/legal/DECISION_PACKAGES.md#pins-04",
-   "chosen_option": null,
-   "decision_reference": null,
-   "decision_sha256": null,
-   "decided_by": null,
-   "decided_on": null,
+   "chosen_option": "a",
+   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
+   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
+   "decided_on": "2026-11-12",
    "counsel_reference": null
   },
   {
