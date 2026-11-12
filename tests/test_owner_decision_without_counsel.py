@@ -394,3 +394,23 @@ def test_check_resolves_the_slots_and_notices_a_wrong_slot_file(repo, tmp_path, 
     gate_path.write_text(json.dumps(g, indent=1, ensure_ascii=False) + "\n")
     r = run([*PY, "scripts/release/waiver_approval.py", "check"], repo)
     assert r.returncode == 1 and "About slot" in r.stderr
+
+
+def test_signer_line_options_are_kept_when_understood_and_refused_otherwise(tmp_path):
+    owner, _ = _two_signers(tmp_path)
+    toks = owner.allowed.read_text().strip().splitlines()[-1].split()
+    key = " ".join(toks[toks.index("ssh-ed25519"):][:2])
+    root = tmp_path / "root"
+    root.mkdir()
+    rel = _signed_record(root, owner)
+    expired = tmp_path / "expired"
+    expired.write_text(f'owner namespaces="redevops-legal-decision@v1",valid-before="20200101" {key}\n')
+    assert GATE.verify_sshsig_bytes(root, rel, expired, [owner.fingerprint])[1] != ""                  # an expiry in the file is honoured
+    current = tmp_path / "current"
+    current.write_text(f'owner namespaces="redevops-legal-decision@v1",valid-before="20991231" {key}\n')
+    assert GATE.verify_sshsig_bytes(root, rel, current, [owner.fingerprint])[1] == ""
+    for odd in ('command="x"', 'principals="*"', 'namespaces="a b"'):
+        p = tmp_path / "odd"
+        p.write_text(f"owner {odd} {key}\n")
+        fps, probs = GATE.allowed_signer_fingerprints(p)
+        assert probs and fps == [], odd

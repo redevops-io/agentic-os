@@ -458,7 +458,7 @@ class Mac:
              "identity_json_sha256": sha_file(IDJSON), "input_dmg_sha256": sha_file(self.dmg),
              "identity_sha256": sha_bytes(TEST_IDENTITY.encode()), "notary_profile_sha256": sha_bytes(TEST_PROFILE.encode()),
              "team_id": "TESTTEAM01", "notarize": "yes", "upload_to": "apple-notary", "distribution": "no",
-             "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "evidence_manifest_sha256": "e" * 64,
+             "gate_sha256": sha_file(self.tree / GATE_JSON.name), "gate_tool_sha256": sha_file(GATE_PY), "evidence_manifest_sha256": "e" * 64,
              "procedure_commit": "c" * 40}
         d.update(about_pins(self.tree, self.lic))
         d.update(over)
@@ -1599,7 +1599,7 @@ class Win:
              "script_sha256": sha_file(self.script), "common_sha256": sha_file(self.common), "verifier_sha256": sha_file(VERIFIER),
              "identity_json_sha256": sha_file(IDJSON), "stage": st, "inputs_sha256": ",".join(sorted(h for _, h in pairs)),
              "az_endpoint": "https://eus.codesigning.azure.net/", "az_account": "stub-account", "az_profile": "stub-profile", "expected_cn": "CN=Stub Test Org",
-             "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "distribution": "no",
+             "gate_sha256": sha_file(self.tree / GATE_JSON.name), "gate_tool_sha256": sha_file(GATE_PY), "distribution": "no",
              "evidence_manifest_sha256": "e" * 64, "procedure_commit": "c" * 40,
              "tool_az_sha256": sha_file(self.stubs / "az"), "tool_java_sha256": sha_file(self.stubs / "java"),
              "tool_python_sha256": sha_file(self.stubs / "py"), "tool_python_packages_sha256": sha_bytes(b"signify==0.0-stub\n"), "tool_python_pth_sha256": sha_bytes(b"\n"),

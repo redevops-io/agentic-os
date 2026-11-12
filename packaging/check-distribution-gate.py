@@ -572,11 +572,31 @@ def binding_problems(d: dict, hdr: dict) -> list[str]:
 _KEYTYPE = re.compile(r"^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)$")
 
 
-def parse_allowed_signers(path: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
-    """The keys of an allowed-signers file as (key type, base64 key, SHA256 fingerprint) and the parse problems. The file must be printable ASCII
+_OPT_REGION = re.compile(r'^\S+\s+((?:[a-z-]+=(?:"[^"\s]*"|[^\s",]+),?\s*)+?)\s*(?:ssh-|ecdsa-|sk-)\S*\s+\S+')
+_OPT_ITEM = re.compile(r'([a-z-]+)=(?:"([^"\s]*)"|([^\s",]+))')
+_OPT_VALUE = {"namespaces": re.compile(r"^[A-Za-z0-9@._,*-]{1,200}$"), "valid-after": re.compile(r"^\d{8,14}Z?$"), "valid-before": re.compile(r"^\d{8,14}Z?$")}
+
+
+def _line_options(ln: str):
+    """{name: value} of the options of one allowed-signers line when they are only namespaces=, valid-after= or valid-before= with plain values;
+    None otherwise (any other option, or a value this gate does not understand, is refused rather than passed on to ssh-keygen)."""
+    m = _OPT_REGION.match(ln.strip())
+    if not m:
+        return {}
+    out = {}
+    for name, q, u in _OPT_ITEM.findall(m.group(1)):
+        v = q or u
+        if name not in _OPT_VALUE or not _OPT_VALUE[name].match(v) or name in out:
+            return None
+        out[name] = v
+    return out
+
+
+def parse_allowed_signers(path: Path) -> tuple[list[tuple[str, str, str, dict]], list[str]]:
+    """The keys of an allowed-signers file as (key type, base64 key, SHA256 fingerprint, options dict) and the parse problems. The file must be printable ASCII
     (plus TAB and LF): ssh-keygen splits lines and tokens differently from Python (a control character, a quote or a Unicode line separator can make
     one tool see a comment where the other sees a key), so anything else is refused outright."""
-    keys: list[tuple[str, str, str]] = []
+    keys: list[tuple[str, str, str, dict]] = []
     probs: list[str] = []
     try:
         text = Path(path).read_bytes().decode("utf-8")
@@ -597,12 +617,16 @@ def parse_allowed_signers(path: Path) -> tuple[list[tuple[str, str, str]], list[
         if idx < 0 or "cert-authority" in ln:
             probs.append(f"legal-allowed-signers line {n} is not a plain 'principal [options] key-type base64-key' line")
             continue
+        opts = _line_options(ln)
+        if opts is None or (idx > 1 and not opts) or any("=" not in t for t in toks[1:idx]):
+            probs.append(f"legal-allowed-signers line {n} uses an option other than namespaces=, valid-after= or valid-before=")
+            continue
         try:
             blob = base64.b64decode(toks[idx + 1], validate=True)
         except ValueError:
             probs.append(f"legal-allowed-signers line {n} holds an invalid key")
             continue
-        keys.append((toks[idx], toks[idx + 1], "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")))
+        keys.append((toks[idx], toks[idx + 1], "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("="), opts))
     return keys, probs
 
 
@@ -613,10 +637,14 @@ def allowed_signer_fingerprints(path: Path) -> tuple[list[str], list[str]]:
 
 
 def rebuilt_allowed_signers(path: Path) -> str:
-    """The allowed-signers text handed to ssh-keygen: ONLY the keys this gate parsed and fingerprinted, one canonical line each, restricted to
-    the legal-decision namespace. The repository file itself is never given to ssh-keygen."""
+    """The allowed-signers text handed to ssh-keygen: ONLY the keys this gate parsed and fingerprinted, one canonical line each, with the file's
+    own namespaces= restriction (or the legal-decision namespace when it has none). The repository file itself is never given to ssh-keygen."""
     keys, _ = parse_allowed_signers(path)
-    return "".join(f'redevops-legal-decision namespaces="{SIG_NAMESPACE}" {kt} {b64}\n' for kt, b64, _ in keys)
+    out = []
+    for kt, b64, _, o in keys:
+        opts = {"namespaces": SIG_NAMESPACE, **o}
+        out.append("redevops-legal-decision " + ",".join(f'{k}="{v}"' for k, v in sorted(opts.items())) + f" {kt} {b64}\n")
+    return "".join(out)
 
 
 def anchor_problems(allowed_signers: Path, signers) -> list[str]:
