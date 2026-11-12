@@ -1,9 +1,11 @@
 #!/bin/bash -p
 # authorize_release.sh: the ONE owner-authorization command of release 0.6.0.
 #
-#   scripts/release/authorize_release.sh --doc FILE --pubkey FILE [--dry-run]
+#   scripts/release/authorize_release.sh [--waiver] --doc FILE --pubkey FILE [--dry-run]
 #
 # FILE   the rendered RELEASE_OWNER_APPROVAL_0.6.0.md the owner reviewed (scripts/release/approval.py render ...)
+#        with --waiver: the rendered OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md (scripts/release/waiver_approval.py render ...): the owner's
+#        decision of the counsel-named decisions WITHOUT counsel (an explicit waiver; commits THREE paths: document, signature, gate file)
 # PUBKEY the PUBLIC half of the owner's legal-decision key (NOT the release key; the gate refuses that one). The private key stays in the
 #        owner's ssh-agent: this script never opens a private key file (the public key is copied to a private directory first, so ssh-keygen
 #        cannot fall back to a private key that sits beside it).
@@ -18,12 +20,13 @@
 # --dry-run performs 1, 2 and the checks of 3 to 5 that need no signature, prints what would be written, and changes nothing.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"; ROOT="$(cd "$HERE/../.." && pwd -P)"
-DOC="" PUB="" DRY=0
+DOC="" PUB="" DRY=0 WAIVER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --doc) DOC="${2:?}"; shift 2 ;;
     --pubkey) PUB="${2:?}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --waiver) WAIVER=1; shift ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -31,7 +34,14 @@ done
 [ -n "$DOC" ] && [ -n "$PUB" ] || { echo "usage: authorize_release.sh --doc FILE --pubkey FILE [--dry-run]" >&2; exit 2; }
 [ -f "$DOC" ] && [ -f "$PUB" ] || { echo "file not found" >&2; exit 2; }
 DOC="$(cd "$(dirname "$DOC")" && pwd -P)/$(basename "$DOC")"; PUB="$(cd "$(dirname "$PUB")" && pwd -P)/$(basename "$PUB")"
-PY=(env -i PATH=/usr/bin:/bin:/opt/homebrew/bin LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null python3 -I "$HERE/approval.py")
+if [ "$WAIVER" = 1 ]; then
+  TOOL=waiver_approval.py; DOCREL=docs/legal/approved/OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md; KIND="owner decision without counsel"; LABEL="Counsel-named decisions decided by the owner"
+  ADD=("$DOCREL" "$DOCREL.sig" packaging/distribution-gate.json packaging/legal-allowed-signers)
+else
+  TOOL=approval.py; DOCREL=docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md; KIND="consolidated owner approval"; LABEL="Owner-only decisions"
+  ADD=("$DOCREL" "$DOCREL.sig" packaging/legal-allowed-signers packaging/distribution-gate.json)
+fi
+PY=(env -i PATH=/usr/bin:/bin:/opt/homebrew/bin LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null python3 -I "$HERE/$TOOL")
 fail() { echo "STOP: $*" >&2; exit 1; }
 
 cd "$ROOT"
@@ -56,8 +66,8 @@ echo "decisions: $IDS"
 echo "key      : $FPR   ($PUB)"
 if [ "$DRY" = 1 ]; then
   echo "DRY RUN: would sign the document with the agent-held key for the fingerprint above, then write:"
-  echo "  docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md (+ .sig), packaging/legal-allowed-signers, packaging/distribution-gate.json"
-  echo "  and commit them as the release commit. Nothing was changed."
+  echo "  $DOCREL (+ .sig), packaging/legal-allowed-signers (unchanged when the same key signs), packaging/distribution-gate.json"
+  echo "  and commit them as one commit ($KIND). Nothing was changed."
   exit 0
 fi
 [ -t 0 ] || [ -r /dev/tty ] || fail "needs a terminal: the owner must type the digest and the fingerprint"
@@ -74,21 +84,21 @@ read -r -p "Type the name that signs, exactly as written in section 11 of the do
 [ "$(shasum -a 256 "$DOC" | awk '{print $1}')" = "$DIGEST" ] || fail "the document changed after its digest was shown"
 env -i PATH=/usr/bin:/bin SSH_AUTH_SOCK="$SSH_AUTH_SOCK" /usr/bin/ssh-keygen -Y sign -f "$PUB" -n redevops-legal-decision@v1 "$DOC" || fail "signing failed"
 DATE="$(date -u +%F)"
-"${PY[@]}" apply --doc "$DOC" --pubkey "$PUB" --decided-by "$NAME (owner), consolidated approval $DIGEST" --date "$DATE"
-cp "$DOC.sig" "$ROOT/docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig"
+"${PY[@]}" apply --doc "$DOC" --pubkey "$PUB" --decided-by "$NAME (owner), $KIND $DIGEST" --date "$DATE"
+cp "$DOC.sig" "$ROOT/$DOCREL.sig"
 if ! "${PY[@]}" check; then
   git checkout -- packaging/distribution-gate.json packaging/legal-allowed-signers 2>/dev/null || true
-  rm -f docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig
+  rm -f "$DOCREL" "$DOCREL.sig"
   fail "the gate does not accept the signature; everything was rolled back"
 fi
-git add docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig packaging/legal-allowed-signers packaging/distribution-gate.json
-git commit -q -m "release 0.6.0: consolidated owner approval $DIGEST (signed $DATE by $NAME)
+git add "${ADD[@]}"
+git commit -q -m "release 0.6.0: $KIND $DIGEST (signed $DATE by $NAME)
 
 Signer-key-fingerprint: $FPR
 Approval-sha256: $DIGEST
-Owner-only decisions: $IDS
+$LABEL: $IDS
 Base commit F: $BASE
-Counsel decisions are NOT covered and stay OPEN."
+$( [ "$WAIVER" = 1 ] && echo "Counsel consulted: no. Counsel-named decisions decided by the owner without counsel (waiver); no counsel reference exists." || echo "Counsel decisions are NOT covered and stay OPEN." )"
 echo "RELEASE COMMIT R: $(git rev-parse HEAD)"
 echo "Next: scripts/release/release_orchestrate.sh --dry-run --expect-signer-fingerprint $FPR   (nothing was pushed)"
 echo "Record $FPR from an independent channel now; the orchestrator trusts only the value you pass it."

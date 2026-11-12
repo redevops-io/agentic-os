@@ -389,6 +389,9 @@ def parse_decision_record(raw: bytes) -> tuple[dict, list[str]]:
 
 
 BUNDLE_VERSION = "2"
+WAIVER_VERSION = "3"
+WAIVER_STATEMENT = "owner-decision-without-counsel"
+WAIVER_REF_PREFIX = "owner-waiver:"      # counsel_reference of an entry decided under a version 3 record: this prefix + the sha256 of the signed record
 # Decisions that name counsel. Frozen here, NOT read from the gate file: `decides` is repository data (editable together with the entry), so a
 # consolidated owner approval refuses these ids whatever the gate file says. A new counsel decision is added here deliberately
 # (tests/test_release_approval_bundle.py fails if the gate file and this set disagree).
@@ -401,7 +404,9 @@ _BUNDLE_DECISION = re.compile(r"^([A-Za-z][A-Za-z0-9-]*) ([a-z0-9]{1,4})$")
 
 
 def parse_bundle_record(raw: bytes) -> tuple[dict, list[str]]:
-    """The machine-readable header of a CONSOLIDATED OWNER APPROVAL (one signature for several decisions), exactly
+    """The machine-readable header of a CONSOLIDATED OWNER APPROVAL (one signature for several decisions). Two versions exist:
+
+    Version 2, the approval of OWNER-ONLY decisions:
 
         redevops-legal-decision: 2
         bundle: <name>
@@ -410,10 +415,21 @@ def parse_bundle_record(raw: bytes) -> tuple[dict, list[str]]:
         manifest-sha256: <64 hex>
         decision: <decision id> <option key>          (one or more)
 
-    Free text follows after an empty line. A bundle can authorize ONLY decisions whose `decides` is exactly "owner" (a decision that names
-    counsel is never covered by it, see bundle_binding_problems) and it authorizes NO About-slot text (a `slot:` line is refused). The
-    base-commit, base-tree and manifest-sha256 lines are bound by the signature; the gate does not resolve them against git (the release
-    orchestrator does). Returns ({"version","bundle","base-commit","base-tree","manifest-sha256","decisions": {id: option}}, problems)."""
+    Version 3, the owner's decision of COUNSEL-NAMED decisions WITHOUT counsel (an explicit waiver, never a counsel approval):
+
+        redevops-legal-decision: 3
+        bundle: <name>
+        base-commit / base-tree / manifest-sha256       (as above)
+        counsel-consulted: no
+        waiver: owner-decision-without-counsel
+        decision: <counsel-named decision id> <option key>        (one or more)
+        slot: <slot id> sha256 <64 hex of the approved text>       (zero or more; or "slot: <id> not-applicable")
+
+    Free text follows after an empty line. A version 2 bundle can authorize ONLY decisions whose `decides` is exactly "owner" and no About-slot
+    text (a `slot:` line is refused); a version 3 bundle can authorize ONLY decisions of the frozen COUNSEL_NAMED set, and each slot line must
+    belong to a decision the bundle lists (see bundle_binding_problems and waiver_binding_problems). The base-commit, base-tree and
+    manifest-sha256 lines are bound by the signature; the gate does not resolve them against git (the release orchestrator does).
+    Returns ({"version","bundle","base-commit","base-tree","manifest-sha256","decisions": {id: option}, "slots": {slot: sha|"not-applicable"}}, problems)."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -423,9 +439,10 @@ def parse_bundle_record(raw: bytes) -> tuple[dict, list[str]]:
         if ln == "":
             break
         head.append(ln)
-    if not head or head[0] != f"redevops-legal-decision: {BUNDLE_VERSION}":
-        return {}, [f"the record does not start with the header line 'redevops-legal-decision: {BUNDLE_VERSION}'"]
-    out: dict = {"decisions": {}}
+    version = next((v for v in (BUNDLE_VERSION, WAIVER_VERSION) if head and head[0] == f"redevops-legal-decision: {v}"), None)
+    if version is None:
+        return {}, [f"the record does not start with the header line 'redevops-legal-decision: {BUNDLE_VERSION}' or '{WAIVER_VERSION}'"]
+    out: dict = {"version": version, "decisions": {}, "slots": {}}
     probs: list[str] = []
     for ln in head[1:]:
         m = _BUNDLE_HDR_LINE.match(ln)
@@ -446,7 +463,20 @@ def parse_bundle_record(raw: bytes) -> tuple[dict, list[str]]:
                 probs.append(f"{k} given twice")
             out[k] = v
         elif k == "slot":
-            probs.append("a bundle cannot authorize an About-slot text (slot line refused)")
+            if version != WAIVER_VERSION:
+                probs.append("a bundle cannot authorize an About-slot text (slot line refused)")
+                continue
+            sm = _SLOT_LINE.match(v)
+            if not sm:
+                probs.append(f"malformed slot line: {v[:60]!r}")
+            elif sm.group(1) in out["slots"]:
+                probs.append(f"slot {sm.group(1)} listed twice")
+            else:
+                out["slots"][sm.group(1)] = sm.group(2) or "not-applicable"
+        elif k in ("counsel-consulted", "waiver") and version == WAIVER_VERSION:
+            if k in out:
+                probs.append(f"{k} given twice")
+            out[k] = v
         else:
             probs.append(f"unknown header key {k!r}")
     for k, rx in (("base-commit", _HEX40), ("base-tree", _HEX40), ("manifest-sha256", _HEX64)):
@@ -456,6 +486,22 @@ def parse_bundle_record(raw: bytes) -> tuple[dict, list[str]]:
         probs.append("header lacks 'bundle:'")
     if not out["decisions"]:
         probs.append("header lists no decision")
+    if version == WAIVER_VERSION:
+        if out.get("counsel-consulted") != "no":
+            probs.append("a version 3 record must say 'counsel-consulted: no'")
+        if out.get("waiver") != WAIVER_STATEMENT:
+            probs.append(f"a version 3 record must say 'waiver: {WAIVER_STATEMENT}'")
+        outside = sorted(set(out["decisions"]) - COUNSEL_NAMED)
+        if outside:
+            probs.append(f"a version 3 record covers only counsel-named decisions, not {outside}")
+        for slot in out["slots"]:
+            spec = ABOUT_SLOTS.get(slot)
+            if spec is None:
+                probs.append(f"unknown slot {slot}")
+            elif spec["decisions"][0] not in out["decisions"]:
+                probs.append(f"slot {slot} belongs to {spec['decisions'][0]}, which the record does not list")
+            elif out["slots"][slot] == "not-applicable" and not spec["omittable"]:
+                probs.append(f"slot {slot} cannot be not-applicable")
     return out, probs
 
 
@@ -472,6 +518,33 @@ def bundle_binding_problems(d: dict, hdr: dict) -> list[str]:
         errs.append(f"{i}: decides is {d.get('decides')!r}; a consolidated owner approval covers owner-only decisions, never one that names counsel")
     if d.get("slot_texts"):
         errs.append(f"{i}: a consolidated owner approval authorizes no About-slot text, but the gate entry names slot_texts")
+    return errs
+
+
+def waiver_binding_problems(d: dict, hdr: dict, record_sha256: str) -> list[str]:
+    """What a SIGNED version 3 record (owner decision WITHOUT counsel) says versus the gate entry. The entry must be a counsel-named decision (the
+    frozen set), listed in the record with the same option; its counsel_reference must be exactly WAIVER_REF_PREFIX + the sha256 of the signed
+    record (so the entry cannot claim a counsel reference it does not have, and the reference cannot be copied to another record); and its
+    slot_texts must equal the slot lines of the record that belong to it (slot id, text sha256 or not-applicable)."""
+    i, errs = d.get("id"), []
+    if hdr.get("version") != WAIVER_VERSION:
+        return [f"{i}: not a version 3 (owner decision without counsel) record"]
+    if i not in COUNSEL_NAMED:
+        errs.append(f"{i}: a version 3 record covers only the counsel-named decisions")
+    if i not in hdr.get("decisions", {}):
+        errs.append(f"{i}: the signed record does not list this decision")
+    elif hdr["decisions"][i] != d.get("chosen_option"):
+        errs.append(f"{i}: the signed record names option {hdr['decisions'][i]!r}, the gate entry {d.get('chosen_option')!r}")
+    if d.get("counsel_reference") != WAIVER_REF_PREFIX + record_sha256:
+        errs.append(f"{i}: counsel_reference must be exactly {WAIVER_REF_PREFIX}<sha256 of the signed record> for an owner decision without counsel")
+    want = {}
+    for slot, v in (d.get("slot_texts") or {}).items():
+        want[slot] = "not-applicable" if isinstance(v, dict) and v.get("not_applicable") is True else (v or {}).get("sha256")
+    have = {slot: v for slot, v in hdr.get("slots", {}).items() if ABOUT_SLOTS.get(slot, {}).get("decisions", ("",))[0] == i}
+    if have != want:
+        errs.append(f"{i}: the signed record authorizes different slots than the gate entry names "
+                    f"(only in the record: {sorted(set(have) - set(want))}; only in the gate entry: {sorted(set(want) - set(have))}; "
+                    f"text hash differs: {sorted(k for k in set(have) & set(want) if have[k] != want[k])})")
     return errs
 
 
@@ -599,20 +672,49 @@ def _record_problems(d: dict, root: Path, allowed: Path, signers, cache: dict) -
             cache[key] = [f"{d.get('id')} record: {why}"]
         else:
             first = data.split(b"\n", 1)[0]
-            if first == f"redevops-legal-decision: {BUNDLE_VERSION}".encode():
+            if first in (f"redevops-legal-decision: {BUNDLE_VERSION}".encode(), f"redevops-legal-decision: {WAIVER_VERSION}".encode()):
                 hdr, probs = parse_bundle_record(data)
-                cache[key] = [f"{d.get('id')} record: {p}" for p in probs] if probs else bundle_binding_problems(d, hdr)
+                if probs:
+                    cache[key] = [f"{d.get('id')} record: {p}" for p in probs]
+                elif hdr["version"] == WAIVER_VERSION:
+                    cache[key] = waiver_binding_problems(d, hdr, hashlib.sha256(data).hexdigest())
+                else:
+                    cache[key] = bundle_binding_problems(d, hdr)
             else:
                 hdr, probs = parse_decision_record(data)
                 cache[key] = [f"{d.get('id')} record: {p}" for p in probs] if probs else binding_problems(d, hdr)
     return cache[key]
 
 
-def _text_problems(rel: str, label: str, root: Path, allowed: Path, signers, cache: dict) -> list[str]:
+def _waiver_covers_text(d: dict, slot: str, entry: dict, root: Path, allowed: Path, signers, cache: dict) -> bool:
+    """True when the primary decision `d` of `slot` is recorded in a signature-verified version 3 record that lists this slot with the sha256
+    of the text file's CURRENT bytes: the owner's signature over that header line authorizes the text, no separate .sig is needed."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("file"), str) or not isinstance(entry.get("sha256"), str):
+        return False
+    if _record_problems(d, root, allowed, signers, cache):
+        return False
+    data, why = verify_sshsig_bytes(root, str(d.get("decision_reference") or ""), allowed, signers)
+    if why:
+        return False
+    hdr, probs = parse_bundle_record(data)
+    if probs or hdr.get("version") != WAIVER_VERSION or hdr["slots"].get(slot) != entry["sha256"]:
+        return False
+    try:
+        return hashlib.sha256(read_repo_file(root, entry["file"], SLOT_TEXT_MAX_BYTES)).hexdigest() == entry["sha256"]
+    except OSError:
+        return False
+
+
+def _text_problems(rel: str, label: str, root: Path, allowed: Path, signers, cache: dict, covered_by=None) -> list[str]:
+    """Signature problems of an approved slot text. `covered_by` = (primary decision, slot entry) lets a verified version 3 record
+    authorize the text through its slot line (see _waiver_covers_text); otherwise the text needs its own detached signature."""
     key = ("txt", rel)
     if key not in cache:
-        why = verify_sshsig_bytes(root, rel, allowed, signers)[1]
-        cache[key] = [f"{label} text: {why}"] if why else []
+        if covered_by is not None and _waiver_covers_text(covered_by[0], label, covered_by[1], root, allowed, signers, cache):
+            cache[key] = []
+        else:
+            why = verify_sshsig_bytes(root, rel, allowed, signers)[1]
+            cache[key] = [f"{label} text: {why}"] if why else []
     return cache[key]
 
 
@@ -626,7 +728,7 @@ def signature_problems(decisions: list[dict], root: Path = ROOT, allowed_signers
         return [f"signer list: {m}" for m in anchor]            # reported once, not once per record
     cache: dict = {}
     out: list[str] = []
-    texts: dict[str, str] = {}
+    texts: dict[str, tuple] = {}
     for d in decisions:
         if d.get("status") != "DECIDED":
             continue
@@ -634,9 +736,9 @@ def signature_problems(decisions: list[dict], root: Path = ROOT, allowed_signers
             out += _record_problems(d, root, allowed_signers, signers, cache)
         for slot, v in (d.get("slot_texts") or {}).items():
             if isinstance(v, dict) and isinstance(v.get("file"), str):
-                texts.setdefault(v["file"], slot)
-    for rel, slot in sorted(texts.items()):
-        out += _text_problems(rel, slot, root, allowed_signers, signers, cache)
+                texts.setdefault(v["file"], (slot, d, v))
+    for rel, (slot, owner, entry) in sorted(texts.items()):
+        out += _text_problems(rel, slot, root, allowed_signers, signers, cache, covered_by=(owner, entry))
     return list(dict.fromkeys(out))
 
 
@@ -732,7 +834,7 @@ def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: 
         if any(ord(c) < 32 and c not in "\n\t" for c in text) or "\r" in text:
             errors.append(f"{slot}: approved text file {rel} holds control characters (LF line ends only)")
             continue
-        verify += [f"{slot}: {m}" for m in _text_problems(rel, slot, root, allowed_signers, signers, cache)]
+        verify += [f"{slot}: {m}" for m in _text_problems(rel, slot, root, allowed_signers, signers, cache, covered_by=(by_id[ids[0]], entry))]
         if verify:
             slots[slot] = {"state": "unverified-draft", "tag": TAGS["unverified-draft"], "decisions": ids, "pending": [],
                            "text": DRAFT_PREFIX + text, "text_sha256": want}

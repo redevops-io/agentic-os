@@ -43,6 +43,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import approval  # noqa: E402
+import waiver_approval as waiver  # noqa: E402
 import signing_package as sp  # noqa: E402
 import verify_signed as vs  # noqa: E402
 
@@ -123,6 +124,8 @@ def s0(ctx) -> Res:
     if not expect or not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", expect):
         r.add("FAIL", "no --expect-signer-fingerprint SHA256:... given: without the owner's own record of the legal-decision key the orchestrator cannot tell the owner's signature from one made by a key that the release commit itself lists")
         return r
+    if (ROOT / waiver.DOC_REL).is_file():
+        return _s0_chain(ctx, r, expect)
     parent = git("rev-parse", "HEAD^")
     z = sh(["git", "diff", "--name-status", "-z", "--no-renames", parent, "HEAD"], check=True).stdout.split("\0")
     pairs = [(z[k], z[k + 1]) for k in range(0, len(z) - 1, 2)]
@@ -172,6 +175,127 @@ def s0(ctx) -> Res:
     return r
 
 
+WAIVER_DELTA_REQUIRED = {waiver.DOC_REL, waiver.DOC_REL + ".sig", approval.GATE}
+WAIVER_ENTRY_KEYS = {"status", "chosen_option", "decision_reference", "decision_sha256", "decided_by", "decided_on", "counsel_reference", "slot_texts"}
+
+
+def _delta(a: str, b: str, paths=None):
+    z = sh(["git", "diff", "--name-status", "-z", "--no-renames", a, b] + (["--", *paths] if paths else []), check=True).stdout.split("\0")
+    return [(z[k], z[k + 1]) for k in range(0, len(z) - 1, 2)]
+
+
+def _export(commit: str, paths, dest: Path):
+    """The listed paths of `commit` extracted into `dest` (git archive; read-only on the repository)."""
+    p = subprocess.run(f"git archive {commit} {' '.join(paths)} | tar -x -C {dest}", shell=True, cwd=ROOT, env=ENV, capture_output=True)
+    if p.returncode:
+        raise RuntimeError(f"cannot export {commit[:12]}: {p.stderr.decode()[:200]}")
+
+
+def _s0_chain(ctx, r: Res, expect: str) -> Res:
+    """HEAD = R2, the commit that records the owner's decision WITHOUT counsel. The chain is F -> R (first approval, F + exactly four paths) ->
+    ... prep commits ... -> F2 -> R2 (R2 = F2 + exactly the three waiver paths). Both approvals are checked against the commit that recorded them;
+    nothing is weakened for the first one."""
+    gm = approval.gate_mod()
+    head = git("rev-parse", "HEAD")
+    f2 = git("rev-parse", "HEAD^")
+    pairs = _delta(f2, head)
+    delta = {p for _, p in pairs}
+    ok = WAIVER_DELTA_REQUIRED <= delta <= WAIVER_DELTA_REQUIRED | {approval.ALLOWED} and len(pairs) == len(delta) and {s for s, _ in pairs} <= {"A", "M"}
+    ok = ok and {p for s, p in pairs if s == "A"} == {waiver.DOC_REL, waiver.DOC_REL + ".sig"}
+    r.add("PASS" if ok else "FAIL", f"R2 differs from F2=HEAD^ in exactly the waiver approval paths ({sorted(pairs)})")
+    # ---- the first approval: its own commit R
+    rl = sh(["git", "log", "--diff-filter=A", "--format=%H", "-n", "1", "HEAD", "--", approval.DOC_REL], check=True).stdout.strip()
+    if not rl:
+        r.add("FAIL", f"no commit in the history of HEAD added {approval.DOC_REL}")
+        return r
+    anc = sh(["git", "merge-base", "--is-ancestor", rl, f2]).returncode == 0
+    same = not _delta(rl, head, [approval.DOC_REL, approval.DOC_REL + ".sig"])
+    r.add("PASS" if anc and same else "FAIL", f"the first approval was recorded by {rl[:12]}, which is an ancestor of F2 and its document and signature are unchanged in HEAD" if anc and same else
+          f"first approval {rl[:12]}: ancestor of F2 {anc}, document and signature unchanged {same}")
+    if not (anc and same):
+        return r
+    rp = git("rev-parse", rl + "^")
+    pairs1 = _delta(rp, rl)
+    ok1 = ({p for _, p in pairs1} == ALLOWED_RELEASE_DELTA and len(pairs1) == len(ALLOWED_RELEASE_DELTA)
+           and {p for s, p in pairs1 if s == "A"} == {approval.DOC_REL, approval.DOC_REL + ".sig"} and {s for s, _ in pairs1} <= {"A", "M"})
+    r.add("PASS" if ok1 else "FAIL", f"the first release commit R differs from its parent F in exactly the four approval paths ({sorted(pairs1)})")
+    with tempfile.TemporaryDirectory(prefix="s0-r-") as td:
+        tr = Path(td)
+        _export(rl, ["packaging/distribution-gate.json", "packaging/legal-allowed-signers", "packaging/check-distribution-gate.py", "docs/legal/approved"], tr)
+        shutil.copyfile(ROOT / "packaging/check-distribution-gate.py", tr / "packaging/check-distribution-gate.py")      # the CURRENT verifier judges R's records
+        g_old, g_new = json.loads(approval.show(rp, approval.GATE).decode()), json.loads((tr / approval.GATE).read_text(encoding="utf-8"))
+        bundled = set(approval.parse_header((tr / approval.DOC_REL).read_text(encoding="utf-8"))["decisions"])
+        keys = {"status", "chosen_option", "decision_reference", "decision_sha256", "decided_by", "decided_on"}
+        old_by, new_by = {d["id"]: d for d in g_old["decisions"]}, {d["id"]: d for d in g_new["decisions"]}
+        bad = [] if [d["id"] for d in g_old["decisions"]] == [d["id"] for d in g_new["decisions"]] else ["decision list changed"]
+        for i, a in old_by.items():
+            b = new_by.get(i)
+            if b is None:
+                continue
+            if (i in bundled and {k: v for k, v in a.items() if k not in keys} != {k: v for k, v in b.items() if k not in keys}) or (i not in bundled and a != b):
+                bad.append(i)
+        top = lambda g: {k: v for k, v in g.items() if k not in ("decisions", "legal_signer_fingerprints")}
+        if top(g_old) != top(g_new):
+            bad.append("top-level fields")
+        r.add("PASS" if not bad else "FAIL", "at R the gate file changed only in the bundled decisions' status fields and the signer list" if not bad else f"gate file at R: unexpected changes {bad}")
+        fps, probs = gm.allowed_signer_fingerprints(tr / approval.ALLOWED)
+        s1_ok = not probs and fps == [expect] and list(g_new.get("legal_signer_fingerprints", [])) == [expect]
+        _, why = gm.verify_sshsig_bytes(tr, approval.DOC_REL, tr / approval.ALLOWED, [expect])
+        r.add("PASS" if s1_ok and not why else "FAIL", f"at R both signer lists name exactly the key you named and the first signature verifies ({expect})" if s1_ok and not why else f"first approval signature: {why or 'signer lists wrong'}")
+        errs = approval.verify(tr / approval.DOC_REL, rp)
+        r.add("PASS" if not errs else "FAIL", "the first approval document is byte-identical to the render for F" if not errs else f"first approval document: {errs}")
+        chk = approval.check(tr)
+        r.add("PASS" if not chk else "FAIL", "the gate's own verification accepts the first approval at R" if not chk else f"gate at R: {chk[:3]}")
+        msg1 = git("log", "-1", "--format=%B", rl)
+        r.add("PASS" if f"Signer-key-fingerprint: {expect}" in msg1.splitlines() else "FAIL", "the first release commit message records the same key fingerprint")
+        # ---- what the prep commits between R and F2 may change in the gate file: only the option lists of the counsel-named decisions
+        g_f2 = json.loads(approval.show(f2, approval.GATE).decode())
+        f2_by = {d["id"]: d for d in g_f2["decisions"]}
+        bad2 = [] if [d["id"] for d in g_new["decisions"]] == [d["id"] for d in g_f2["decisions"]] else ["decision list changed"]
+        frozen = set(gm.COUNSEL_NAMED)
+        for i, a in new_by.items():
+            b = f2_by.get(i)
+            if b is None:
+                continue
+            if {k: v for k, v in a.items() if k != "options"} != {k: v for k, v in b.items() if k != "options"}:
+                bad2.append(i)
+            elif a["options"] != b["options"] and (i not in frozen or a["options"] != b["options"][:len(a["options"])]):
+                bad2.append(f"{i} options")
+        if top(g_new) != top(g_f2) or g_new.get("legal_signer_fingerprints") != g_f2.get("legal_signer_fingerprints"):
+            bad2.append("top-level fields or signer list")
+        r.add("PASS" if not bad2 else "FAIL", "between R and F2 the gate file changed only by appended options of counsel-named decisions" if not bad2 else f"gate file between R and F2: unexpected changes {bad2}")
+    # ---- the waiver approval: its own commit R2 = HEAD
+    g_f2, g_head = json.loads(approval.show(f2, approval.GATE).decode()), gate_json()
+    wdoc = ROOT / waiver.DOC_REL
+    hdr = waiver.parse_header(wdoc.read_text(encoding="utf-8"))
+    decided = set(hdr["decisions"])
+    f2_by, hd_by = {d["id"]: d for d in g_f2["decisions"]}, {d["id"]: d for d in g_head["decisions"]}
+    wkeys = WAIVER_ENTRY_KEYS
+    bad3 = [] if [d["id"] for d in g_f2["decisions"]] == [d["id"] for d in g_head["decisions"]] else ["decision list changed"]
+    for i, a in f2_by.items():
+        b = hd_by.get(i)
+        if b is None:
+            continue
+        if (i in decided and {k: v for k, v in a.items() if k not in wkeys} != {k: v for k, v in b.items() if k not in wkeys}) or (i not in decided and a != b):
+            bad3.append(i)
+    if top(g_f2) != top(g_head):
+        bad3.append("top-level fields")
+    r.add("PASS" if not bad3 else "FAIL", "at R2 the gate file changed only in the waiver decisions' status, reference, counsel_reference and slot_texts fields" if not bad3 else f"gate file at R2: unexpected changes {bad3}")
+    fps, probs = gm.allowed_signer_fingerprints(ROOT / approval.ALLOWED)
+    fp_json = list(g_head.get("legal_signer_fingerprints", []))
+    s2_ok = not probs and fps == [expect] and fp_json == [expect]
+    _, why = gm.verify_sshsig_bytes(ROOT, waiver.DOC_REL, ROOT / approval.ALLOWED, [expect])
+    r.add("PASS" if s2_ok and not why else "FAIL", f"both signer lists name exactly the key you named and the waiver signature verifies ({expect})" if s2_ok and not why else f"waiver signature: {why or 'signer lists wrong'}")
+    msg = git("log", "-1", "--format=%B")
+    r.add("PASS" if f"Signer-key-fingerprint: {expect}" in msg.splitlines() else "FAIL", "the waiver commit message records the same key fingerprint")
+    errs = waiver.verify(wdoc, f2)
+    r.add("PASS" if not errs else "FAIL", "the waiver document is byte-identical to the render for F2 and its decision set" if not errs else f"waiver document: {errs}")
+    chk = waiver.check()
+    r.add("PASS" if not chk else "FAIL", "the gate's own verification accepts the owner's signature for every decision and slot of the waiver" if not chk else f"gate: {chk[:3]}")
+    r.add("INFO", f"owner decisions WITHOUT counsel (no counsel reference exists, none was invented): {', '.join(sorted(decided))}")
+    return r
+
+
 def s1(ctx) -> Res:
     r = Res("S1")
     g = gate_json()
@@ -195,6 +319,9 @@ def s1(ctx) -> Res:
         r.add("FAIL" if conn["tag"] == "v0.1.0" else "PASS", f"D-LIC-2 (a) needs a new redevops-connectors tag with a licence file; pinned tag is {conn['tag']} (T1)")
     open_counsel = [d["id"] for d in g["decisions"] if d["decides"] != "owner" and d["blocks_distribution"] and d["status"] != "DECIDED"]
     r.add("PASS" if not open_counsel else "FAIL", "counsel decisions all DECIDED" if not open_counsel else f"counsel decisions still OPEN: {', '.join(open_counsel)}")
+    waived = sorted(d["id"] for d in g["decisions"] if str(d.get("counsel_reference") or "").startswith("owner-waiver:"))
+    if waived:
+        r.add("INFO", f"decided by the owner WITHOUT counsel (counsel_reference owner-waiver:<sha256 of the signed record>; no counsel approval exists): {', '.join(waived)}")
     return r
 
 

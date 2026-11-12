@@ -1,0 +1,1 @@
+If you modify this software and let other users interact with your modified version remotely through a computer network, the licence (section 13 of the GNU Affero General Public License) requires you to offer those users an opportunity to receive the Corresponding Source of your version. The source of this version is at https://github.com/redevops-io/agentic-os.

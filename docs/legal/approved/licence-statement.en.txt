@@ -1,0 +1,5 @@
+The ReDevOps core platform (the agentic-os control plane, sidecar, launcher, Projects UI and the Agentic Apps desktop distribution that contains them) is source-available (family licence: AGPL-3.0-or-later with the Commons Clause).
+
+SPDX-License-Identifier: LicenseRef-AGPL-3.0-or-later-with-Commons-Clause
+
+Third-party components carry their own licences, listed in the Licenses folder of this installation.

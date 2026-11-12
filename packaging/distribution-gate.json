@@ -30,6 +30,10 @@
     {
      "key": "c",
      "text": "Change the licence the packages carry (a different family licence or plain AGPL-3.0-or-later)."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: keep the short licence statement and the copyright line as written (LICENSING.md section 1, LICENSE.md); no counsel wording."
     }
    ],
    "recommended_default": {
@@ -124,6 +128,10 @@
     {
      "key": "d",
      "text": "No distribution until counsel has opined."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: keep AGPL-3.0-or-later with the Commons Clause for the core and the sibling packages as built (knowledge-frontier stays out of the frozen sidecar); the owner accepts the Commons Clause term in one distribution beside plain-AGPL, permissive and other-licence code on the owner's own responsibility, without a counsel opinion."
     }
    ],
    "recommended_default": {
@@ -167,6 +175,10 @@
     {
      "key": "c",
      "text": "No distribution until counsel has worded (a)."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: ship the MPL-2.0 text and a source-location statement worded by the owner (certifi: PyPI sdist and tag; the crates: crates.io packages); no counsel wording."
     }
    ],
    "recommended_default": {
@@ -209,6 +221,10 @@
     {
      "key": "c",
      "text": "Counsel opinion first, then (a) or (b)."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: add an About/Licence item to the UI that links the source location, as a precaution, without concluding whether section 13 applies."
     }
    ],
    "recommended_default": {
@@ -251,6 +267,10 @@
     {
      "key": "c",
      "text": "No distribution until (b)."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: accept the collected texts; linkage and exact versions are recorded as UNVERIFIED."
     }
    ],
    "recommended_default": {
@@ -375,6 +395,10 @@
     {
      "key": "c",
      "text": "No Windows distribution."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: ship the NSIS, WiX and WebView2 notices as collected in the Windows notices; no counsel reading."
     }
    ],
    "recommended_default": {
@@ -416,6 +440,10 @@
     {
      "key": "c",
      "text": "Add an About/Licence entry (copyright, no-warranty, conveyance, how to view the licence) to the launcher or Projects UI."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: add an About/Licence entry (copyright, no-warranty, conveyance, how to view the licence) to the launcher or Projects UI and keep the Licenses/ folder."
     }
    ],
    "recommended_default": {
@@ -499,6 +527,10 @@
     {
      "key": "d",
      "text": "Counsel chooses."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: source availability by AGPL section 6(d): the Corresponding Source is offered from the same place as the object code (the repository, release commit and tags named in the source-offer text; the release commit is public)."
     }
    ],
    "recommended_default": {
@@ -652,6 +684,10 @@
     {
      "key": "b",
      "text": "Do not distribute the QA bundle."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: do not distribute the QA bundle."
     }
    ],
    "recommended_default": {
@@ -728,6 +764,10 @@
     {
      "key": "c",
      "text": "Replace the dependency (not possible without leaving Tauri on macOS)."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: accept the upstream statement and the crates' declared licences; the Apple SDK question is accepted as the owner's risk."
     }
    ],
    "recommended_default": {
@@ -765,6 +805,10 @@
     {
      "key": "b",
      "text": "No distribution until (a)."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: the owner words the source offer (the About slot LEGAL.SOURCE_OFFER, signed with this decision); no counsel wording."
     }
    ],
    "recommended_default": {
@@ -848,6 +892,10 @@
     {
      "key": "d",
      "text": "Distribute macOS only until counsel has answered."
+    },
+    {
+     "key": "o",
+     "text": "Owner decision without counsel: distribute the Windows sidecar with the Microsoft runtime DLLs it contains and the notices as collected; no counsel reading."
     }
    ],
    "recommended_default": {

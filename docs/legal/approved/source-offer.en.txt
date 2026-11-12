@@ -1,0 +1,7 @@
+The source code of this software is available at no charge from https://github.com/redevops-io/agentic-os. The release commit and tag this build was made from are recorded in the About record of this application.
+
+The sibling packages that are part of this software are at https://github.com/redevops-io/redevops-connectors (tag v0.1.1) and https://github.com/redevops-io/knowledge-frontier (tag v0.2.1).
+
+The third-party components shipped in this build and the place where the source of each is available are listed in SOURCE-OFFER.md of this build.
+
+This offer is valid for as long as this software is offered for download from the same place.

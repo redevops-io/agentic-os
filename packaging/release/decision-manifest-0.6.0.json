@@ -321,5 +321,84 @@
     "authorized_engineering": "preparation of the missing signing packages and orchestrator stages S5 to S7. Signing, publishing, pushing and tagging are NOT authorized until the approvals and verification steps are complete.",
     "licensing_model": "No change to the licensing model is authorized.",
     "engineering_without_counsel": "2026-11-11 later direction: complete the remaining engineering without an external-counsel dependency. The twelve counsel-designated decisions are NOT marked decided by this work: a documented engineering compatibility assessment is produced (docs/legal/COMPATIBILITY_ASSESSMENT.md) and the gate stays until an authorized alternative to a legal opinion is explicitly established."
+  },
+  "counsel_waiver": {
+    "recorded": "Owner statement of 2026-11-12: there is no counsel and the owner decides the decisions that the gate names as counsel decisions; the owner confirmed the proposed wording the same day. This is an explicit waiver, not a counsel approval.",
+    "why": "You have stated that no counsel exists and that these decisions are yours; the gate would otherwise keep them OPEN until a counsel reference exists.",
+    "decisions": {
+      "D-LIC-1": {
+        "option": "o",
+        "owner_statement": "The short licence statement and the copyright line stay as written: 'Copyright (c) 2025-2026 RedevOps.' and the family-licence statement of LICENSING.md section 1. The owner states these as the intended wording of the product; no counsel has worded or reviewed them."
+      },
+      "D-LIC-3": {
+        "option": "o",
+        "owner_statement": "The core and the sibling packages stay under AGPL-3.0-or-later with the Commons Clause, as decided on 2026-11-10 and 2026-11-11 (no relicensing). knowledge-frontier stays out of the frozen sidecar. The owner decides that the Commons Clause term may stand in one distribution beside plain-AGPL, permissive and other-licence code, on the owner's own responsibility. No counsel opinion exists on whether that is sound (Q4 to Q6 stay unanswered)."
+      },
+      "D-LIC-4": {
+        "option": "o",
+        "owner_statement": "The MPL-2.0 text ships with the product, and the source location of each MPL-2.0 component is stated by the owner in the source offer and the notices: certifi through its PyPI sdist and tag, the five statically linked crates through crates.io. The owner words this; no counsel has."
+      },
+      "D-LIC-5": {
+        "option": "o",
+        "owner_statement": "The product shows an About/Licence item that links the source location (slot LEGAL.SECTION13_NOTICE). It is added as a precaution; the owner does not conclude whether AGPL section 13 applies to a loopback-served UI."
+      },
+      "D-LIC-6": {
+        "option": "o",
+        "owner_statement": "The collected notice texts for CPython, OpenSSL, PyInstaller and statically linked libraries are accepted as they are. What is linked and the exact versions remain UNVERIFIED; the owner accepts that."
+      },
+      "D-LIC-9": {
+        "option": "o",
+        "owner_statement": "The NSIS, WiX and WebView2 notices ship as collected in the Windows notices. The owner has not had them read by counsel and accepts that."
+      },
+      "D-LIC-10": {
+        "option": "o",
+        "owner_statement": "The launcher or Projects UI shows an About/Licence entry (copyright line, no-warranty text, conveyance, how to view the licence), in addition to the Licenses folder. No acceptance page is added."
+      },
+      "D-LIC-12": {
+        "option": "o",
+        "owner_statement": "Source availability follows AGPL section 6(d): the Corresponding Source is offered from the same place as the object code, with the repository, release commit and tags named in the source-offer text (slot LEGAL.SOURCE_OFFER). The binaries must therefore be offered from a place from which the source is equally accessible; the owner is responsible for that when publishing."
+      },
+      "D-LIC-16": {
+        "option": "o",
+        "owner_statement": "The QA bundle (redevops-qa) is not distributed with this release."
+      },
+      "D-LIC-18": {
+        "option": "o",
+        "owner_statement": "The upstream statement and the objc2 crates' declared licences are accepted. Whether the crates derive from Apple SDK material in a way the Xcode and Apple SDKs Agreement restricts stays unanswered; the owner accepts that risk for macOS distribution."
+      },
+      "pins-03": {
+        "option": "o",
+        "owner_statement": "The owner words the source offer: slot LEGAL.SOURCE_OFFER, text file docs/legal/approved/source-offer.en.txt, approved by this signature. The wording of the offer is the owner's, not counsel's."
+      },
+      "pins-08": {
+        "option": "o",
+        "owner_statement": "The Windows sidecar ships with the Microsoft runtime DLLs it contains (VCRUNTIME140*, ucrtbase, api-ms-win-*) and the notices as collected. Which of the two Microsoft licence regimes governs them is not decided by anyone; the owner accepts that risk for Windows distribution."
+      }
+    },
+    "slots": {
+      "LEGAL.COPYRIGHT_LINE": {
+        "file": "docs/legal/approved/copyright-line.en.txt"
+      },
+      "LEGAL.LICENCE_STATEMENT": {
+        "file": "docs/legal/approved/licence-statement.en.txt"
+      },
+      "LEGAL.SOURCE_OFFER": {
+        "file": "docs/legal/approved/source-offer.en.txt"
+      },
+      "LEGAL.NO_WARRANTY": {
+        "file": "docs/legal/approved/no-warranty.en.txt"
+      },
+      "LEGAL.SECTION13_NOTICE": {
+        "file": "docs/legal/approved/section13-notice.en.txt"
+      }
+    },
+    "accepted_risks": [
+      "No lawyer has reviewed the licence structure of this release (AGPL-3.0-or-later with the Commons Clause on the core, AGPL-3.0-only applications, third-party licences). A court or a licensor could read it differently from the owner.",
+      "The Commons Clause is an added condition on an AGPL licence; whether AGPL section 7 allows it to stand, and what 'Software' covers, are unanswered (D-LIC-3, N1, N2). The owner accepts the risk of enforcement or non-enforcement.",
+      "The source offer (section 3) and the notice sets for MPL-2.0, NSIS, WiX, WebView2, CPython, OpenSSL, PyInstaller and the Microsoft runtime DLLs are the owner's, and may be insufficient.",
+      "Distribution of the macOS build depends on an accepted risk about Apple SDK material in the objc2 crates (D-LIC-18); distribution of the Windows build on the Microsoft runtime DLL terms (pins-08).",
+      "The owner is responsible for offering the binaries from a place from which the source is equally accessible (D-LIC-12, AGPL section 6(d)).",
+      "Anyone who relies on this release may assert claims that counsel would have flagged; the gate's earlier refusal existed to prevent exactly that, and this decision removes it."
+    ]
   }
 }

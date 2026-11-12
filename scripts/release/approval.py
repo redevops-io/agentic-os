@@ -362,6 +362,8 @@ def parse_header(text: str, root: Path = ROOT) -> dict:
     hdr, probs = gate_mod(root).parse_bundle_record(text.encode("utf-8"))
     if probs:
         raise SystemExit("not a valid consolidated approval header: " + "; ".join(probs))
+    if hdr.get("version") != gate_mod(root).BUNDLE_VERSION:
+        raise SystemExit("not a version 2 (owner-only decisions) approval header")
     return hdr
 
 
