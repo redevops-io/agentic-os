@@ -17,7 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import Signer, pristine_gate_text, signer  # noqa: F401  (signer is a pytest fixture)
+import tempfile
+
+from .about_fixture import Signer, copy_shipped, pristine_gate_text, signer  # noqa: F401  (signer is a pytest fixture)
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_PY = ROOT / "packaging" / "check-distribution-gate.py"
@@ -37,7 +39,22 @@ def _env(**extra):
     return env
 
 
+_PRISTINE: list = []
+
+
+def _pristine_gate_file() -> Path:
+    """The gate as it shipped before the owner signed anything. The committed file carries the owner's signed decisions once the release is
+    authorized, so a test about 'a distribution build is refused while a blocker is open' must not read it."""
+    if not _PRISTINE:
+        d = Path(tempfile.mkdtemp(prefix="pristine-gate-"))
+        (d / "distribution-gate.json").write_text(pristine_gate_text(), encoding="utf-8")
+        _PRISTINE.append(d / "distribution-gate.json")
+    return _PRISTINE[0]
+
+
 def _run(*args, gate_file=None, allowed=None, **env):
+    if gate_file is None and "--gate" not in args:
+        gate_file = _pristine_gate_file()
     cmd = [sys.executable, "-I", str(GATE_PY), *args]
     if allowed:
         cmd += ["--allowed-signers", str(allowed)]
@@ -260,7 +277,10 @@ def test_build_all_runs_the_gate_before_any_build_step():
                     reason="every blocker has been decided by the owner")
 def test_candidate_script_refuses_a_distribution_build_before_touching_anything(tmp_path):
     out = tmp_path / "candidate-out"
-    r = subprocess.run(["bash", str(ROOT / "packaging" / "candidate" / "build-local-macos-candidate.sh"), str(out)],
+    root = tmp_path / "repo"                  # a synthetic root holding the script, the gate tool and the PRE-signature gate (the real file may carry signed decisions)
+    for rel in ("packaging/candidate/build-local-macos-candidate.sh", "packaging/check-distribution-gate.py", "packaging/distribution-gate.json", "packaging/legal-allowed-signers"):
+        copy_shipped(rel, root / rel)
+    r = subprocess.run(["bash", str(root / "packaging" / "candidate" / "build-local-macos-candidate.sh"), str(out)],
                        capture_output=True, text=True, env=_env(REDEVOPS_DISTRIBUTION_BUILD="1"), timeout=60, cwd=tmp_path)
     assert r.returncode == 3, (r.stdout, r.stderr)
     assert "DISTRIBUTION BUILD REFUSED" in r.stderr

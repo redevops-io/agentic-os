@@ -310,14 +310,18 @@ def test_the_committed_gate_refuses_a_distribution_about_record_today(tmp_path, 
     monkeypatch.delenv("REDEVOPS_DISTRIBUTION_BUILD", raising=False)
     notices = make_notices(tmp_path)
     out = tmp_path / "real-out"
-    assert gen_about.main(["--notices-dir", str(notices), "--out", str(out), "--platform", "macos-arm64", "--distribution"]) == 3
+    root = make_root(tmp_path)                # the shipped files in their PRE-signature form: the committed gate may already carry the owner's signed decisions
+    assert gen_about.main(["--notices-dir", str(notices), "--out", str(out), "--platform", "macos-arm64", "--distribution", "--root", str(root)]) == 3
     assert not (out / "about.json").exists()
-    assert gen_about.main(["--notices-dir", str(notices), "--out", str(out), "--platform", "macos-arm64"]) == 0
+    assert gen_about.main(["--notices-dir", str(notices), "--out", str(out), "--platform", "macos-arm64", "--root", str(root)]) == 0
     assert _all_placeholders(json.loads((out / "about.json").read_bytes()))
 
 
 def test_gate_cli_about_slots_flag(tmp_path):
-    base = [sys.executable, "-I", str(ROOT / "packaging" / "check-distribution-gate.py"), "--platform", "macos", "--about-slots"]
+    root = make_root(tmp_path)                # pre-signature gate and signer list (see make_root)
+    base = [sys.executable, "-I", str(root / "packaging" / "check-distribution-gate.py"), "--platform", "macos", "--about-slots",
+            "--gate", str(root / "packaging" / "distribution-gate.json"), "--root", str(root),
+            "--allowed-signers", str(root / "packaging" / "legal-allowed-signers")]
     env_ = {"PATH": "/usr/bin:/bin"}
     r = subprocess.run(base, capture_output=True, text=True, env=env_)
     assert r.returncode == 0 and "5 of 5 are placeholders" in r.stdout
