@@ -62,3 +62,11 @@ def test_the_windows_vm_scripts_carry_no_credential_publish_or_signing_step():
     assert "qbuild" in task and "-RunLevel Highest" in task
     b = (ND / "windows" / "w_build.ps1").read_text()
     assert "source identity mismatch" in b and "bundle hash mismatch" in b and b.count("insteadOf") == 2
+
+
+def test_the_windows_driver_deletes_the_resource_group_only_after_every_build_was_downloaded():
+    d = (ND / "windows_run.sh").read_text()
+    i_dl, i_keep, i_exit = d.index("download-batch"), d.index("DOWNLOAD INCOMPLETE"), d.index("exit 5")
+    assert i_dl < i_keep < i_exit and "KEEP=1" in d[i_keep - 80:i_keep + 20] and 'mkdir -p "$OUT/artifacts/vmout"' in d[:i_dl]
+    for label in ("f1", "f2", "fx1", "fx2", "fy1", "fy2"):
+        assert label in d[i_dl:i_keep]

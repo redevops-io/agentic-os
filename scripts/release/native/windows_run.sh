@@ -102,7 +102,13 @@ build f1 'C:\r1\src'; build f2 'C:\r2\src'
 build fx1 'C:\rx\src'; build fx2 'C:\rx\src'
 build fy1 'C:\ry\src' "$SDE"; build fy2 'C:\ry\src' "$SDE"
 log "fetching the artifacts"
+mkdir -p "$OUT/artifacts/vmout"
 az storage blob download-batch --account-name "$SA" --account-key "$KEY" -s qual --pattern 'out/*' -d "$OUT/artifacts/vmout" -o none --no-progress 2>>"$OUT/evidence/driver.log" || true
+# the resource group (and with it every artifact) is deleted at the end: it is deleted ONLY if every build's installers and loose executables were downloaded
+missing=""; for l in f1 f2 fx1 fx2 fy1 fy2; do
+  ls "$OUT"/artifacts/vmout/out/$l/*.msi >/dev/null 2>&1 && ls "$OUT"/artifacts/vmout/out/$l/*-setup.exe >/dev/null 2>&1 && [ -s "$OUT/artifacts/vmout/out/$l/redevops-sidecar.exe" ] || missing="$missing $l"
+done
+if [ -n "$missing" ]; then KEEP=1; log "DOWNLOAD INCOMPLETE for:$missing. The resource group $RG is KEPT so that nothing is lost; fetch the blobs by hand, then delete the group"; exit 5; fi
 ( cd "$OUT/artifacts" && find . -type f ! -name SHA256SUMS | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS )
 az group show -n "$RG" --query "{id:id,tags:tags}" -o json > "$OUT/evidence/rg.json"; az resource list -g "$RG" --query "[].{n:name,t:type}" -o tsv > "$OUT/evidence/rg-resources.txt"
 unset KEY SAS SASHEX
