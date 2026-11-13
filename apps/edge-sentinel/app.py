@@ -115,7 +115,7 @@ def _strip_approval(obj):
     return obj
 
 
-app = FastAPI(title="edge-sentinel (Meridian Wealth Management · core: CrowdSec)")
+app = FastAPI(title="edge-sentinel (core: CrowdSec)")
 
 
 @app.exception_handler(fixture_mode.DemoRefused)
@@ -544,6 +544,19 @@ def _decisions_table(data: dict) -> str:
     )
 
 
+def _tenant_suffix() -> str:
+    """" — <name>" when the operator set SENTINEL_TENANT, else nothing (no fictional default)."""
+    return f" — {TENANT}" if TENANT else ""
+
+
+def _tenant_name_html() -> str:
+    return f"<b>{_esc(TENANT)}</b> · " if TENANT else ""
+
+
+def _tenant_row() -> str:
+    return f'<div class="appbar__tenant"><b>{_esc(TENANT)}</b></div>' if TENANT else ""
+
+
 # ─── generic server-rendered panel chrome (shared by the NetBird / Portabase plane panels) ───
 # Reusable UI utilities — siblings of `_esc`/`_sev_pill`. The plane modules (netbird.py /
 # portabase.py) call these via a deferred `from . import app`, so a full page renders with the
@@ -551,12 +564,12 @@ def _decisions_table(data: dict) -> str:
 def _panel_shell(title: str, subtitle: str, body: str) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_esc(title)} — {_esc(TENANT)}</title>{FONT_LINK}
+<title>{_esc(title)}{_esc(_tenant_suffix())}</title>{FONT_LINK}
 <style>{BASE_CSS}{PAGE_CSS}</style></head>
 <body class="page"><div class="shell">
 <header class="appbar"><div class="appbar__row"><h1>{_esc(title)}</h1><span class="spacer"></span>
 <a class="btn" href="/">&#8592; SOC dashboard</a></div>
-<div class="appbar__tenant"><b>{_esc(TENANT)}</b></div>
+{_tenant_row()}
 <div class="appbar__sub">{_esc(subtitle)}</div></header>
 {body}
 <footer class="footer">edge-sentinel · redevops.io Agentic Business OS</footer>
@@ -627,7 +640,7 @@ def render(data: dict) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Edge Sentinel — {_esc(TENANT)}</title>
+<title>Edge Sentinel{_esc(_tenant_suffix())}</title>
 {FONT_LINK}
 <style>{BASE_CSS}{PAGE_CSS}</style>
 </head>
@@ -641,11 +654,11 @@ def render(data: dict) -> str:
       <span class="spacer"></span>
       {open_btn}
     </div>
-    <div class="appbar__tenant"><b>{_esc(TENANT)}</b> · core: CrowdSec (open-source detection &amp; response, CLI-managed)</div>
+    <div class="appbar__tenant">{_tenant_name_html()}core: CrowdSec (open-source detection &amp; response, CLI-managed)</div>
     <div class="appbar__sub">{_esc(SUBTITLE)}</div>
   </header>
   {body}
-  <footer class="footer">edge-sentinel · CrowdSec readings for the {_esc(TENANT)} demo tenant ·
+  <footer class="footer">edge-sentinel · CrowdSec readings{_esc(" for " + TENANT if TENANT else "")} ·
     <a href="/api/activity">/api/activity</a> · agent + human, on a real CrowdSec core · redevops.io Agentic Business OS</footer>
 </div>
 </body>
@@ -1378,7 +1391,7 @@ def _t_vuln_db_permissions(_a: dict) -> dict:
 def _build_sentinel_console(console_cls, _crtool):
     """Build the chat console (also called by the tests with a recording stand-in, so the REAL tool text and primer are checked)."""
     return console_cls(
-        f"{TENANT} Edge Sentinel", _SENTINEL_PRIMER,
+        f"{TENANT} Edge Sentinel".strip(), _SENTINEL_PRIMER,
         tools=[
             _crtool("threat_summary", "what CrowdSec currently holds: active decisions (bans), alerts in the last 24h and the top scenarios, with the time of the read. It is a reading, not an assessment of the environment", _t_threat_summary),
             _crtool("list_bans", "list the active ban decisions CrowdSec holds: source IP, scenario, severity and when each expires (a decision is not proof that a bouncer enforces it)", _t_list_bans),

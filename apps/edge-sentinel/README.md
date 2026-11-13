@@ -19,7 +19,7 @@ detection & decision engine) with:
   API + alerts via `cscli ... -o json`, and
 - an **MD3 SOC dashboard** rendered from the data CrowdSec holds (no mock data on the CrowdSec panels; the network and backup panels show labelled SAMPLE DATA until their token is set),
 
-for the demo tenant **Meridian Wealth Management** (a wealth-management firm).
+for the organisation named in `SENTINEL_TENANT` (no name is shown when it is unset).
 
 ```
 CrowdSec (OSS core, LAPI :8086) ──GET /v1/decisions (X-Api-Key)──┐
@@ -127,7 +127,7 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 | `SENTINEL_STATE_DIR` | _(unset)_ | Directory for the durable approval state (atomic, private file). Unset keeps state in memory only; an unreadable file makes decisions and executions fail closed. |
 | `CROWDSEC_MACHINE_ID`, `CROWDSEC_MACHINE_PASSWORD` | _(unset)_ | Optional CrowdSec watcher (machine) login. When both are set, alerts are read from the LAPI (`GET /v1/alerts`) and bans are written to it (`POST /v1/alerts` carrying the decision, `DELETE /v1/decisions` to lift) with a cached JWT, so no docker access is needed and a real LAPI accepts the write. Unset keeps the `cscli` alert path and the bouncer-key write path. |
 | `SENTINEL_REQUIRE_AUTH` | _(unset)_ | Standalone profile. When truthy, every route except `/health` and `/readyz` needs the operator credential (HTTP Basic, 401 otherwise) and the app refuses to start without one. `/invoke` is not covered by this switch: the operator router authenticates it with `AGENTIC_OS_CONTROL_TOKEN` (503 when unset). Unset keeps the reference behaviour (reads open, execution authenticated). |
-| `SENTINEL_TENANT` | `Meridian Wealth Management` | The organisation name shown in the dashboard header, title and footer (80 characters at most). The default is the reference demo tenant. |
+| `SENTINEL_TENANT` | _(unset)_ | The organisation name shown in the dashboard header, title and footer (80 characters at most). Unset shows no name: there is no default company. |
 ### Alert triage and the model boundary
 
 `triage` is deterministic: it counts active decisions and alerts, breaks them down by severity and names
@@ -189,7 +189,7 @@ With a machine (watcher) login configured (`CROWDSEC_MACHINE_ID` and `CROWDSEC_M
   event, plus the time of the read) + active decisions + alert feed + top scenarios, all from CrowdSec. Cached 10s.
 - `GET /` → the MD3 SOC dashboard from the live data: a **status banner** first (a neutral "CrowdSec: N active decisions and M alerts, read at <time>" statement, or red when CrowdSec holds active decisions or is unreachable; it never claims all is well), **KPI tiles**, an
   **alert feed grouped by severity** with color pills, a **scenario bar meter**, and an
-  **attack-sources / active-decisions table**. Header shows "Meridian Wealth Management", a
+  **attack-sources / active-decisions table**. Header shows the `SENTINEL_TENANT` name when set, a
   "CrowdSec LAPI reachable" pill, a "read from the CrowdSec LAPI at <time>" badge, and an "Open CrowdSec metrics ↗" link.
 - `POST /agent/run` with `{"action": ...}`:
   - `"block_ip"` `{ip}` → the **approval-gated** sensitive action. Returns

@@ -114,7 +114,7 @@ Set these in `.env` (Compose) or the Deployment environment (Kubernetes). A name
 | `SENTINEL_BLOCK_ENABLED` | unset | `1` makes an approved execution real. |
 | `SENTINEL_BLOCK_ALLOW_NETWORKS`, `SENTINEL_BLOCK_ALLOW_WIDE_CIDR`, `SENTINEL_BLOCK_MAX_HOURS`, `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | unset, off, 168 | Ban guard. |
 | `SENTINEL_STATE_DIR` | `/data/state` | Durable case-decision state. |
-| `SENTINEL_TENANT` | `Meridian Wealth Management` | Organisation name in the dashboard. |
+| `SENTINEL_TENANT` | unset | Organisation name in the dashboard; unset shows no name. |
 | `SENTINEL_TRUST_PROXY` | off | Use the right-most `X-Forwarded-For` entry as the client address behind a proxy you control. |
 | `SENTINEL_RATE_PER_MIN`, `SENTINEL_RATE_BURST` | 20, 10 | Per-client rate limit on the POST routes. |
 | `EDGE_SENTINEL_DEMO` | unset | `1` serves synthetic fixture data and refuses every external effect. |
