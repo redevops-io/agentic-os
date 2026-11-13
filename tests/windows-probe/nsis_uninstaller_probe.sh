@@ -12,8 +12,11 @@ build_and_collect() { # label helper-file -> sets REQ_DIR, prints the log
   local label="$1" helper="$2" work="$SCRATCH/probe-$1"
   mkdir -p "$work/handoff"
   local out="$(cygpath -w "$work/probe-setup.exe")"
-  sed -e "s|@OUT@|$out|" -e "s|@BASH@|$BASH_EXE|" -e "s|@HELPER@|$(cygpath -w "$helper")|" \
-      "$WS/tests/windows-probe/probe.nsi.in" > "$work/probe.nsi"
+  # plain bash substitution: sed would interpret the backslashes of the Windows paths
+  local tpl; tpl="$(cat "$WS/tests/windows-probe/probe.nsi.in")"
+  tpl="${tpl//@OUT@/$out}"; tpl="${tpl//@BASH@/$BASH_EXE}"; tpl="${tpl//@HELPER@/$(cygpath -w "$helper")}"
+  printf '%s\n' "$tpl" > "$work/probe.nsi"
+  echo "probe script line with the sign command:"; grep -n uninstfinalize "$work/probe.nsi"
   echo "::group::makensis ($label)"
   # R0P_* are read by the helper through the inherited environment
   ( export R0P_HANDOFF_MODE=collect R0P_HANDOFF_DIR="$(cygpath -w "$work/handoff")"
@@ -33,7 +36,7 @@ if [ "$EVENT" = pull_request ] && git -C "$WS" cat-file -e "HEAD^1:$HELPER_REL" 
   if grep -q 'nst\[0-9A-Fa-f\]\*\.tmp' "$SCRATCH/base-helper/r0prime_win_signcommand.sh"; then
     echo "::notice::the base branch helper already handles nstXXXX.tmp; no before leg"
   else
-    build_and_collect before "$SCRATCH/base-helper/r0prime_win_signcommand.sh" || true
+    build_and_collect before "$SCRATCH/base-helper/r0prime_win_signcommand.sh"
     if [ -n "$(uninstaller_requests before)" ]; then echo "::warning::the base helper unexpectedly collected the uninstaller"
     else echo "BEFORE: the base helper recorded NO uninstaller request; that installer would ship its uninstaller unsigned"; fi
   fi
