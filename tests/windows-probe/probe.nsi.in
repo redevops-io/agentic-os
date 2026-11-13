@@ -1,0 +1,17 @@
+; Tiny NSIS installer that mirrors how tauri's NSIS template signs the generated uninstaller:
+; !uninstfinalize '<signCommand with %1>' (no "= 0": a failing command does not fail the build, which is how an unsigned uninstaller shipped).
+Unicode true
+OutFile "@OUT@"
+RequestExecutionLevel user
+InstallDir "$TEMP\aos-nsis-probe"
+Page instfiles
+UninstPage instfiles
+!uninstfinalize '"@BASH@" "@HELPER@" "%1"'
+Section
+  SetOutPath $INSTDIR
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+SectionEnd
+Section Uninstall
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir $INSTDIR
+SectionEnd

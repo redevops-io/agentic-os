@@ -2981,3 +2981,21 @@ def test_s3_02_sshsig_a_rewritten_scope_for_the_same_manifest_is_refused(ssh):
 def test_s3_02_the_template_sentence_is_true():
     t = (SIGN / "AUTHORIZATION-TEMPLATE.md").read_text()
     assert "one submission only" in t and "same input artifact" in t
+
+
+def test_handoff_helper_treats_the_nsis_uninstaller_temp_file_as_the_uninstaller(tmp_path):
+    """tauri-bundler's NSIS template calls the sign command with the generated uninstaller as nstXXXX.tmp; the helper used to die 'unexpected file type' there and makensis shipped the uninstaller unsigned."""
+    d = tmp_path / "round1"
+    d.mkdir()
+    bins = tmp_path / "bins"
+    bins.mkdir()
+    tmp = bins / "nst1A2B.tmp"
+    tmp.write_bytes(b"MZ unsigned uninstaller from makensis")
+    h = sha_file(tmp)
+    r = helper_run(tmp_path, "collect", tmp, d)
+    assert r.returncode == 0, r.stderr
+    assert [p.name for p in (d / "requests-inner").iterdir()] == [f"uninstaller-{h}.exe"]
+    assert "role=uninstaller" in (d / "signcommand.log").read_text()
+    other = bins / "nstzzzz.tmp"
+    other.write_bytes(b"x")
+    assert helper_run(tmp_path, "collect", other, d).returncode != 0, "only hex-named nst files are accepted"
