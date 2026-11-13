@@ -136,3 +136,14 @@ def tls_verify_or_ca(name: str, env=None):
 def tls_verify_note(name: str, env=None) -> str:
     """Say it out loud in whatever the user reads, the same way sample data is labelled."""
     return "" if tls_verify(name, env) else f" (TLS certificate NOT verified — {name}=off)"
+
+
+def auth_required_guard(env=None) -> None:
+    """SENTINEL_REQUIRE_AUTH=1 (the standalone profile) with no operator credential would serve a dashboard nobody can
+    open, or worse one that looks protected: refuse to start. Raises ExposureRefused, like exposure_guard."""
+    e = _env(env)
+    if _flag(e, "SENTINEL_REQUIRE_AUTH") and not operator_credential_configured(e):
+        raise ExposureRefused(
+            "SENTINEL_REQUIRE_AUTH=1 but no operator credential is configured: set SENTINEL_BASIC_AUTH_USER and "
+            "SENTINEL_BASIC_AUTH_PASS (or SENTINEL_BASIC_AUTH_PASS_FILE). To run without sign-in for local "
+            "development, unset SENTINEL_REQUIRE_AUTH on purpose.")

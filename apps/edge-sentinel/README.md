@@ -125,6 +125,9 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 | `SENTINEL_BLOCK_ALLOW_WIDE_CIDR` | _(off)_ | Allow ranges wider than /24 (IPv4) or /64 (IPv6). |
 | `SENTINEL_BLOCK_MAX_HOURS` | `168` | Cap for a ban duration. |
 | `SENTINEL_STATE_DIR` | _(unset)_ | Directory for the durable approval state (atomic, private file). Unset keeps state in memory only; an unreadable file makes decisions and executions fail closed. |
+| `CROWDSEC_MACHINE_ID`, `CROWDSEC_MACHINE_PASSWORD` | _(unset)_ | Optional CrowdSec watcher (machine) login. When both are set, alerts are read from the LAPI (`GET /v1/alerts`) and bans are written to it (`POST /v1/alerts` carrying the decision, `DELETE /v1/decisions` to lift) with a cached JWT, so no docker access is needed and a real LAPI accepts the write. Unset keeps the `cscli` alert path and the bouncer-key write path. |
+| `SENTINEL_REQUIRE_AUTH` | _(unset)_ | Standalone profile. When truthy, every route except `/health` and `/readyz` needs the operator credential (HTTP Basic, 401 otherwise) and the app refuses to start without one. `/invoke` is not covered by this switch: the operator router authenticates it with `AGENTIC_OS_CONTROL_TOKEN` (503 when unset). Unset keeps the reference behaviour (reads open, execution authenticated). |
+| `SENTINEL_TENANT` | `Meridian Wealth Management` | The organisation name shown in the dashboard header, title and footer (80 characters at most). The default is the reference demo tenant. |
 ### Alert triage and the model boundary
 
 `triage` is deterministic: it counts active decisions and alerts, breaks them down by severity and names
@@ -176,11 +179,12 @@ Anonymous visitors can preview a decision (`POST /api/cases/{id}/respond`): the 
 
 ### Deployment note
 
-The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher) login, which removes the need for docker access; that is a deployment-level option and is not implemented in this app, which still shells out to `cscli` for alerts. See `/health` for the state-store status.
+With a machine (watcher) login configured (`CROWDSEC_MACHINE_ID` and `CROWDSEC_MACHINE_PASSWORD`) the sentinel reads alerts from the CrowdSec LAPI and writes bans to it over the LAPI, with no docker access; without one it shells out to `cscli` for alerts and writes bans with the bouncer key as before. See `/health` for the state-store status and `/readyz` for readiness.
 
 ## Endpoints
 
 - `GET /health` → `{"status":"ok","core":"crowdsec","connected": <bool>}`
+- `GET /readyz` → `{"ready": <bool>, "checks": {...}}`, 200 when the instance can serve and record decisions, 503 otherwise (unusable `SENTINEL_STATE_DIR`; in the production profile no `AGENTIC_OS_AUTHORITY_DB`).
 - `GET /api/activity` → KPIs read from CrowdSec (active decisions, alerts 24h, unique source IPs, last
   event, plus the time of the read) + active decisions + alert feed + top scenarios, all from CrowdSec. Cached 10s.
 - `GET /` → the MD3 SOC dashboard from the live data: a **status banner** first (a neutral "CrowdSec: N active decisions and M alerts, read at <time>" statement, or red when CrowdSec holds active decisions or is unreachable; it never claims all is well), **KPI tiles**, an
@@ -203,7 +207,7 @@ The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher
 Edge Sentinel does not need unrestricted Docker access, and the example above does not mount the Docker socket.
 
 - **Decisions** are read over the CrowdSec LAPI with a bouncer key: no Docker access.
-- **Alerts**: in this tree the alert feed is read with `cscli alerts list` through `docker exec` into the CrowdSec container (`core.fetch_alerts`). Without Docker access that read fails and the dashboard says "ALERT FEED UNAVAILABLE"; it is never shown as a quiet reading. Reading alerts from the LAPI with a watcher (machine) login, which needs no Docker access, is planned for this tree.
+- **Alerts**: in this tree the alert feed is read with `cscli alerts list` through `docker exec` into the CrowdSec container (`core.fetch_alerts`). Without Docker access that read fails and the dashboard says "ALERT FEED UNAVAILABLE"; it is never shown as a quiet reading. Reading alerts from the LAPI with a watcher (machine) login needs no Docker access: set `CROWDSEC_MACHINE_ID` and `CROWDSEC_MACHINE_PASSWORD`.
 - **Image and deployment scanning** from the chat is not available in the demo and is planned.
 - If an operator turns on a container feature: never mount the raw socket into the app. Either run the scanners in a separate, isolated worker that holds the access and returns results, or put a restricted socket proxy in front of the daemon. The proxy is **operator-supplied**: Edge Sentinel does not ship or support one, and this describes a pattern. It must allow-list by method and path; for the features above that is `GET /_ping`; for the `cscli` alert read `GET /containers/<crowdsec container>/json`, `POST /containers/<crowdsec container>/exec`, `POST /exec/<id>/start`, `GET /exec/<id>/json` and `POST /exec/<id>/resize`; for listing containers `GET /containers/json` and `GET /containers/<name>/json`; for images `GET /images/<ref>/json` and, for scanners that read an image through the daemon, `GET /images/<ref>/get` (image export). Know the limits: a path allow-list does not inspect request bodies, so the exec endpoints let the caller run any command in that container (this is not read-only), `GET /containers/<name>/json` returns the container's environment, which may hold secrets, and `GET /images/<ref>/get` exports every layer of an image, which may include baked-in secrets.
 

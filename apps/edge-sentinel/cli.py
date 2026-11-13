@@ -56,6 +56,7 @@ def main(argv: "list[str] | None" = None) -> int:
     host = args.host or security.resolve_bind_host()
     port = args.port or _app_mod.PORT
     try:
+        security.auth_required_guard()
         security.exposure_guard(host)           # P9: credentials-or-opt-out, by name — this CLI first
         from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
         _exposed(host)                          # ... and the kernel's own permissions gate
