@@ -39,7 +39,7 @@ COPY agentic_os ./agentic_os
 COPY deploy/assets ./deploy/assets
 RUN AGENTIC_OS_SKIP_UI_FETCH=1 pip install --no-deps --no-build-isolation .
 # the build tools do not ship
-RUN pip check && pip uninstall -y hatchling packaging pathspec pluggy tomlkit trove-classifiers
+RUN pip check && pip uninstall -y hatchling packaging pathspec pluggy tomlkit trove-classifiers pip
 # the app as an importable package (the directory name has a hyphen, the package is edge_sentinel); tests stay out
 COPY apps/edge-sentinel /tmp/app-src
 RUN mkdir -p /opt/app/edge_sentinel && cd /tmp/app-src \
@@ -80,7 +80,9 @@ COPY --from=build /opt/app /app
 COPY --from=tools /out/ /usr/local/bin/
 COPY apps/edge-sentinel/LICENSE /licenses/edge-sentinel-LICENSE
 COPY LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md /licenses/
-RUN useradd --system --uid 10001 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin app \
+# the runtime neither installs nor builds anything: no package manager in the image
+RUN python -m pip uninstall -y pip setuptools wheel \
+ && useradd --system --uid 10001 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin app \
  && mkdir -p /data && chown app:app /data && chmod 0700 /data
 
 # Declared defaults of the STANDALONE profile. Every one is a posture, none is a secret:
