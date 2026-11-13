@@ -169,7 +169,13 @@ cosign verify ghcr.io/redevops-io/edge-sentinel@sha256:<index digest> \
 gh attestation verify oci://ghcr.io/redevops-io/edge-sentinel@sha256:<index digest> --repo redevops-io/agentic-os
 ```
 
-The image labels name the source commit. Each release records the digests in its notes.
+The image labels name the source commit. The signature and the GitHub attestation are on the index digest; the two per-architecture manifests are also signed (`cosign sign --recursive`).
+
+| Release | Tags | Index digest | amd64 | arm64 | Source commit |
+|---|---|---|---|---|---|
+| 0.6.2 | `0.6.2`, `0.6.2-8fdd81761a4f` | `sha256:90fd0ab8be167535c63ef57c124f17f5ee436f255e47c9106187c49b6cb1e31b` | `sha256:641f0554286ccac1d6533f78522de02e73e114b22fc381f896d2959806ebd86d` | `sha256:0243be7012c44af3a9f032191329630e02d69c8f3ff416b06747c783f14517ec` | `8fdd81761a4fb4040a2436a8b5010b390620ca43` (tag `edge-sentinel-v0.6.2`, on `main`) |
+
+To install exactly this release, set `EDGE_SENTINEL_IMAGE=ghcr.io/redevops-io/edge-sentinel@sha256:90fd0ab8be167535c63ef57c124f17f5ee436f255e47c9106187c49b6cb1e31b` in `.env`. Each later release adds a row.
 
 ## Build it yourself
 
