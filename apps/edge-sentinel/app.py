@@ -51,6 +51,8 @@ import os
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
 # Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
 # be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
+from . import secret_files as _secret_files  # noqa: E402  (must run before anything reads the environment)
+_secret_files.load_file_secrets()                # NAME_FILE -> NAME (Docker/Kubernetes secrets)
 from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
 from agentic_os.app_gate import with_authorization as _with_authorization
 _GATE_APP = "edge-sentinel"
@@ -133,6 +135,20 @@ app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) se
 
 
 @app.middleware("http")
+async def _require_operator_everywhere(request: Request, call_next):
+    """Standalone profile (SENTINEL_REQUIRE_AUTH=1): every route except the two probes needs the operator credential.
+    Registered before the headers middleware so a refusal also carries the security headers. Off by default: the
+    reference behaviour the rAIlsApps distribution relies on is unchanged."""
+    auth.align_kernel_operator_credential()
+    if (auth.require_auth_everywhere() and request.url.path not in auth.PUBLIC_PATHS
+            and request.url.path not in auth.SELF_AUTHENTICATED_PATHS):
+        if not auth.basic_header_valid(request.headers.get("authorization", "")):
+            return JSONResponse({"error": "operator authentication required"}, status_code=401,
+                                headers={"WWW-Authenticate": auth._REALM})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def _security_headers(request: Request, call_next):
     """Every response carries the same baseline headers (P9). setdefault, so a route that states its own
     policy — a download, an embed — keeps its own rather than being overwritten by ours."""
@@ -150,6 +166,8 @@ def _check_declared_bind():
     ExposureRefused, which fails the uvicorn startup outright — the refusal is confirmed by the test that
     enters the app's lifespan. Unset means the guard has nothing to check — the `python -m
     edge-sentinel.app` path guards itself and prints the refusal as a startup error."""
+    _security.auth_required_guard()          # SENTINEL_REQUIRE_AUTH=1 without a credential never starts
+    auth.align_kernel_operator_credential()
     _declared = os.environ.get("SENTINEL_BIND_HOST", "").strip()
     if _declared:
         _security.exposure_guard(_declared)
@@ -1432,6 +1450,22 @@ def health() -> dict:
             "state": sh})
 
 
+@app.get("/readyz")
+def readyz() -> JSONResponse:
+    """Readiness: can this instance serve and record decisions? 503 when the durable state directory is unusable or
+    the production profile has no authority store configured. CrowdSec reachability is reported but does not fail
+    readiness (the dashboard says so itself when the core is down). Public, like /health; carries no case data."""
+    sh = live.state_health()
+    checks = {"state": bool(sh["ok"])}
+    profile = os.environ.get("AGENTIC_OS_PROFILE", "").strip().lower()
+    if profile == "production":
+        checks["authority_store"] = bool(os.environ.get("AGENTIC_OS_AUTHORITY_DB", "").strip())
+    ready = all(checks.values())
+    return JSONResponse({"ready": ready, "checks": checks, "profile": profile or "unset",
+                         "auth_required": auth.require_auth_everywhere(), "crowdsec_connected": core.crowdsec_connected()},
+                        status_code=200 if ready else 503)
+
+
 @app.post("/api/agent", dependencies=[Depends(ratelimit.rate_limit)])
 async def api_agent(request: Request) -> JSONResponse:
     try:
@@ -1596,7 +1630,11 @@ def _cr_banner() -> str:
     """The sticky banner; its Network access and Backups links say sample while the panel behind them shows sample data."""
     nb = " (sample data)" if _is_sample("netbird") else ""
     pb = " (sample data)" if _is_sample("portabase") else ""
-    return _CR_BANNER.replace("@@NB@@", nb).replace("@@PB@@", pb)
+    banner = _CR_BANNER.replace("@@NB@@", nb).replace("@@PB@@", pb)
+    if auth.require_auth_everywhere() and not fixture_mode.status()["enabled"]:
+        # a signed-in standalone deployment is not a demo: drop the DEMO pill (the synthetic-data banner and the fixture mode keep their own labels)
+        banner = banner.replace('<span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span>', "")
+    return banner
 
 
 _CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant and the permissions plane. <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a href="api/network/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F310 Network access@@NB@@ \u2192</a><a href="api/backups/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F5C4 Backups@@PB@@ \u2192</a><a href="api/permissions/ui" style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F512 Permissions demo \u2192</a></span></div>"""
@@ -1704,6 +1742,7 @@ if __name__ == "__main__":  # pragma: no cover
     from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
 
     try:
+        _security.auth_required_guard()
         _security.exposure_guard(BIND_HOST)   # P9: a reachable bind is something you ask for, twice over —
         _exposed(BIND_HOST)                   # once here (credentials) and once in the kernel (permissions)
     except _security.ExposureRefused as _refused:

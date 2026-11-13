@@ -92,6 +92,7 @@ PUBLIC["agentic-privacy"].update({
     ("GET", "/intake"): "the public data-subject intake form (static HTML)", ("POST", "/intake"): "public intake (registered in tool_actions.PUBLIC_INTAKE_ROUTES): the same constrained submission as /request",
     ("GET", "/verify"): "the confirm page for the emailed single-use link (does not consume the token)", ("POST", "/verify"): "redeems the single-use emailed token",
     ("GET", "/export"): "single-use short-TTL export protected by request id + token issued after /verify"})
+PUBLIC["edge-sentinel"][("GET", "/readyz")] = "readiness probe: {ready, per-check booleans, profile name, a connectivity boolean}; no case or activity data"
 PUBLIC["document-editor"][("GET", "/content/{token}")] = "short-lived signed, document-scoped token fetch (the external editor cannot send a bearer); authenticated by the token alone"
 # the Operator SDK's own routes (authenticated by the operator boundary; the capabilities themselves are gated by Operator._execute) and the framework's
 OPERATOR_ROUTES = {("POST", "/invoke"), ("GET", "/capabilities")}

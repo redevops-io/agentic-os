@@ -78,10 +78,22 @@ def _finding_from_observation(obs: SecurityObservation, evidence: EvidenceArtifa
         status=FindingStatus.SUPPORTED)
 
 
+def stable_alert(alert: dict) -> dict:
+    """The alert as evidence: without the one field CrowdSec recomputes on every read. A decision's `duration` is the time
+    REMAINING ("3h59m55s", counting down), so the same alert read a second later is different bytes, hashes to different
+    evidence and, content-addressed, would open a new case on every refresh. Everything else is kept as received."""
+    decisions = alert.get("decisions") if isinstance(alert, dict) else None
+    if not isinstance(decisions, list):
+        return alert
+    return {**alert, "decisions": [({k: v for k, v in d.items() if k != "duration"} if isinstance(d, dict) else d)
+                                   for d in decisions]}
+
+
 def ingest_crowdsec_alert(store, alert: dict) -> SecurityCase:
     """The ingestion path. Returns an INCIDENT case linking immutable raw evidence → observation →
     finding, plus a PROPOSED (approval-gated) block_ip ActionRequest when the finding recommends it.
     Idempotent: re-ingesting the same alert yields the same content-addressed ids and does not duplicate."""
+    alert = stable_alert(alert)
     raw = canonical_json(alert)
     ev = store.put_evidence(EvidenceArtifact.of_raw("crowdsec_alert", "crowdsec", raw,
                                                     observed_at=alert.get("created_at", "")), raw)
