@@ -1,0 +1,120 @@
+name: infinity-rap
+
+# The optional Infinity RAP bridge (integrations/infinity). Separate from the required `pytest` job on purpose: the base install does not contain it.
+# tests/test_infinity_boundary.py (in the required job) proves the base does not import it. Everything here is synthetic: a mock CRM, a scripted
+# model, loopback only. No provider key, no cloud account, no model download.
+on:
+  pull_request:
+    paths:
+      - "integrations/infinity/**"
+      - ".github/workflows/infinity-rap.yml"
+      - "agentic_os/agent_gateway/**"
+      - "agentic_os/mission/authority.py"
+      - "agentic_os/mission/children.py"
+      - "agentic_os/mission/store.py"
+  push:
+    branches: [main]
+    paths:
+      - "integrations/infinity/**"
+      - ".github/workflows/infinity-rap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infinity-rap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install agentic-os (this checkout), then the bridge
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -e integrations/infinity pytest
+      - name: Bridge suite (wire, endpoints, callback policy, idempotency, authority, approval, crash boundaries, outcome_unknown, cancellation, lineage)
+        working-directory: integrations/infinity
+        run: |
+          set -o pipefail
+          pytest -q -p no:cacheprovider -rs tests | tee "$RUNNER_TEMP/infinity.out"
+      - name: No test may be skipped
+        run: |
+          if grep -qi "skipped" "$RUNNER_TEMP/infinity.out"; then echo "::error::a bridge test was skipped"; exit 1; fi
+      - name: The synthetic scenario runs and its own checks pass
+        run: python -m redevops_infinity.demo.run
+      - name: Each protection, removed in a scratch copy, makes its tests fail
+        working-directory: integrations/infinity
+        run: python scripts/prove_tests_bite.py
+      - name: Tests must not dirty the working tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)" || { git status --short; echo "untracked files left by tests"; exit 1; }
+
+  locked:
+    # the committed lock (hashes) installs and the suite passes on exactly those versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install from the lock
+        working-directory: integrations/infinity
+        run: |
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --extra dev
+      - name: Suite on the locked versions
+        working-directory: integrations/infinity
+        run: uv run --frozen pytest -q -p no:cacheprovider tests
+      - name: The lock is current
+        working-directory: integrations/infinity
+        run: uv lock --check
+
+  real-infinity:
+    # the REAL Infinity runtime (infinity-agent-core 0.2.0, pinned by exact version and checksum) with a scripted model, against the bridge on loopback
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            integrations/infinity/harness/target
+          key: infinity-harness-${{ hashFiles('integrations/infinity/harness/Cargo.lock') }}
+      - name: Build the harness from the lock
+        working-directory: integrations/infinity/harness
+        run: cargo build --release --locked
+      - name: Install agentic-os (this checkout), then the bridge
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -e integrations/infinity pytest
+      - name: Real Infinity runtime against the bridge
+        working-directory: integrations/infinity
+        env:
+          RAP_HARNESS_BIN: ${{ github.workspace }}/integrations/infinity/harness/target/release/infinity-rap-harness
+        run: pytest -q -p no:cacheprovider -m sidecar tests/test_infinity_sidecar.py
+      - name: Tests must not dirty the working tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)" || { git status --short; echo "untracked files left by tests"; exit 1; }

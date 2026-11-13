@@ -1,0 +1,3 @@
+harness/target/
+__pycache__/
+*.egg-info/
