@@ -48,7 +48,7 @@ got="$(uninstaller_requests after)"
 [ "$(printf '%s\n' "$got" | grep -c .)" = 1 ] || { echo "::error::expected exactly one uninstaller-<sha256>.exe in requests-inner, got: [$got]"; exit 1; }
 f="$SCRATCH/probe-after/handoff/requests-inner/$got"
 want="${got#uninstaller-}"; want="${want%.exe}"
-have="$(sha256sum "$f" | cut -d' ' -f1)"
+have="$(sha256sum < "$f" | cut -d' ' -f1)"   # stdin: with a file name argument sha256sum prefixes a backslash when the path has backslashes
 [ "$want" = "$have" ] || { echo "::error::file name hash $want differs from content hash $have"; exit 1; }
 [ "$(head -c 2 "$f")" = "MZ" ] || { echo "::error::the collected file is not a PE executable"; exit 1; }
 grep -q 'role=uninstaller' "$SCRATCH/probe-after/handoff/signcommand.log" || { echo "::error::signcommand.log has no role=uninstaller line"; exit 1; }
