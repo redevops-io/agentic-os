@@ -42,7 +42,7 @@ jobs:
           fi
           "/c/Program Files (x86)/NSIS/makensis.exe" -VERSION
 
-      - name: Probe (before: the helper from the base branch, after: the helper from this change)
+      - name: "Probe: the helper from the base branch (before), then the one from this change (after)"
         env:
           EVENT: ${{ github.event_name }}
         run: |
