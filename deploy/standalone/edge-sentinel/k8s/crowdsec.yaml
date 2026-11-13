@@ -1,0 +1,80 @@
+# The CrowdSec core Edge Sentinel reads: LAPI only, reachable inside the namespace (Service crowdsec:8080), never exposed.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: crowdsec-data, namespace: edge-sentinel}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: crowdsec-config, namespace: edge-sentinel}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 100Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crowdsec
+  namespace: edge-sentinel
+  labels: {app.kubernetes.io/name: crowdsec, app.kubernetes.io/part-of: edge-sentinel}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}          # one writer for the SQLite database
+  selector:
+    matchLabels: {app.kubernetes.io/name: crowdsec}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: crowdsec, app.kubernetes.io/part-of: edge-sentinel}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: crowdsec
+          image: crowdsecurity/crowdsec:v1.7.8@sha256:2f527c9bb8b367120eb08b82890aa912ce96bfa1ada93dda0721700e4b4e0dde
+          env:
+            - {name: DISABLE_ONLINE_API, value: "true"}     # "false" joins the CrowdSec community feed
+            - name: BOUNCER_KEY_edge-sentinel               # registers the bouncer key Sentinel reads decisions with
+              valueFrom: {secretKeyRef: {name: edge-sentinel, key: crowdsec-bouncer-key}}
+          ports:
+            - {name: lapi, containerPort: 8080}
+          startupProbe:                  # the first start refreshes the CrowdSec hub index over the network
+            exec: {command: [cscli, lapi, status]}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            exec: {command: [cscli, lapi, status]}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec: {command: [cscli, lapi, status]}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/crowdsec/data}
+            - {name: config, mountPath: /etc/crowdsec}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: crowdsec-data}
+        - name: config
+          persistentVolumeClaim: {claimName: crowdsec-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crowdsec
+  namespace: edge-sentinel
+  labels: {app.kubernetes.io/name: crowdsec, app.kubernetes.io/part-of: edge-sentinel}
+spec:
+  selector: {app.kubernetes.io/name: crowdsec}
+  ports:
+    - {name: lapi, port: 8080, targetPort: lapi}

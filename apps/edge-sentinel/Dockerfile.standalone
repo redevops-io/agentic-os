@@ -1,0 +1,112 @@
+# syntax=docker/dockerfile:1.7
+# edge-sentinel, standalone image: a reproducible, multi-architecture (linux/amd64, linux/arm64) build of the
+# SOC dashboard and API, installable without any other ReDevOps product.
+#
+# Build from the REPOSITORY ROOT (the kernel is installed from this very checkout, not from a tarball of an older ref):
+#   docker buildx build -f apps/edge-sentinel/Dockerfile.standalone --platform linux/amd64,linux/arm64 \
+#       --build-arg SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) -t edge-sentinel:dev .
+#
+# The reference image (apps/edge-sentinel/Dockerfile) is unchanged and is still what the rAIlsApps distribution builds.
+#
+#   * base: python 3.12-slim pinned by index digest (bump the digest and nothing else to take a new base)
+#   * dependencies: apps/edge-sentinel/requirements.standalone.txt, every package pinned (git requirements by commit sha)
+#   * kernel (agentic_os): built from this checkout with a pinned build backend (requirements.build.txt)
+#   * scanners (Trivy, Syft): OPTIONAL, off by default; with --build-arg WITH_SCANNERS=1 they are fetched as pinned
+#     release archives and verified against a sha256 recorded below, for both architectures. Without them the
+#     supply-chain console tools report themselves unavailable; nothing else changes.
+#   * no docker CLI and no cosign: the alert feed and bans use the CrowdSec watcher login over the LAPI
+#     (CROWDSEC_MACHINE_ID / CROWDSEC_MACHINE_PASSWORD), so no docker access is needed.
+#   * runs as uid 10001, works with a read-only root filesystem (state lives under the /data volume, scratch under /tmp)
+
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+
+# ---------------------------------------------------------------- build: dependencies and kernel into a venv
+FROM ${PYTHON_IMAGE} AS build
+ARG SOURCE_DATE_EPOCH
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONDONTWRITEBYTECODE=1 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+# git resolves the commit-pinned git requirements; it exists only in this stage
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN python -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+COPY apps/edge-sentinel/requirements.build.txt apps/edge-sentinel/requirements.standalone.txt /tmp/req/
+# --no-deps: the lock is complete, so nothing is resolved at build time (a git requirement's own metadata names a tag, the lock names the commit)
+RUN pip install --no-deps -r /tmp/req/requirements.build.txt -r /tmp/req/requirements.standalone.txt
+# the kernel, from this checkout (same build recipe as the root Dockerfile; the UI bundle fetch is not needed here)
+WORKDIR /src
+COPY pyproject.toml README.md modules.yaml hatch_build.py LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md ./
+COPY agentic_os ./agentic_os
+COPY deploy/assets ./deploy/assets
+RUN AGENTIC_OS_SKIP_UI_FETCH=1 pip install --no-deps --no-build-isolation .
+# the build tools do not ship
+RUN pip check && pip uninstall -y hatchling packaging pathspec pluggy tomlkit trove-classifiers pip
+# the app as an importable package (the directory name has a hyphen, the package is edge_sentinel); tests stay out
+COPY apps/edge-sentinel /tmp/app-src
+RUN mkdir -p /opt/app/edge_sentinel && cd /tmp/app-src \
+ && for f in *.py; do case "$f" in test_*) ;; *) cp "$f" /opt/app/edge_sentinel/ ;; esac; done \
+ && touch /opt/app/edge_sentinel/__init__.py
+
+# ---------------------------------------------------------------- tools: optional scanners, pinned and verified
+FROM ${PYTHON_IMAGE} AS tools
+ARG WITH_SCANNERS=0
+ARG TARGETARCH
+ARG TRIVY_VERSION=0.75.0
+ARG TRIVY_SHA256_AMD64=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+ARG TRIVY_SHA256_ARM64=a1ee9f6ffb7d112b64ff726a2a0717c21175c1114361391f4a132956751a13b3
+ARG SYFT_VERSION=1.54.1
+ARG SYFT_SHA256_AMD64=c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+ARG SYFT_SHA256_ARM64=dfdf0537610113edbefe1f1fc6548bc957b2d77439636ec824fcf0e10d46d054
+RUN mkdir -p /out && if [ "$WITH_SCANNERS" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*; \
+      case "$TARGETARCH" in \
+        amd64) T=64bit; S=amd64; TS="$TRIVY_SHA256_AMD64"; SS="$SYFT_SHA256_AMD64";; \
+        arm64) T=ARM64; S=arm64; TS="$TRIVY_SHA256_ARM64"; SS="$SYFT_SHA256_ARM64";; \
+        *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1;; \
+      esac; \
+      curl -fsSL -o /tmp/trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${T}.tar.gz"; \
+      echo "${TS}  /tmp/trivy.tgz" | sha256sum -c -; \
+      tar -xzf /tmp/trivy.tgz -C /out trivy; \
+      curl -fsSL -o /tmp/syft.tgz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${S}.tar.gz"; \
+      echo "${SS}  /tmp/syft.tgz" | sha256sum -c -; \
+      tar -xzf /tmp/syft.tgz -C /out syft; \
+    fi
+
+# ---------------------------------------------------------------- runtime
+FROM ${PYTHON_IMAGE} AS runtime
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /opt/app /app
+COPY --from=tools /out/ /usr/local/bin/
+COPY apps/edge-sentinel/LICENSE /licenses/edge-sentinel-LICENSE
+COPY LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md /licenses/
+# the runtime neither installs nor builds anything: no package manager in the image
+RUN python -m pip uninstall -y pip setuptools wheel \
+ && useradd --system --uid 10001 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin app \
+ && mkdir -p /data && chown app:app /data && chmod 0700 /data
+
+# Declared defaults of the STANDALONE profile. Every one is a posture, none is a secret:
+#   SENTINEL_REQUIRE_AUTH=1       every route except /health and /readyz needs the operator credential; the app
+#                                 refuses to start without SENTINEL_BASIC_AUTH_USER and _PASS (or _PASS_FILE)
+#   SENTINEL_ALLOW_EXPOSURE=1     the bind below is reachable inside the container's network namespace by design; the
+#                                 credential rule above is what protects it. Publish the port on loopback unless a
+#                                 TLS-terminating proxy fronts it.
+#   AGENTIC_OS_PROFILE=production durable authority store required, no permissive fallback for side effects; a
+#                                 development run is an explicit choice: -e AGENTIC_OS_PROFILE=development
+#   AGENTIC_OS_PERMISSIONS=off    the kernel's per-app permission plane is not used; access is the operator credential
+#   SENTINEL_BLOCK_ENABLED unset  an approved ban is a dry run until the operator turns real execution on
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PORT=8203 SENTINEL_BIND_HOST=0.0.0.0 SENTINEL_ALLOW_EXPOSURE=1 SENTINEL_REQUIRE_AUTH=1 \
+    AGENTIC_OS_PROFILE=production AGENTIC_OS_PERMISSIONS=off \
+    SENTINEL_STATE_DIR=/data/state AGENTIC_OS_AUTHORITY_DB=/data/authority.db AGENTIC_OS_REPLAY_DB=/data/replay.db \
+    XDG_CACHE_HOME=/data/cache TRIVY_CACHE_DIR=/data/cache/trivy HOME=/data/home TMPDIR=/tmp
+WORKDIR /app
+USER 10001:10001
+VOLUME ["/data"]
+EXPOSE 8203
+# /readyz answers 503 when the state directory is unusable or the production profile has no authority store
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD ["python", "-c", "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/readyz' % os.environ.get('PORT','8203'), timeout=3)"]
+# exec form: uvicorn is PID 1 and receives SIGTERM directly
+CMD ["sh", "-c", "exec uvicorn edge_sentinel.app:app --host \"$SENTINEL_BIND_HOST\" --port \"$PORT\" --no-server-header"]

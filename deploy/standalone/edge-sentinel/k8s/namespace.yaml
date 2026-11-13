@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edge-sentinel
+  labels:
+    app.kubernetes.io/part-of: edge-sentinel
+    # the CrowdSec image runs as root inside the container, so the namespace is "baseline"; the edge-sentinel pod itself
+    # meets the "restricted" profile (non-root, read-only root filesystem, no capabilities, RuntimeDefault seccomp)
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted

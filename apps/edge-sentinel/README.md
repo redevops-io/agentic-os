@@ -214,3 +214,7 @@ Edge Sentinel does not need unrestricted Docker access, and the example above do
 ## Authorization note
 
 Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.
+
+## Standalone deployment
+
+A reproducible multi-architecture image (`Dockerfile.standalone`), Docker Compose and Kubernetes/k3s manifests (`deploy/standalone/edge-sentinel`) and the install, authentication, backup and upgrade guide ([docs/standalone/edge-sentinel.md](../../docs/standalone/edge-sentinel.md)) run Edge Sentinel on its own, with sign-in required on every route. The reference `Dockerfile` in this directory is unchanged.

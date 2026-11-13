@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: edge-sentinel-data, namespace: edge-sentinel}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-sentinel
+  namespace: edge-sentinel
+  labels: {app.kubernetes.io/name: edge-sentinel, app.kubernetes.io/part-of: edge-sentinel}
+spec:
+  replicas: 1                          # state is a local file on the volume: one writer
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: edge-sentinel}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: edge-sentinel, app.kubernetes.io/part-of: edge-sentinel}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: edge-sentinel
+          image: ghcr.io/redevops-io/edge-sentinel:0.6.2
+          ports:
+            - {name: http, containerPort: 8203}
+          env:
+            - {name: SENTINEL_BASIC_AUTH_USER, value: operator}
+            - {name: SENTINEL_BASIC_AUTH_PASS_FILE, value: /run/secrets/operator-password}
+            - {name: CROWDSEC_LAPI_URL, value: "http://crowdsec:8080"}
+            - {name: CROWDSEC_BOUNCER_KEY_FILE, value: /run/secrets/crowdsec-bouncer-key}
+            - {name: CROWDSEC_MACHINE_ID, value: edge-sentinel}
+            - {name: CROWDSEC_MACHINE_PASSWORD_FILE, value: /run/secrets/crowdsec-machine-password}
+            # an approved ban is a dry run until this is "1"
+            - {name: SENTINEL_BLOCK_ENABLED, value: ""}
+            # behind an ingress controller the client address is the right-most X-Forwarded-For entry:
+            # - {name: SENTINEL_TRUST_PROXY, value: "1"}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: edge-sentinel-data}
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 64Mi}
+        - name: secrets
+          secret:
+            secretName: edge-sentinel
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge-sentinel
+  namespace: edge-sentinel
+  labels: {app.kubernetes.io/name: edge-sentinel, app.kubernetes.io/part-of: edge-sentinel}
+spec:
+  selector: {app.kubernetes.io/name: edge-sentinel}
+  ports:
+    - {name: http, port: 80, targetPort: http}
