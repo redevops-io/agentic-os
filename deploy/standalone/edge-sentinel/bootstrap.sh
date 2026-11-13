@@ -27,8 +27,11 @@ done
 
 # the credentials Sentinel reads from /run/secrets; re-running replaces them with the file contents
 $COMPOSE exec -T crowdsec cscli bouncers delete edge-sentinel >/dev/null 2>&1 || true
-$COMPOSE exec -T crowdsec cscli bouncers add edge-sentinel --key "$(cat secrets/crowdsec_bouncer_key)" >/dev/null
-$COMPOSE exec -T crowdsec cscli machines add edge-sentinel --password "$(cat secrets/crowdsec_machine_password)" -f - --force >/dev/null
+$COMPOSE exec -T crowdsec cscli bouncers add edge-sentinel --key "$(cat secrets/crowdsec_bouncer_key)" >/dev/null 2>&1 \
+  || { echo "registering the bouncer key failed (run: $COMPOSE logs crowdsec)" >&2; exit 1; }
+# cscli echoes the credentials it registers on stderr; neither stream may reach a terminal or a CI log
+$COMPOSE exec -T crowdsec cscli machines add edge-sentinel --password "$(cat secrets/crowdsec_machine_password)" -f - --force >/dev/null 2>&1 \
+  || { echo "registering the watcher login failed (run: $COMPOSE logs crowdsec)" >&2; exit 1; }
 
 $COMPOSE up -d
 user="$(sed -n 's/^SENTINEL_BASIC_AUTH_USER=//p' .env | tail -1)"; user="${user:-operator}"
