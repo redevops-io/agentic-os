@@ -1,0 +1,49 @@
+name: signing-helper-windows
+
+# Proves, on a real Windows runner with real makensis, the contract that packaging/signing/r0prime_win_signcommand.sh
+# relies on: tauri's NSIS template runs `!uninstfinalize '<signCommand>'` and makensis hands the command the generated
+# uninstaller as a temporary file named nstXXXX.tmp. In COLLECT mode the helper must file that as uninstaller-<sha256>.exe in
+# requests-inner. On a pull request the helper from the base branch is run first for contrast (before/after).
+# Not a required check: it only runs when the helper, the probe or this file changes.
+on:
+  pull_request:
+    paths:
+      - "packaging/signing/r0prime_win_signcommand.sh"
+      - "tests/windows-probe/**"
+      - ".github/workflows/signing-helper-windows.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signing-helper-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nsis-uninstaller:
+    name: NSIS uninstaller is collected (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Install NSIS (pinned) if the runner image does not carry it
+        run: |
+          if [ -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
+            echo "NSIS already present"
+          else
+            choco install nsis --version=3.11 -y --no-progress
+          fi
+          "/c/Program Files (x86)/NSIS/makensis.exe" -VERSION
+
+      - name: "Probe: the helper from the base branch (before), then the one from this change (after)"
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          bash tests/windows-probe/nsis_uninstaller_probe.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$EVENT"

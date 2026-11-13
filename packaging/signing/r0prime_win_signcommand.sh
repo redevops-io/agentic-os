@@ -27,7 +27,7 @@
 #   signcommand.log                                            one line per call (time, mode, role, sha256, action); no secrets
 #
 # Roles by file name: agentic-r0prime.exe -> launcher; redevops-sidecar.exe / redevops-sidecar-*.exe -> sidecar; uninstall*.exe /
-# *uninstaller*.exe -> uninstaller; *.msi and *-setup.exe -> container; every .dll (NSIS plugins, WiX extensions, ...) -> SKIPPED:
+# *uninstaller*.exe / nstXXXX.tmp (the NSIS uninstaller as makensis passes it) -> uninstaller; *.msi and *-setup.exe -> container; every .dll (NSIS plugins, WiX extensions, ...) -> SKIPPED:
 # third-party files are NEVER signed with the release identity. Any other .exe has role 'unknown': collect records it (the owner
 # decides), apply FAILS the build.
 #
@@ -74,6 +74,7 @@ case "$LB" in
   agentic-r0prime.exe) ROLE=launcher;;
   redevops-sidecar.exe|redevops-sidecar-*.exe) ROLE=sidecar;;
   uninstall*.exe|*uninstaller*.exe) ROLE=uninstaller;;
+  nst[0-9A-Fa-f]*.tmp) ROLE=uninstaller;;   # makensis hands !uninstfinalize the generated uninstaller as nstXXXX.tmp; without this the build ships it UNSIGNED
   *.exe) ROLE=unknown;;
   *) die "unexpected file type for signing: $B";;
 esac
