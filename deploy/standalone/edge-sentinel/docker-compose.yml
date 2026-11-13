@@ -1,0 +1,82 @@
+# Edge Sentinel, standalone, one host: the SOC dashboard/API plus the CrowdSec core it reads.
+#
+#   ./bootstrap.sh            # one time: creates ./secrets and .env, starts CrowdSec, registers the credentials, starts Sentinel
+#   docker compose up -d      # afterwards
+#
+# Nothing here needs another ReDevOps product. The port is published on the loopback interface only; put a
+# TLS-terminating reverse proxy in front of it to reach it from elsewhere (see docs/standalone/edge-sentinel.md).
+name: ${COMPOSE_PROJECT_NAME:-edge-sentinel}
+
+services:
+  crowdsec:
+    image: crowdsecurity/crowdsec:v1.7.8@sha256:2f527c9bb8b367120eb08b82890aa912ce96bfa1ada93dda0721700e4b4e0dde
+    restart: unless-stopped
+    environment:
+      # offline by default: no enrolment, no community blocklist pull. Set to "false" to join the CrowdSec community feed.
+      DISABLE_ONLINE_API: "${CROWDSEC_DISABLE_ONLINE_API:-true}"
+      # log sources and scenario collections for real detections, e.g. COLLECTIONS=crowdsecurity/linux; see the guide
+      COLLECTIONS: "${CROWDSEC_COLLECTIONS:-}"
+    volumes:
+      - crowdsec-data:/var/lib/crowdsec/data
+      - crowdsec-config:/etc/crowdsec
+      # to read host logs, mount them read-only and add an acquisition file under /etc/crowdsec/acquis.d, for example:
+      # - /var/log:/var/log:ro
+    healthcheck:
+      test: ["CMD", "cscli", "lapi", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [sentinel]
+    security_opt: ["no-new-privileges:true"]
+    # no published ports: only Sentinel on the private network talks to the LAPI
+
+  edge-sentinel:
+    image: ${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel:0.6.2}
+    restart: unless-stopped
+    depends_on:
+      crowdsec:
+        condition: service_healthy
+    ports:
+      - "${EDGE_SENTINEL_BIND:-127.0.0.1}:${EDGE_SENTINEL_PORT:-8203}:8203"
+    environment:
+      SENTINEL_BASIC_AUTH_USER: "${SENTINEL_BASIC_AUTH_USER:-operator}"
+      SENTINEL_BASIC_AUTH_PASS_FILE: /run/secrets/operator_password
+      CROWDSEC_LAPI_URL: http://crowdsec:8080
+      CROWDSEC_BOUNCER_KEY_FILE: /run/secrets/crowdsec_bouncer_key
+      CROWDSEC_MACHINE_ID: edge-sentinel
+      CROWDSEC_MACHINE_PASSWORD_FILE: /run/secrets/crowdsec_machine_password
+      # an approved ban is a dry run until this is "1"
+      SENTINEL_BLOCK_ENABLED: "${SENTINEL_BLOCK_ENABLED:-}"
+      SENTINEL_PROTECTED_IPS: "${SENTINEL_PROTECTED_IPS:-}"
+      SENTINEL_BLOCK_ALLOW_NETWORKS: "${SENTINEL_BLOCK_ALLOW_NETWORKS:-}"
+      # synthetic fixture data and no external reads or writes, for a first look: set to 1
+      EDGE_SENTINEL_DEMO: "${EDGE_SENTINEL_DEMO:-}"
+      # development only (unauthenticated reads, no production profile): AGENTIC_OS_PROFILE=development and SENTINEL_REQUIRE_AUTH=0
+    secrets:
+      - operator_password
+      - crowdsec_bouncer_key
+      - crowdsec_machine_password
+    volumes:
+      - edge-sentinel-data:/data
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [sentinel]
+
+secrets:
+  operator_password:
+    file: ./secrets/operator_password
+  crowdsec_bouncer_key:
+    file: ./secrets/crowdsec_bouncer_key
+  crowdsec_machine_password:
+    file: ./secrets/crowdsec_machine_password
+
+volumes:
+  edge-sentinel-data:
+  crowdsec-data:
+  crowdsec-config:
+
+networks:
+  sentinel:
