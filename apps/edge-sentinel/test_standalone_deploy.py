@@ -161,3 +161,11 @@ def test_the_network_policy_denies_by_default_and_the_ingress_example_uses_a_pla
 def test_no_internal_topology_or_secret_material(path):
     hit = PRIVATE.search(path.read_text())
     assert hit is None, f"{path.name}: {hit.group(0)}"
+
+
+def test_the_bootstrap_scripts_never_let_cscli_print_the_credentials_it_registers():
+    """`cscli machines add -f -` writes the machine credentials to stderr (and `kubectl exec` forwards both streams)."""
+    for path in (DEPLOY / "bootstrap.sh", DEPLOY / "k8s" / "bootstrap.sh"):
+        text = path.read_text()
+        line = next(l for l in text.splitlines() if "machines add" in l and not l.lstrip().startswith("#"))
+        assert ">/dev/null 2>&1" in line, f"{path.name}: {line}"

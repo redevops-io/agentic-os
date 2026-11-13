@@ -27,7 +27,9 @@ fi
 kubectl apply -k .
 kubectl -n "$NS" rollout status deploy/crowdsec --timeout=300s
 MACHINE_PW="$(kubectl -n "$NS" get secret edge-sentinel -o jsonpath='{.data.crowdsec-machine-password}' | base64 -d)"
-kubectl -n "$NS" exec deploy/crowdsec -- cscli machines add edge-sentinel --password "$MACHINE_PW" -f - --force >/dev/null
+# cscli echoes the credentials it registers on stderr; neither stream may reach a terminal or a CI log
+kubectl -n "$NS" exec deploy/crowdsec -- cscli machines add edge-sentinel --password "$MACHINE_PW" -f - --force >/dev/null 2>&1 \
+  || { echo "registering the watcher login failed (kubectl -n $NS logs deploy/crowdsec)" >&2; exit 1; }
 kubectl -n "$NS" rollout status deploy/edge-sentinel --timeout=300s
 echo
 echo "Edge Sentinel is running in namespace $NS. Reach it with:   kubectl -n $NS port-forward svc/edge-sentinel 8203:80"
