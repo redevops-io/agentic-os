@@ -118,7 +118,7 @@ def test_capabilities_manifest(client):
     assert m["operator"] == "outreach-engine"
     caps = {c["name"]: c for c in m["capabilities"]}
     assert set(caps) == {"outreach.refresh", "outreach.enrich", "outreach.draft_pitch",
-                         "outreach.approve", "outreach.send_all"}
+                         "outreach.approve", "outreach.send_all", "outreach.check_replies"}
     # the gate is modules.yaml `approval_required: [send_sequence]` — only the send is gated
     assert caps["outreach.send_all"]["approval_required"] is True
     assert caps["outreach.refresh"]["approval_required"] is False
@@ -129,6 +129,7 @@ def test_capabilities_manifest(client):
     assert caps["outreach.refresh"]["side_effecting"] is False
     assert caps["outreach.enrich"]["side_effecting"] is False
     assert caps["outreach.draft_pitch"]["side_effecting"] is False
+    assert caps["outreach.check_replies"]["side_effecting"] is False
     assert caps["outreach.approve"]["side_effecting"] is True
     assert caps["outreach.send_all"]["side_effecting"] is True
     assert "outreach_pipeline" in caps["outreach.refresh"]["provides"]

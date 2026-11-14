@@ -120,15 +120,16 @@ Categories: `read-only-state` (reads state, writes nothing observable) / `writes
 | `radar.brief` | market-radar | read | read-only-state | apps/market-radar/operator.py:39 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `recent_changes` | market-radar | read | read-only-state | apps/market-radar/app.py:444 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `watch_summary` | market-radar | read | read-only-state | apps/market-radar/app.py:443 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.approve` | outreach-engine | write | launches external process or network | apps/outreach-engine/operator.py:63 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.discover` | outreach-engine | write | dynamically selected behaviour | apps/outreach-engine/app.py:346 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.draft_followup` | outreach-engine | read | read-only-state | apps/outreach-engine/app.py:513 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.draft_pitch` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:54 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.enrich` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:45 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.pipeline_summary` | outreach-engine | read | read-only-state | apps/outreach-engine/app.py:513 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.refresh` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:37 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.send_all` | outreach-engine | write | launches external process or network | apps/outreach-engine/operator.py:75 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `outreach.synced` | outreach-engine | read | read-only-state | apps/outreach-engine/app.py:545 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.approve` | outreach-engine | write | launches external process or network | apps/outreach-engine/operator.py:64 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.check_replies` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:90 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.discover` | outreach-engine | write | dynamically selected behaviour | apps/outreach-engine/app.py:348 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.draft_followup` | outreach-engine | read | read-only-state | apps/outreach-engine/app.py:515 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.draft_pitch` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:55 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.enrich` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:46 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.pipeline_summary` | outreach-engine | read | read-only-state | apps/outreach-engine/app.py:515 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.refresh` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:38 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.send_all` | outreach-engine | write | launches external process or network | apps/outreach-engine/operator.py:76 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `outreach.synced` | outreach-engine | read | read-only-state | apps/outreach-engine/app.py:547 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `social.activity` | social-autopilot | read | read-only-state | apps/social-autopilot/app.py:547 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `social.draft` | social-autopilot | write | launches external process or network | apps/social-autopilot/operator.py:31 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `social.draft_visual` | social-autopilot | write | launches external process or network | apps/social-autopilot/operator.py:41 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |

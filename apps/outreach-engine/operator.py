@@ -10,6 +10,7 @@ Capabilities (syscalls):
   outreach.draft_pitch  — LLM-draft a personalized pitch (+ evidence visualization + the lead's link)
   outreach.approve      — human sign-off that syncs a real pilot to Twenty (Company+Person+Opportunity)  [approval gate]
   outreach.send_all     — dispatch the approved outreach sequences to prospects  [approval gate: send_sequence]
+  outreach.check_replies — check the sender's own inbox for a prospect's reply (no CRM write, no send)
 
 Per control-plane modules.yaml the gate is `approval_required: [send_sequence]` — nothing reaches a
 prospect without a human sign-off — so `outreach.send_all` carries approval_required=True and the
@@ -84,5 +85,13 @@ def build_outreach_operator() -> Operator:
             compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "sent email cannot be recalled"}, approval_required=True,
             permissions=["outreach:write"], estimated_value="high", latency_ms=800,
             concurrency_mode="exclusive", resource_keys=["outreach:send"],  # one dispatch run at a time
+        ),
+        capability(
+            "outreach.check_replies",
+            lambda inp: core.check_replies(inp),
+            provides=["reply_checked"],
+            outputs={"reply_checked": "whether a reply from the prospect was found in the sender's inbox"},
+            estimated_value="medium", deterministic=False, latency_ms=2000,
+            concurrency_mode="read_only",   # reads the sender's own mailbox only, no CRM write, no send
         ),
     ])

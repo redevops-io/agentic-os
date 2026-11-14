@@ -20,6 +20,7 @@ ROUTES = {
                         (P, "/agent/run", {"action": "refresh"}, "outreach.refresh", "route"), (P, "/api/run", {"action": "refresh"}, "outreach.refresh", "route"),
                         (P, "/agent/run", {"action": "enrich", "account": "x"}, "outreach.enrich", "route"),
                         (P, "/agent/run", {"action": "draft_pitch", "account": "x"}, "outreach.draft_pitch", "route"),
+                        (P, "/agent/run", {"action": "check_replies", "account": "x"}, "outreach.check_replies", "route"),
                         (P, "/agent/run", {"action": "approve", "account": "x"}, "outreach.approve", "route"),
                         (P, "/api/run", {"action": "send_all"}, "outreach.send_all", "route"),
                         (P, "/api/discover", {"instruction": "x"}, "outreach.discover", "route"), (G, "/api/synced", None, "outreach.synced", "route"),

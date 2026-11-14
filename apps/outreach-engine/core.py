@@ -484,6 +484,51 @@ def _sender():
     return None
 
 
+def _reader():
+    """The configured real reply reader (same Gmail App Password as the sender), or None when not wired."""
+    if GMAIL_SMTP_USER and GMAIL_SMTP_APP_PASSWORD:
+        from agentic_os.world.connectors import GmailIMAPConnector
+        return GmailIMAPConnector(GMAIL_SMTP_USER, GMAIL_SMTP_APP_PASSWORD)
+    return None
+
+
+def check_replies(body: dict | None = None) -> dict:
+    """Check the sender's own inbox for a reply from one account's (or every approved account's) contact
+    email. Read-only; never claims a reply exists without actually checking — with no reader configured,
+    or on an IMAP failure, it reports that honestly instead of guessing either way."""
+    body = body or {}
+    acct = body.get("account", "")
+    reader = _reader()
+    if reader is None:
+        return {"ok": False, "action": "check_replies", "reason": "no reader (IMAP) configured", "results": []}
+    if acct:
+        row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
+        targets = [row] if row else []
+        if row is None:
+            return {"ok": False, "action": "check_replies", "account": acct,
+                    "reason": "unknown account — refresh the pipeline first", "results": []}
+    else:
+        targets = [r for r in _STATE["accounts"] if r["account"] in _STATE["approved"]]
+    results = []
+    for row in targets:
+        to = row.get("contact_email")
+        if not to:
+            results.append({"account": row["account"], "replied": False,
+                            "reason": "no contact email on this lead — run `enrich` first"})
+            continue
+        res = reader.find_replies(to, limit=3)
+        replied = bool(res.get("ok")) and bool(res.get("replies"))
+        entry = {"account": row["account"], "replied": replied}
+        if replied:
+            row["replied"] = True
+            row["reply"] = res["replies"][0]
+            entry["reply"] = res["replies"][0]
+        elif not res.get("ok"):
+            entry["reason"] = res.get("error", "reply check failed")
+        results.append(entry)
+    return {"ok": True, "action": "check_replies", "results": results}
+
+
 def send_all(body: dict | None = None) -> dict:
     """Dispatch every approved outreach sequence to its prospect (the human-gated send).
 

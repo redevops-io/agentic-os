@@ -8,7 +8,7 @@ demo tenant used across the agentic apps. Sends are approval-gated.
   GET  /health        -> {"status","core":"twenty","connected": <Twenty /healthz>}
   GET  /api/pipeline  -> ranked accounts + picked play + drafted opener + approval state
   GET  /              -> MD3 dashboard (source, rank, draft, approve — the GUI)
-  POST /agent/run     -> {"action":"refresh"|"enrich"|"draft_pitch"|"approve"|"send_all", "account": "..."}
+  POST /agent/run     -> {"action":"refresh"|"enrich"|"draft_pitch"|"approve"|"send_all"|"check_replies", "account": "..."}
 
 Config (env): TWENTY_URL · TWENTY_API_KEY · REDEVOPS_LLM_BASE_URL (in-boundary model; none => deterministic) ·
 OPERATOR_BASIC_AUTH / OUTREACH_BASIC_AUTH (`user:pass`; approve / send_all execute only for the operator) ·
@@ -90,11 +90,13 @@ def api_pipeline(live: int = 1):
 
 
 _TOOL_OF = {"refresh": "outreach.refresh", "enrich": "outreach.enrich",
-            "approve": "outreach.approve", "send_all": "outreach.send_all"}
+            "approve": "outreach.approve", "send_all": "outreach.send_all",
+            "check_replies": "outreach.check_replies"}
 _ACTIONS = {"refresh": core.refresh,
             "enrich": core.enrich,          # read-only: resolves + attaches a verified email, no approval needed
             "approve": core.approve,        # gated INSIDE core: staged unless `_approval` (human sign-off → Twenty sync)
-            "send_all": core.send_all}      # gated INSIDE core
+            "send_all": core.send_all,      # gated INSIDE core
+            "check_replies": core.check_replies}  # read-only: reads the sender's own inbox, no approval needed
 
 
 def _run_action(action: str, body: dict, authorization: "str | None") -> "dict | None":
