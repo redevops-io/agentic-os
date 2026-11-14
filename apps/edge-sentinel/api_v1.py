@@ -375,9 +375,18 @@ def verification(request_id: str, p: Principal = Depends(viewer)):
     return {"request_id": request_id, "verification": a["verification"], "receipt": a["receipt"]}
 
 
+def _strip_approval(obj):
+    """Drop every caller-supplied `_approval*` / `__approval*` key (any case), recursively: only the runtime and verified tokens create approvals."""
+    if isinstance(obj, dict):
+        return {k: _strip_approval(v) for k, v in obj.items() if not (isinstance(k, str) and k.lstrip("_").lower().startswith("approval"))}
+    if isinstance(obj, list):
+        return [_strip_approval(v) for v in obj]
+    return obj
+
+
 async def _json(request: Request):
     try:
-        return await request.json()
+        return _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         return {}
 
