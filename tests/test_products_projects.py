@@ -121,7 +121,7 @@ def test_decide_then_execute_are_two_human_steps_attributed_to_the_linked_user_a
     assert fake.executions == 0                                                  # approve never executes
     r = c.post(f"/api/products/edge-sentinel/actions/{ACT}/execute", json={"digest": card["digest"]})
     assert r.status_code == 200 and r.json()["result"]["verification"]["state"] == "dry_run"
-    assert fake.executions == 1 and fake.actions[ACT]["state"] == "EXECUTED"
+    assert fake.executions == 1 and fake.actions[ACT]["state"] == "APPROVED" and fake.actions[ACT]["verification"]["state"] == "dry_run"   # the product keeps a dry run executable
     again = c.post(f"/api/products/edge-sentinel/actions/{ACT}/execute", json={"digest": card["digest"]})
     assert again.status_code == 409 and fake.executions == 1                      # once
     redo = c.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": card["digest"]})

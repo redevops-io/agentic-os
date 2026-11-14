@@ -199,8 +199,8 @@ class FakeSentinel:
                         return self._send(409, {"error": "conflict", "detail": "not approved"})
                     with fake.lock:
                         fake.executions += 1
-                    a["state"] = "EXECUTED"
-                    a["attempts"] += 1
+                    a["state"] = "APPROVED" if fake.dry_run else "EXECUTED"      # a dry run leaves the action executable (as the product does)
+                    a["attempts"] += 0 if fake.dry_run else 1
                     a["receipt"] = {"receipt_id": "rcpt-0123456789abcdef", "status": "DRY_RUN" if fake.dry_run else "SUCCEEDED"}
                     a["verification"] = ({"state": "dry_run", "detail": "dry run", "at": "2026-11-13T12:05:00Z"} if fake.dry_run else
                                          {"state": "verified" if fake.verify_ok else "unverified", "detail": "read back from LAPI",
