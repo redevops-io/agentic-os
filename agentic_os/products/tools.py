@@ -49,9 +49,9 @@ _TOOLS: Tuple[Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, 
      (), ("state", "limit", "cursor"), ()),
     ("security.sentinel_propose_ban", "security", "Propose an IP ban in Edge Sentinel. Creates a proposal awaiting a person's approval; nothing is blocked.",
      ("propose ban", "ban ip", "block ip", "propose a ban", "block address"), ("ip", "reason"),
-     ("duration_hours", "case_id"), ("request_ban_approval",)),
+     ("duration_hours",), ("request_ban_approval",)),
     ("security.sentinel_propose_unban", "security", "Propose lifting an IP ban in Edge Sentinel. Creates a proposal awaiting a person's approval.",
-     ("propose unban", "unban ip", "lift ban", "unblock ip", "remove ban"), ("ip", "reason"), ("case_id",),
+     ("propose unban", "unban ip", "lift ban", "unblock ip", "remove ban"), ("ip", "reason"), (),
      ("request_unban_approval",)),
     ("security.sentinel_request_decision", "security", "Show the approval card of an Edge Sentinel proposal. Makes no decision.",
      ("approval card", "request decision", "show approval", "what needs approval security"), ("request_id",), (), ()),
@@ -157,18 +157,19 @@ class ProductTools:
     def _sentinel_posture(self, spec, inp, who):
         p = self.hub.sentinel(spec.id).posture(actor=who, source="sidekick")
         bans = p.get("decisions_active", p.get("active_bans"))
-        alerts = p.get("alerts_24h", p.get("alerts"))
+        alerts = p.get("alerts_total", p.get("alerts_24h", p.get("alerts")))
         parts = []
         if bans is not None:
             parts.append(f"{bans} active ban decision(s)")
         if alerts is not None:
-            parts.append(f"{alerts} alert(s) in the last 24 h")
+            parts.append(f"{alerts} alert(s) held by CrowdSec")
         sev = _fmt_counts(p.get("by_severity"))
         if sev:
             parts.append(f"by severity: {sev}")
-        mode = p.get("mode") if isinstance(p.get("mode"), Mapping) else {}
+        mode = p.get("mode") if isinstance(p.get("mode"), Mapping) else \
+            ((self.hub.status(spec.id).get("info") or {}).get("mode") or {})
         tail = []
-        if p.get("crowdsec_connected") is False:
+        if p.get("crowdsec_connected") is False or p.get("connected") is False:
             tail.append("CrowdSec is not connected")
         if mode.get("demo"):
             tail.append("demo mode: synthetic data, side effects refused")
@@ -193,8 +194,10 @@ class ProductTools:
 
     def _sentinel_get_case(self, spec, inp, who):
         c = self.hub.sentinel(spec.id).case(inp["case_id"], actor=who, source="sidekick")
-        acts = c.get("actions") if isinstance(c.get("actions"), list) else []
-        ans = f"Case {inp['case_id']}: {c.get('title') or c.get('case_type') or ''} [{c.get('severity', '?')}/{c.get('status', '?')}], " \
+        acts = c.get("actions_detail") if isinstance(c.get("actions_detail"), list) else \
+            (c.get("actions") if isinstance(c.get("actions"), list) else [])
+        summ = c.get("summary") if isinstance(c.get("summary"), Mapping) else c
+        ans = f"Case {inp['case_id']}: {summ.get('title') or summ.get('case_type') or ''} [{summ.get('severity', '?')}/{summ.get('status', '?')}], " \
               f"{len(acts)} action(s)" + (": " + "; ".join(f"{a.get('request_id')} {a.get('state')}" for a in acts[:5]) if acts else "") + "."
         return CapabilityResult(capability_id="security.sentinel_get_case", answer=ans, data={
             "product": spec.id, "case": c, "executed": False}, evidence=(inp["case_id"],),
@@ -213,12 +216,9 @@ class ProductTools:
 
     def _propose(self, spec, inp, who, capability: str, cap_id: str):
         r = self.hub.sentinel(spec.id).propose(capability=capability, ip=inp["ip"], reason=inp["reason"],
-                                               duration_hours=inp.get("duration_hours"), case_id=inp.get("case_id", ""),
-                                               actor=who, source="sidekick")
+                                               duration_hours=inp.get("duration_hours"), actor=who, source="sidekick")
         rid = str(r.get("request_id") or "")
-        a = r
-        if rid and not r.get("digest"):
-            a = self.hub.sentinel(spec.id).action(rid, actor=who, source="sidekick")
+        a = self.hub.with_mode(spec.id, self.hub.sentinel(spec.id).action(rid, actor=who, source="sidekick")) if rid else r
         card = sn.approval_card(spec, a) if rid else None
         self.hub.invalidate(spec.id)
         ans = (f"Proposed {'lifting the ban of' if capability == sn.CAP_UNBAN else 'a ban of'} {inp['ip']} "

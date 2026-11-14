@@ -45,7 +45,7 @@ def _ago(checked_at: float) -> str:
 def _actions(hub: ProductHub, spec: ProductSpec) -> List[Mapping[str, Any]]:
     def fetch():
         r = hub.sentinel(spec.id).actions(limit=MAX_ROWS, actor="projects:projection", source="projects")
-        return [a for a in (r.get("items") or []) if isinstance(a, Mapping)] if isinstance(r, Mapping) else []
+        return [hub.with_mode(spec.id, a) for a in (r.get("items") or []) if isinstance(a, Mapping)] if isinstance(r, Mapping) else []
     return hub.cached(f"{spec.id}:actions", fetch)
 
 
@@ -219,7 +219,7 @@ def product_mission_detail(hub: ProductHub, mission_id: str) -> Optional[Dict[st
         return None
     try:
         if spec.kind == "security":
-            a = hub.sentinel(pid).action(rec, actor="projects:projection")
+            a = hub.with_mode(pid, hub.sentinel(pid).action(rec, actor="projects:projection"))
             ctx: List[Dict[str, Any]] = []
             if a.get("case_id"):
                 try:
@@ -264,7 +264,7 @@ def _today_state(a: Mapping[str, Any]) -> Tuple[str, str]:
     if st == "EXECUTED":
         if vs in ("verified", "dry_run"):
             return "verified", sn.verification_line(a)
-        if vs == "unverified":
+        if vs in ("unverified", "failed"):
             return "failed", sn.verification_line(a)
         return "waiting", "Executed; the read-back has not been recorded yet."
     if st == "FAILED":
@@ -453,7 +453,7 @@ class ProductProjectionsMixin:
             raise TodayError(401, "principal_required", "Sign in to Projects so the product can attribute your decision.")
         expected = str(kw.get("expected_digest") or "")
         try:
-            a = hub.sentinel(spec.id).action(rid, actor=f"projects:{principal}")
+            a = hub.with_mode(spec.id, hub.sentinel(spec.id).action(rid, actor=f"projects:{principal}"))
             st = str(a.get("state"))
             if st == "AWAITING_APPROVAL":
                 if expected != phase_digest(a):
@@ -466,7 +466,7 @@ class ProductProjectionsMixin:
                 approvals.sentinel_execute(hub, spec.id, rid, digest=str(a.get("digest")), principal=principal)
             else:
                 raise TodayError(409, "not_actionable", f"the action is {st.lower()}; nothing to approve")
-            a2 = hub.sentinel(spec.id).action(rid, actor=f"projects:{principal}")
+            a2 = hub.with_mode(spec.id, hub.sentinel(spec.id).action(rid, actor=f"projects:{principal}"))
         except ProductError as e:
             status = e.status or (503 if e.unavailable else 409)
             raise TodayError(status if status in (401, 403, 404, 409, 422, 503) else 409, e.code,

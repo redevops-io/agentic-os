@@ -113,7 +113,7 @@ def _card(c):
 def test_decide_then_execute_are_two_human_steps_attributed_to_the_linked_user_and_execute_once(stack):
     fake, c, *_ = stack
     card = _card(c)
-    assert card["kind"] == "approval" and card["digest"].startswith("sha256:") and card["record"]["request_id"] == ACT
+    assert card["kind"] == "approval" and len(card["digest"]) == 64 and card["record"]["request_id"] == ACT
     r = c.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": card["digest"]})
     assert r.status_code == 200, r.text
     a = fake.actions[ACT]
@@ -133,7 +133,7 @@ def test_decide_then_execute_are_two_human_steps_attributed_to_the_linked_user_a
 def test_the_service_credential_is_never_the_approval_and_a_token_is_bound_to_the_exact_digest(stack):
     fake, c, *_ = stack
     card = _card(c)
-    wrong = "sha256:" + "0" * 64
+    wrong = "0" * 64
     r = c.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": wrong})
     assert r.status_code == 409 and r.json()["detail"]["error"] == "stale_approval"
     assert fake.actions[ACT]["state"] == "AWAITING_APPROVAL"
@@ -203,7 +203,7 @@ def test_production_profile_refuses_an_unauthenticated_decision_before_the_handl
     mp.setenv("AGENTIC_OS_REPLAY_DB", str(tp / "replay.db"))
     mp.setenv("AGENTIC_OS_CONTROL_TOKEN", "admin-token")
     c2 = TestClient(create_app(SampleProjectionProvider()), raise_server_exceptions=False)
-    card = {"digest": "sha256:" + "1" * 64}
+    card = {"digest": "1" * 64}
     r = c2.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": card["digest"]})
     assert r.status_code in (401, 403) and not any(x["path"].endswith("/decision") for x in fake.calls)
 

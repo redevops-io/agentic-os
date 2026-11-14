@@ -25,7 +25,7 @@ ACT = "act-0123456789abcdef"
 
 
 def digest_of(params: Dict[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
 
 
 class FakeSentinel:
@@ -57,8 +57,7 @@ class FakeSentinel:
                                                                 "source": "crowdsec", "acquired_at": "2026-11-13T11:59:00Z"}]}
         self.actions[rid] = {"request_id": rid, "case_id": cid, "capability": "sentinel.block_ip", "params": params,
                              "digest": digest_of({"c": "sentinel.block_ip", **params}), "state": "AWAITING_APPROVAL",
-                             "attempts": 0, "decision": None, "receipt": None, "verification": None,
-                             "mode": {"dry_run": self.dry_run}}
+                             "attempts": 0, "decision": None, "receipt": None, "verification": None}
         self._chg("action.proposed", case_id=cid, request_id=rid)
 
     # ── http ─────────────────────────────────────────────────────────────────────────────────────
@@ -101,9 +100,8 @@ class FakeSentinel:
                                             "unavailable": [{"feature": "hunt", "code": "NOT_WIRED",
                                                              "reason": "module present, no route yet", "remedy": ""}]})
                 if p == "/api/v1/posture":
-                    return self._send(200, {"decisions_active": 2, "alerts_24h": 7, "by_severity": {"high": 3, "low": 4},
-                                            "crowdsec_connected": True, "mode": {"demo": False, "dry_run": fake.dry_run},
-                                            "source": "live"})
+                    return self._send(200, {"decisions_active": 2, "alerts_total": 7, "by_severity": {"high": 3, "low": 4},
+                                            "connected": True, "source": "live"})
                 if p == "/api/v1/cases":
                     return self._send(200, {"items": list(fake.cases.values()), "next_cursor": None})
                 if p.startswith("/api/v1/cases/"):
@@ -111,7 +109,9 @@ class FakeSentinel:
                     c = fake.cases.get(cid)
                     if not c:
                         return self._send(404, {"error": "not_found", "detail": "no such case"})
-                    return self._send(200, {**c, "actions": [a for a in fake.actions.values() if a["case_id"] == cid]})
+                    acts = [a for a in fake.actions.values() if a["case_id"] == cid]
+                    return self._send(200, {"case": c, "evidence": c.get("evidence", []), "actions": acts, "actions_detail": acts,
+                                            "summary": {k: c[k] for k in ("case_id", "severity", "status", "title", "case_type")}})
                 if p == "/api/v1/actions":
                     items = [a for a in fake.actions.values() if not q.get("state") or a["state"] == q["state"]]
                     return self._send(200, {"items": items[::-1], "next_cursor": None})
@@ -124,7 +124,7 @@ class FakeSentinel:
                     a = fake.actions.get(p.rsplit("/", 1)[1])
                     if not a:
                         return self._send(404, {"error": "not_found", "detail": "no such action"})
-                    return self._send(200, a)
+                    return self._send(200, {**a, "mode": {"dry_run": fake.dry_run, "demo": False}})
                 if p == "/api/v1/changes":
                     after = int(q.get("after", 0))
                     return self._send(200, {"items": [c for c in fake.changes if c["seq"] > after], "head": len(fake.changes)})
@@ -140,28 +140,30 @@ class FakeSentinel:
                 decision_route = p.endswith("/decision") or p.endswith("/execute")
                 if not self._auth(decision=decision_route):
                     return
-                if p in ("/api/v1/cases",) or (p.startswith("/api/v1/cases/") and p.endswith("/actions")):
+                if p == "/api/v1/cases":
                     ip = body.get("ip", "")
                     import ipaddress
                     try:
                         ipaddress.ip_address(ip)
                     except ValueError:
-                        return self._send(422, {"error": "invalid", "detail": "not an IP address", "field": "ip"})
+                        return self._send(422, {"error": "refused", "message": "not an IP address"})
                     if ip == "127.0.0.1":
-                        return self._send(422, {"error": "invalid", "detail": "protected address", "reason": "ipguard: protected"})
+                        return self._send(422, {"error": "refused", "message": "protected address"})
+                    if body.get("type") not in ("manual_block", "manual_unblock"):
+                        return self._send(422, {"error": "invalid_type", "message": "type"})
                     n_ = len(fake.actions) + 1
-                    cid = p.split("/")[4] if p.startswith("/api/v1/cases/") else f"case-{n_:016x}"
+                    cid = f"case-{n_:016x}"
                     rid = f"act-{n_:016x}"
-                    params = {"ip": ip, "duration_hours": body.get("duration_hours", 4)}
-                    if cid not in fake.cases:
-                        fake.cases[cid] = {"case_id": cid, "severity": "medium", "status": "OPEN", "title": f"manual: {body.get('reason', '')}",
-                                           "case_type": "manual_block", "evidence": []}
-                    cap = body.get("capability", "sentinel.block_ip")
+                    hours = int(str(body.get("duration", "4h")).rstrip("h") or 4)
+                    params = {"ip": ip, "duration_hours": hours}
+                    fake.cases[cid] = {"case_id": cid, "severity": "medium", "status": "OPEN", "title": f"manual: {body.get('reason', '')}",
+                                       "case_type": body["type"], "evidence": []}
+                    cap = "sentinel.block_ip" if body["type"] == "manual_block" else "sentinel.unblock_ip"
                     fake.actions[rid] = {"request_id": rid, "case_id": cid, "capability": cap, "params": params,
                                          "digest": digest_of({"c": cap, **params}), "state": "AWAITING_APPROVAL", "attempts": 0,
-                                         "decision": None, "receipt": None, "verification": None, "mode": {"dry_run": fake.dry_run}}
+                                         "decision": None, "receipt": None, "verification": None}
                     fake._chg("action.proposed", case_id=cid, request_id=rid, actor=self.headers.get("X-Acting-User", ""))
-                    return self._send(201, {"case_id": cid, "request_id": rid, "state": "AWAITING_APPROVAL"})
+                    return self._send(201, {"case_id": cid, "request_id": rid, "state": "AWAITING_APPROVAL", "digest": fake.actions[rid]["digest"]})
                 parts = p.split("/")
                 if len(parts) == 8 and parts[3] == "cases" and parts[5] == "actions":
                     cid, rid, verb = parts[4], parts[6], parts[7]

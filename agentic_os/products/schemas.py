@@ -123,10 +123,9 @@ INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "state": {"type": "string", "enum": ["AWAITING_APPROVAL", "APPROVED", "EXECUTED", "FAILED", "REJECTED"]},
         "limit": _LIMIT, "cursor": _s(CURSOR)}),
     "security.sentinel_propose_ban": _obj({
-        "ip": _IP, "duration_hours": {"type": "integer", "minimum": 1, "maximum": 8760},
-        "reason": _s(maxLength=200, minLength=1), "case_id": _s(CASE_ID)}, ("ip", "reason")),
-    "security.sentinel_propose_unban": _obj({"ip": _IP, "reason": _s(maxLength=200, minLength=1),
-                                             "case_id": _s(CASE_ID)}, ("ip", "reason")),
+        "ip": _IP, "duration_hours": {"type": "integer", "minimum": 1, "maximum": 720},
+        "reason": _s(maxLength=200, minLength=1)}, ("ip", "reason")),
+    "security.sentinel_propose_unban": _obj({"ip": _IP, "reason": _s(maxLength=200, minLength=1)}, ("ip", "reason")),
     "security.sentinel_request_decision": _obj({"request_id": _s(ACTION_ID)}, ("request_id",)),
     "security.sentinel_read_back": _obj({"request_id": _s(ACTION_ID)}, ("request_id",)),
     "quality.qa_info": _obj({}),

@@ -21,7 +21,7 @@ from .principal import current_principal
 from .schemas import ACTION_ID, RUN_ID
 
 _PID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
-_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_DIGEST = re.compile(r"^(sha256:)?[0-9a-f]{64}$")      # the product's own digest, as it reports it
 
 PRODUCT_ROUTE_POLICIES = {
     "POST /api/products/{product_id}/actions/{request_id}/decision": P(
@@ -107,7 +107,7 @@ def make_router(hub: ProductHub) -> APIRouter:
         extra = set(body) - {"approved", "digest", "rationale"}
         if extra or not isinstance(approved, bool) or not isinstance(digest, str) or not _DIGEST.match(digest) \
                 or not isinstance(body.get("rationale", ""), str) or len(body.get("rationale", "")) > 200:
-            raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, digest: sha256:<hex>, rationale?: str<=200}"})
+            raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, digest: <64 hex>, rationale?: str<=200}"})
         principal = _require_principal(hub)
         try:
             out = approvals.sentinel_decision(hub, product_id, request_id, approved=approved, digest=digest,
@@ -124,7 +124,7 @@ def make_router(hub: ProductHub) -> APIRouter:
             raise HTTPException(404, {"error": "not_found", "detail": "unknown action"})
         digest = body.get("digest")
         if set(body) - {"digest"} or not isinstance(digest, str) or not _DIGEST.match(digest):
-            raise HTTPException(422, {"error": "invalid", "detail": "body must be {digest: sha256:<hex>}"})
+            raise HTTPException(422, {"error": "invalid", "detail": "body must be {digest: <64 hex>}"})
         principal = _require_principal(hub)
         try:
             out = approvals.sentinel_execute(hub, product_id, request_id, digest=digest, principal=principal)
@@ -142,7 +142,7 @@ def make_router(hub: ProductHub) -> APIRouter:
         if set(body) - {"approved", "estimate_digest", "rationale"} or not isinstance(approved, bool) \
                 or not isinstance(digest, str) or not _DIGEST.match(digest) \
                 or not isinstance(body.get("rationale", ""), str) or len(body.get("rationale", "")) > 200:
-            raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, estimate_digest: sha256:<hex>, rationale?: str<=200}"})
+            raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, estimate_digest: <64 hex>, rationale?: str<=200}"})
         principal = _require_principal(hub)
         try:
             out = approvals.qa_approval(hub, product_id, run_id, approved=approved, estimate_digest=digest,
