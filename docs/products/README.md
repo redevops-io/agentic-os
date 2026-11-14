@@ -63,7 +63,7 @@ The principal is never taken from a request body. It is the desktop session (`lo
 
 ## Gates
 
-The redevops-qa tools, the QA projection and the QA catalog entry are enabled only when P2-1 acceptance criteria AC-1 to AC-12 pass in CI on the loopback Edge Sentinel fixture target (owner decision of 2026-11-11). The gate is the code constant `QA_EXTERNAL_TARGET_ACCEPTANCE_MET` in `agentic_os/products/gates.py`: no environment variable, registry key or request opens it. While it is false, every quality surface reports `unavailable: external-target acceptance not met`, the product is never called, and a test asserts `modules.yaml` lists `redevops-qa` only when the gate is open. The redevops-qa standalone UI for the bundled fixture target is not gated.
+The redevops-qa tools, the QA projection and the QA catalog entry are enabled only when P2-1 acceptance criteria AC-1 to AC-12 pass in CI on the loopback Edge Sentinel fixture target (owner decision of 2026-11-11). The gate is the code constant `QA_EXTERNAL_TARGET_ACCEPTANCE_MET` in `agentic_os/products/gates.py`: no environment variable, registry key or request opens it. While it is false, every quality surface reports `unavailable: external-target acceptance not met`, the product is never called, and a test asserts `modules.yaml` lists `redevops-qa` only when the gate is open. The redevops-qa standalone UI for the bundled fixture target is not gated. Current state on this line: OPEN — the constant was flipped with the CI evidence cited in its comment (redevops-qa `tests` run 43551629834 on `main` @ `9e495bdf`, AC-1 to AC-12 green); `products.example.yaml` therefore lists `redevops-qa` uncommented.
 
 ## Tier A and Tier B
 
