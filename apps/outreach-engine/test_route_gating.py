@@ -69,6 +69,9 @@ def _env(monkeypatch):
     core._LIVE_CACHE.update(ts=0.0, rows=[])
     monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
     monkeypatch.setattr(core.urllib.request, "urlopen", _urlopen)
+    # hermetic against this machine's real ~/.zshrc exports: no test may attempt a real SMTP connection
+    monkeypatch.setattr(core, "GMAIL_SMTP_USER", "")
+    monkeypatch.setattr(core, "GMAIL_SMTP_APP_PASSWORD", "")
     monkeypatch.setenv("OPERATOR_BASIC_AUTH", CRED)
     monkeypatch.delenv("OUTREACH_BASIC_AUTH", raising=False)
     monkeypatch.setattr(app_mod, "_llm", lambda *a, **k: "")
