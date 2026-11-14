@@ -3,7 +3,7 @@
 #   probes -> every non-probe route refuses an anonymous request -> a detection (a CrowdSec alert) becomes a case ->
 #   the operator approves and executes -> a receipt and a verification are returned -> the container is restarted and the
 #   decision and case status are still there.
-# It adds ONE test alert/decision for 203.0.113.250 (documentation range) to CrowdSec. With SENTINEL_BLOCK_ENABLED unset the
+# It adds ONE test alert/decision for an address in 203.0.113.150-249 (documentation range; SMOKE_IP overrides) to CrowdSec. With SENTINEL_BLOCK_ENABLED unset the
 # execution is a dry run and nothing is banned; with it set (and SENTINEL_BLOCK_ALLOW_NETWORKS covering 203.0.113.0/24) the
 # ban is real, and is lifted again at the end.
 #   usage: ./smoke.sh            (from this directory, after ./bootstrap.sh)
@@ -18,7 +18,8 @@ BASE="${SMOKE_BASE:-http://127.0.0.1:${PORT}}"
 PW="${SMOKE_PASSWORD:-$(cat secrets/operator_password)}"
 CSCLI="${SMOKE_CROWDSEC:-docker compose exec -T crowdsec}"
 RESTART="${SMOKE_RESTART:-docker compose restart edge-sentinel}"
-IP=203.0.113.250
+# a fresh address per run (documentation range): a re-run against the same stack opens a NEW case instead of meeting the previous run's
+IP="${SMOKE_IP:-203.0.113.$((150 + $(od -An -N1 -tu1 /dev/urandom | tr -d ' ') % 100))}"
 ok() { echo "PASS  $*"; }
 bad() { echo "FAIL  $*" >&2; exit 1; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
