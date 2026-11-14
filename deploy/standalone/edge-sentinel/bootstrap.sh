@@ -30,7 +30,10 @@ $COMPOSE exec -T crowdsec cscli bouncers delete edge-sentinel >/dev/null 2>&1 ||
 $COMPOSE exec -T crowdsec cscli bouncers add edge-sentinel --key "$(cat secrets/crowdsec_bouncer_key)" >/dev/null 2>&1 \
   || { echo "registering the bouncer key failed (run: $COMPOSE logs crowdsec)" >&2; exit 1; }
 # cscli echoes the credentials it registers on stderr; neither stream may reach a terminal or a CI log
-$COMPOSE exec -T crowdsec cscli machines add edge-sentinel --password "$(cat secrets/crowdsec_machine_password)" -f - --force >/dev/null 2>&1 \
+# `-f -` makes cscli read its definition from standard input: with no redirect it waits for a terminal here and the script hangs
+# (observed 2026-11-14 running the published one-time command `./bootstrap.sh` on macOS with Docker Desktop: CrowdSec reached
+# healthy, then the script blocked on this line forever). Close stdin; the password flag carries the credential.
+$COMPOSE exec -T crowdsec cscli machines add edge-sentinel --password "$(cat secrets/crowdsec_machine_password)" -f - --force < /dev/null >/dev/null 2>&1 \
   || { echo "registering the watcher login failed (run: $COMPOSE logs crowdsec)" >&2; exit 1; }
 
 $COMPOSE up -d
