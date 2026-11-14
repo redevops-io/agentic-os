@@ -62,8 +62,9 @@ CROWDSEC_FRONT_URL = os.environ.get("CROWDSEC_FRONT_URL", "http://localhost:8086
 # any `sudo` in it strictly non-interactive (-n), so it can only ever fail fast, never prompt.
 DOCKER_CMD = os.environ.get("DOCKER_CMD", "docker").split()
 
-# The label shown in the dashboard. The default is the reference demo tenant; a deployment names its own organisation.
-TENANT = os.environ.get("SENTINEL_TENANT", "").strip()[:80] or "Meridian Wealth Management"
+# The organisation name the operator sets for this deployment (SENTINEL_TENANT, 80 characters at most). There is no default:
+# an unset name shows nothing rather than a fictional company.
+TENANT = os.environ.get("SENTINEL_TENANT", "").strip()[:80]
 SUBTITLE = "Network security & systems, triaged and explained by an agent — on a real CrowdSec core, with a human in the loop before any block."
 
 

@@ -25,7 +25,7 @@
     { "name": "CROWDSEC_MACHINE_ID", "owner": "edge-sentinel", "default": "", "purpose": "CrowdSec watcher (machine) login name; with the password it moves the alert read and the ban write onto the LAPI (no docker)." },
     { "name": "CROWDSEC_MACHINE_PASSWORD", "owner": "edge-sentinel", "default": "", "purpose": "Password of the CrowdSec watcher login; also accepted from CROWDSEC_MACHINE_PASSWORD_FILE." },
     { "name": "SENTINEL_REQUIRE_AUTH", "owner": "edge-sentinel", "default": "off", "purpose": "Standalone profile: every route except /health and /readyz needs the operator credential, and startup is refused without one." },
-    { "name": "SENTINEL_TENANT", "owner": "edge-sentinel", "default": "Meridian Wealth Management", "purpose": "Organisation name shown in the dashboard; the default is the reference demo tenant." },
+    { "name": "SENTINEL_TENANT", "owner": "edge-sentinel", "default": "", "purpose": "Organisation name shown in the dashboard; unset shows no name." },
     { "name": "WAZUH_TLS_VERIFY", "owner": "edge-sentinel", "default": "on", "purpose": "Certificate verification for the Wazuh API; a path uses that CA bundle, `off` skips verification and is labelled as such." },
     { "name": "DOCKER_CMD", "owner": "edge-sentinel", "default": "docker", "purpose": "Docker command prefix for cscli exec. An operator escalation wrapper must use sudo -n: the app enforces that instead of ever prompting on a request path." },
     { "name": "REDEVOPS_LLM_BASE_URL", "owner": "agentic-os", "default": "", "purpose": "OpenAI-compatible endpoint for the optional triage narration. Empty means no model call at all. The kernel also requires the host to be private, loopback or link-local (or allowlisted) and treats it as absent otherwise." },

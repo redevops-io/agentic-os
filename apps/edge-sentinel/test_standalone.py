@@ -353,13 +353,18 @@ def test_the_same_live_alert_read_twice_is_one_case_even_though_its_decision_dur
     assert detail["replay"]["deterministic"] is True
 
 
-def test_a_signed_in_standalone_dashboard_names_its_tenant_and_does_not_wear_the_demo_pill(gated, monkeypatch):
+def test_a_signed_in_standalone_dashboard_shows_no_fictional_tenant_and_no_demo_pill(gated, monkeypatch):
     html = gated.get("/", auth=CRED).text
     assert "CONTEXT RUNTIME" in html and ">DEMO<" not in html
+    assert "Meridian" not in html and "demo tenant" not in html          # no fictional company by default
+    assert "<title>Edge Sentinel</title>" in html
     monkeypatch.delenv("SENTINEL_REQUIRE_AUTH")
-    assert ">DEMO<" in TestClient(app_mod.app).get("/").text            # the reference page is unchanged
-    monkeypatch.setenv("SENTINEL_TENANT", "Acme Security")
+    assert ">DEMO<" in TestClient(app_mod.app).get("/").text            # the reference page keeps its banner
+    monkeypatch.setattr(app_mod, "TENANT", "Acme Security")             # the operator-set name appears where the name belongs
+    page = TestClient(app_mod.app).get("/").text
+    assert "<title>Edge Sentinel — Acme Security</title>" in page and "<b>Acme Security</b>" in page
+    monkeypatch.setenv("SENTINEL_TENANT", "  " + "x" * 100)
     import importlib as _il
-    assert _il.reload(core).TENANT == "Acme Security"
+    assert len(_il.reload(core).TENANT) == 80
     monkeypatch.delenv("SENTINEL_TENANT")
-    assert _il.reload(core).TENANT == "Meridian Wealth Management"
+    assert _il.reload(core).TENANT == ""
