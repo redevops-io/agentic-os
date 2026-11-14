@@ -105,7 +105,11 @@ jobs:
             -e SENTINEL_BASIC_AUTH_USER=operator -e SENTINEL_BASIC_AUTH_PASS="$PW" "$IMG"
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:18203/readyz >/dev/null && break; sleep 2; done
           curl -sf http://127.0.0.1:18203/readyz
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18203/)" = 401 ]
+          # The standalone image serves the browser console by default (SENTINEL_UI=1), so '/' redirects (302) to
+          # '/ui/' rather than answering 401 itself; the console's own sign-in page is reachable anonymously (200)
+          # and enforces auth on its API calls. The security property this gate checks is that a real API route
+          # refuses an anonymous request and accepts the operator credential, not the status code of '/'.
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18203/api/cases)" = 401 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' -u "operator:${PW}" http://127.0.0.1:18203/api/cases)" = 200 ]
           docker rm -f smoke >/dev/null
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
