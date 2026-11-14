@@ -34,6 +34,16 @@ def test_pitch_visual_html_omits_traction_bar_without_stars():
     assert "Project traction" not in out
 
 
+def test_pitch_visual_html_bars_are_fluid_not_fixed_width():
+    # a fixed-px bar overflows a narrow viewport (found recording the outreach dashboard at phone
+    # width): the bar track must scale with its cell, not a hardcoded pixel width.
+    out = core.pitch_visual_html({"signal": "tech_pain", "source": "github", "stars": 2500})
+    assert '<td style="width:220px">' not in out       # the old, overflowing fixed-width cell
+    assert '<td style="width:100%">' in out
+    assert "width:100%;max-width:220px" in out
+    assert "width:100%;max-width:400px" in out  # the table itself is fluid too
+
+
 def test_render_pitch_html_escapes_text_and_includes_the_real_link():
     row = {"url": "https://github.com/acme/repo", "signal": "cold", "source": "manual"}
     out = core.render_pitch_html("subj", "Hi <there> & welcome.\n\nSecond para.", row)
