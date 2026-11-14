@@ -1178,6 +1178,13 @@ def sidekick_reply(ctx: Dict[str, Any], text: str,
             return {"text": surf.get("summary", ""), "topic": "Priorities",
                     "items": surf.get("surfaced", []),
                     "actions": [{"label": "Open Projects", "kind": "navigate", "ref": "attention"}]}
+    # Standalone products: a product-related message becomes a typed tool call (read, or a proposal that awaits a
+    # person), or a question for the missing input. None => unchanged behaviour (no products, or not about one).
+    if provider is not None:
+        from agentic_os.products import sidekick_hook as _product_hook
+        reply = _product_hook(provider, ctx, text)
+        if reply is not None:
+            return reply
     if "two approver" in t or "$500" in t:
         return {"text": f"Proposed on {obj}: refunds above $500 require two approvers. Governed policy change — confirm to commit.",
                 "actions": [{"label": "Confirm", "kind": "commit"}]}
@@ -1597,6 +1604,10 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         close_on_shutdown(app, desktop)                         # the end of the process revokes every registration
         if hasattr(prov, "session_source_view"):
             prov.session_source_view = desktop.current_projections
+    # Standalone products (Edge Sentinel, redevops-qa): a pure addition, active only when $AGENTIC_OS_PRODUCTS names a
+    # registry. It layers real product rows over the provider and adds the product routes (before the UI mount below).
+    from agentic_os.products import mount_products as _mount_products
+    prov, _product_policies = _mount_products(app, prov)
     # Same-origin only by default (the bundled UI is served from this app, so it needs no CORS). Cross-origin
     # access is opt-in: `allow_origins=` or $PROJECTS_CORS_ORIGINS (comma-separated origins).
     origins = allow_origins or [o.strip() for o in _os_env.environ.get("PROJECTS_CORS_ORIGINS", "").split(",")
@@ -1895,6 +1906,8 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         # overlaying the provider's live connection set; else the sample provider (also stateful).
         guided = apps_from_setup_guides(getattr(prov, "connected", None))
         apps = guided if guided is not None else prov.apps(project_id)
+        from agentic_os.products import extend_apps as _extend_apps
+        apps = _extend_apps(prov, apps)             # product rows (health, capabilities, why-unavailable); a no-op without products
         # Offer only the deployment's enabled apps ($PROJECTS_APPS); unset = all. Applies to the
         # live-guide path too (prov.apps already filters, so the sample path stays idempotent).
         return enabled_apps(apps, enabled_selection())
@@ -2140,7 +2153,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
     from agentic_os.app_kit import route_authz as _route_authz
     from agentic_os.projects_route_policy import AGENT_GATEWAY_ROUTE_POLICIES, APP as _APP, PROJECTS_ROUTE_POLICIES
-    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **(AGENT_GATEWAY_ROUTE_POLICIES if gateway_mounted else {})})
+    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **(AGENT_GATEWAY_ROUTE_POLICIES if gateway_mounted else {}), **_product_policies})
 
     # The local capability gate is installed LAST so it is the OUTERMOST middleware (Starlette runs the last-added first):
     # an unauthenticated desktop caller is refused before route authorization runs. With a base path, mounted_app gates
