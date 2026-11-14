@@ -5,7 +5,8 @@ credential the SERVER validated; the request body never says who approved. The p
 
 1. the desktop capability gate: it writes the session it has just validated into the ASGI scope under
    ``agentic_os.local_session`` (only the gate can write it; a header, query or body cannot) -> ``local-owner``;
-2. a control credential in ``Authorization: Bearer`` (hosted deployments): ``admin``, ``approver:<tenant>`` or
+2. the operator's HTTP Basic credential (``OPERATOR_BASIC_AUTH``: what the shipped Projects server generates and asks the
+   browser for) -> ``operator``; or a control credential in ``Authorization: Bearer`` (hosted deployments): ``admin``, ``approver:<tenant>`` or
    ``requester:<tenant>`` exactly as ``agentic_os.mission.control_auth`` resolves it (a requester is refused while
    approver credentials exist: separation of duties, the same rule as the Content approve routes);
 3. the ``principal.single_owner`` the OPERATOR declared in the products registry, for a deployment that only one person
@@ -53,6 +54,9 @@ def current_principal(single_owner: str = "") -> Optional[str]:
         if scope.get(SESSION_SCOPE_KEY) is not None:
             return LOCAL_OWNER
         auth = _header(scope, b"authorization")
+        if auth.startswith("Basic "):
+            from agentic_os.app_kit.route_authz import _basic_operator  # noqa: PLC0415  (the same check the route layer applies)
+            return "operator" if _basic_operator(auth) else None
         if auth:
             from agentic_os.mission.control_auth import ConfigError, approver_tokens, bearer_of, resolve_caller  # noqa: PLC0415
             from fastapi import HTTPException  # noqa: PLC0415

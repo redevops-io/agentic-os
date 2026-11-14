@@ -265,3 +265,19 @@ def test_unverified_readback_is_shown_as_failed_and_never_as_done(stack):
     assert m["state"] == "failed" and "Read-back" in m["progress"]
     att = c.get(f"/api/projects/{PID}/attention").json()
     assert any("read-back failed" in a["title"] for a in att)
+
+
+def test_the_operator_basic_credential_the_shipped_server_asks_for_is_a_principal(stack, monkeypatch):
+    import base64
+    fake, c, base, tp, mp = stack
+    p = tp / "products.yaml"
+    p.write_text(p.read_text().replace("principal: {single_owner: local-owner}\n", ""))
+    mp.setenv("OPERATOR_BASIC_AUTH", "ops:pw-secret-1234")
+    fake.linked = {"projects:operator": "alex"}
+    c2 = TestClient(create_app(SampleProjectionProvider()))
+    card = c2.get(f"/api/products/edge-sentinel/records/{ACT}").json()
+    good = {"Authorization": "Basic " + base64.b64encode(b"ops:pw-secret-1234").decode()}
+    bad = {"Authorization": "Basic " + base64.b64encode(b"ops:nope").decode()}
+    assert c2.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": card["digest"]}, headers=bad).status_code in (401, 403)
+    r = c2.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": card["digest"]}, headers=good)
+    assert r.status_code == 200 and fake.actions[ACT]["decision"]["actor"] == "user:alex"
