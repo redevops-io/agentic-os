@@ -90,15 +90,40 @@ The pod runs as uid 10001 with a read-only root filesystem, no capabilities and 
 
 ## Authentication and authorization
 
-| Layer | Behaviour in the standalone profile |
-|---|---|
-| Sign-in | Every route except `/health` and `/readyz` needs the operator credential (HTTP Basic; browsers show a sign-in prompt). The app refuses to start without `SENTINEL_BASIC_AUTH_USER` and a password (`SENTINEL_BASIC_AUTH_PASS` or `SENTINEL_BASIC_AUTH_PASS_FILE`). This is set by `SENTINEL_REQUIRE_AUTH=1`, which the image sets. |
-| Authorization of actions | An approval is recorded under the signed-in name; execution needs a recorded approving decision on that case and is refused otherwise (409). The action state machine (awaiting approval, approved, executed, failed, rejected) is persisted. |
-| `/invoke` | Authenticated separately with `AGENTIC_OS_CONTROL_TOKEN` (503 while unset). In the production profile a side-effecting capability also needs a human approval or an execution authorization issued by a control point. |
-| Production profile | `AGENTIC_OS_PROFILE=production` (the image default) requires a durable authority store (`AGENTIC_OS_AUTHORITY_DB=/data/authority.db`) and has no permissive fallback for side effects. Running without it is an explicit choice: `AGENTIC_OS_PROFILE=development` together with `SENTINEL_REQUIRE_AUTH=0`, and neither belongs on a reachable host. |
-| Kernel permission plane | The image sets `AGENTIC_OS_PERMISSIONS=off`: per-tool grants are not used and `/health` reports `authorization: unenforced`. Access is the operator credential. |
+Every route except `/health` and `/readyz` needs a credential, and the app refuses to start without an operator credential (`SENTINEL_BASIC_AUTH_USER` and a password, or `SENTINEL_BASIC_AUTH_PASS_FILE`). Who is signed in is a named local user:
 
-There is a single operator credential, not per-user accounts or roles. The password is compared in constant time. Rotate it by replacing the secret file (or Kubernetes Secret) and restarting.
+| Credential | Used by | Notes |
+|---|---|---|
+| Session cookie | the browser UI | `sentinel_session`, `HttpOnly`, `SameSite=Strict`, server-side, idle timeout 30 minutes, absolute 12 hours, at most 5 per user. Every write needs the per-session `X-CSRF-Token` and, when the browser sends one, a matching `Origin`. |
+| HTTP Basic | scripts, `curl`, `smoke.sh` | checked against the same user table; no cookie, so no CSRF. |
+| Service credential | Projects/Sidekick, other products | `X-Control-Token` (`AGENTIC_OS_CONTROL_TOKEN`): may read and stage a proposal, never decide or execute. |
+| Approval token | Projects, for one click | `X-Approval-Token` with the service credential: minted for one action digest, single use, honoured only for a Projects principal an admin linked to a user with the `operator` role; the decision is recorded for that user with `via: projects`. |
+
+### Users and roles
+
+Users are stored in the same SQLite file as the history; passwords are `scrypt` hashes (at least 12 characters). On the first start with no users, the operator credential the deployment ships with becomes the first `admin`, so the secrets created by `bootstrap.sh` keep working: sign in with it, create named users, then retire the shared one. There are three fixed roles:
+
+| Role | Can |
+|---|---|
+| `viewer` | read events, decisions, cases, evidence, actions, history |
+| `operator` | viewer, plus stage a manual ban or unban, approve or reject, and execute |
+| `admin` | operator, plus manage users and actor links |
+
+Manage users with the admin API (`/api/v1/users`) or from the command line, in the same state directory the server uses:
+
+```bash
+docker compose exec edge-sentinel edge-sentinel users list
+```
+
+Every decision and execution is recorded with the user who made it, their role at that moment, and how (`session`, `basic`, `projects`, `runtime`). An approval is bound to the digest of the exact action that was shown: if the action changes, the approval is void (409 `stale_approval`). With `SENTINEL_REQUIRE_TWO_PERSON=1` the approver may not also execute. Execution needs a recorded approving decision, is a recorded dry run until `SENTINEL_BLOCK_ENABLED=1`, and a ban is reported as contained only when the read-back of CrowdSec confirms it.
+
+### Identity and its boundary
+
+This is the identity of the source-available distribution: a small local user table, three fixed roles, attributable approvals and an audit trail. The following are deliberately not built here, and nothing in this product depends on an Enterprise identity or permission service: single sign-on (OIDC, SAML), directory sync, groups, tenants and multi-tenant isolation, custom roles, per-case or per-object permissions, MFA enrolment, password reset by e-mail, and organisation-wide policy administration and compliance reporting. The kernel's basic permissions plane (`AGENTIC_OS_PERMISSIONS=1`) is unchanged: when it is on, its grants also gate `/api/v1` (reads need the `threat_summary` tool, decisions and execution the `ban_ip` tool); when it is off, the fixed role matrix above is the authorization. Basic permissions authorise the app instance, not individual callers.
+
+### Production profile
+
+`AGENTIC_OS_PROFILE=production` (the image default) requires a durable authority store (`AGENTIC_OS_AUTHORITY_DB=/data/authority.db`) and has no permissive fallback for side effects. Running without it is an explicit choice: `AGENTIC_OS_PROFILE=development` together with `SENTINEL_REQUIRE_AUTH=0`, and neither belongs on a reachable host. `/invoke` is authenticated separately with `AGENTIC_OS_CONTROL_TOKEN` (503 while unset); a side-effecting capability there needs an approval from the runtime, and it then writes the same case, decision, receipt and read-back records as the browser.
 
 ## Configuration reference
 
@@ -118,6 +143,7 @@ Set these in `.env` (Compose) or the Deployment environment (Kubernetes). A name
 | `SENTINEL_BLOCK_ENABLED` | unset | `1` makes an approved execution real. |
 | `SENTINEL_BLOCK_ALLOW_NETWORKS`, `SENTINEL_BLOCK_ALLOW_WIDE_CIDR`, `SENTINEL_BLOCK_MAX_HOURS`, `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | unset, off, 168 | Ban guard. |
 | `SENTINEL_STATE_DIR` | `/data/state` | Durable case-decision state. |
+| `SENTINEL_REQUIRE_TWO_PERSON` | unset | The approver of an action may not execute it. |
 | `SENTINEL_TENANT` | unset | Organisation name in the dashboard; unset shows no name. |
 | `SENTINEL_TRUST_PROXY` | off | Use the right-most `X-Forwarded-For` entry as the client address behind a proxy you control. |
 | `SENTINEL_RATE_PER_MIN`, `SENTINEL_RATE_BURST` | 20, 10 | Per-client rate limit on the POST routes. |
@@ -131,6 +157,7 @@ The complete list with owners is `apps/edge-sentinel/config_contract.json`; the 
 
 State lives in the `edge-sentinel-data` volume (Compose) or PVC (Kubernetes), mounted at `/data`:
 
+* `state/sentinel.db` (mode 0600, SQLite WAL): cases (a snapshot that stays readable after CrowdSec expires the alert), content-addressed evidence, actions, decisions with the acting user, receipts with the persisted read-back, the append-only history that is also the change feed, local users and sessions. Back it up with the application stopped.
 * `state/cases-state.json` (mode 0600): action states, decisions, receipts and case statuses. Cases and their evidence are re-derived from CrowdSec's alerts at each read, and the case id is content-addressed from the alert (a decision's remaining `duration` is excluded), so the same alert is the same case after a restart.
 * `authority.db`, `replay.db`: the operator surface's authority ledger and replay guard.
 
@@ -154,7 +181,7 @@ Upgrade by changing the image tag or digest and running `docker compose pull && 
 * Real bans are off until `SENTINEL_BLOCK_ENABLED=1`. A ban needs a recorded approval by the signed-in operator, a ban-target check and a read-back of the LAPI to be reported as enforced.
 * Responses carry a content security policy that allows only the app's own origin, `X-Frame-Options: DENY` and no referrer; the dashboard makes no third-party request.
 * The container's `HEALTHCHECK` and the Kubernetes probes use the public probes.
-* Known limits: one shared operator credential over HTTP Basic (terminate TLS in front of it); no audit export beyond the state file and the receipts in each case bundle; the `/health` response states that the kernel permission plane is not enforcing.
+* Known limits: sign-in is a local user table with three roles (terminate TLS in front of it; no SSO or MFA); the audit trail is the history table and the receipts in each case bundle, with no export; the `/health` response states that the kernel permission plane is not enforcing.
 
 ## Operating limits
 

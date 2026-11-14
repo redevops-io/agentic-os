@@ -36,6 +36,11 @@ def _operator_credential() -> tuple[str | None, str | None]:
 def require_operator(request: Request) -> str:
     """FastAPI dependency. Returns the authenticated operator username, or raises:
     503 if no operator credential is configured (fail-closed), 401 if the Basic header is missing/invalid."""
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if principal is not None and principal.kind == "user":
+        if not principal.at_least("operator"):
+            raise HTTPException(status_code=403, detail="operator role required")
+        return principal.name                       # standalone profile: the signed-in user, not a shared credential
     user, pw = _operator_credential()
     if not (user and pw):
         raise HTTPException(

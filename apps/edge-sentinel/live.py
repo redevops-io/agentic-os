@@ -20,19 +20,33 @@ work) even when ``agentic_os`` is not installed — the same standalone guarante
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from typing import Callable
 
 from . import core
+from . import history_store
 from . import statefile
 from .case_store import CaseStore
 from .evidence import ActionReceipt, ActionRequest, ActionState, CaseStatus, SecurityDecision
+from . import manual_cases
 from .incident import ingest_crowdsec_alert, replay_case
 
 
 class ExecutionError(Exception):
     """Raised when a decision or execution is requested for an action in the wrong state."""
+    code = "conflict"
+
+
+class StaleApproval(ExecutionError):
+    """The digest the approval was made against is not the action's digest any more: the approval is void."""
+    code = "stale_approval"
+
+
+class TwoPersonRequired(ExecutionError):
+    """SENTINEL_REQUIRE_TWO_PERSON=1: the person who approved an action may not be the one who executes it."""
+    code = "two_person_required"
 
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -54,6 +68,7 @@ def reset_store() -> CaseStore:
     global _STORE
     _ATTEMPTS.clear()
     _INFLIGHT.clear()
+    history_store.reset()
     _STORE = CaseStore()
     return _STORE
 
@@ -62,6 +77,7 @@ def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict
     """Ingest the current live CrowdSec alerts into cases. Idempotent: returns the case ids touched.
     Degrades to [] (never raises, never fabricates) when the core is unreachable."""
     st = st or store()
+    _rehydrate_manual(st)
     fn = alerts_fn or core.fetch_alerts
     try:
         alerts = fn() or []
@@ -78,7 +94,53 @@ def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict
         _apply_state(st)
     except statefile.StateUnavailable:
         pass                    # decide/execute re-check and refuse; listing still works
+    try:
+        history_store.get().sync_store(st, attempts=_ATTEMPTS)
+    except history_store.StoreUnavailable:
+        pass                    # the read model is behind; decisions and executions re-check the store and refuse
     return ids
+
+
+def _rehydrate_manual(st: CaseStore) -> None:
+    """Manual cases have no CrowdSec alert to be derived from: rebuild them from their stored request evidence (idempotent)."""
+    try:
+        for row in history_store.get().rows("SELECT content FROM evidence WHERE kind = 'manual_request'"):
+            manual_cases.ingest(st, json.loads(row["content"]))
+    except (history_store.StoreUnavailable, ValueError, KeyError):
+        pass
+
+
+def stage_manual(kind: str, ip: str, *, reason: str, duration: str, actor: str, via: str, st: CaseStore | None = None) -> dict:
+    """Open a case that proposes `sentinel.block_ip` / `sentinel.unblock_ip` for an address. Validated like any ban target; nothing is
+    executed: the action waits for a human decision. Returns the case summary and the action."""
+    from . import ipguard
+    st = st or store()
+    if kind not in manual_cases.KINDS:
+        raise ValueError("type must be manual_block or manual_unblock")
+    if kind == "block":
+        target, dur, why, refusal = core.preflight_block({"ip": ip, "duration": duration or None, "reason": reason})
+        if refusal:
+            raise ValueError(refusal.get("error") or "refused")
+        ip, duration, reason = target.value, dur, why
+    else:
+        parsed = core._parse_ip(ip)
+        if parsed is None:
+            raise ValueError("invalid 'ip': must be a single IPv4/IPv6 address")
+        ip, duration, reason = parsed, "", ipguard.clean_reason(reason)
+    with _LOCK:
+        _check_state_ok()
+        rec = manual_cases.request_record(kind, ip, reason=reason, duration=duration, by=actor, at=history_store.now_iso())
+        case = manual_cases.ingest(st, rec)
+        try:
+            hs = history_store.get()
+            with hs.transaction():
+                hs.sync_store(st, attempts=_ATTEMPTS)
+                hs.append("case.manual", case_id=case.case_id, actor_user=actor, via=via, detail={"kind": kind, "ip": ip})
+        except history_store.StoreUnavailable as e:
+            st.cases.pop(case.case_id, None)
+            raise ExecutionError(f"case not recorded: the history store could not be written ({e})") from None
+        rid = case.action_refs[0]
+        return {"case_id": case.case_id, "request_id": rid, "state": st.actions[rid].state.value, "digest": digest_of(st.actions[rid])}
 
 
 def _open_action(st: CaseStore, case) -> dict | None:
@@ -229,11 +291,21 @@ def _apply_state(st: CaseStore) -> None:
 
 
 def _check_state_ok() -> None:
-    """Refuse to decide or execute when the configured state file is unreadable."""
+    """Refuse to decide or execute when the configured state file or the history store is unreadable."""
     try:
         statefile.load()
-    except statefile.StateUnavailable as e:
+        history_store.get().health().get("ok") or (_ for _ in ()).throw(history_store.StoreUnavailable("history store not usable"))
+    except (statefile.StateUnavailable, history_store.StoreUnavailable) as e:
         raise ExecutionError(f"case state store unavailable ({e}); refusing") from None
+
+
+def digest_of(req: ActionRequest) -> str:
+    return history_store.action_digest(req.capability, req.parameters, req.finding_refs, req.evidence_refs)
+
+
+def _check_digest(req: ActionRequest, digest: "str | None") -> None:
+    if digest is not None and digest != digest_of(req):
+        raise StaleApproval("the action changed after it was shown to you; its digest no longer matches, so this approval is void: reload and decide again")
 
 
 def _exhausted(rid: str) -> bool:
@@ -264,7 +336,8 @@ def preview_decide(case_id: str, request_id: str, *, approved: bool, st: CaseSto
                 "note": "simulated: sign in as the operator to record a real decision"}
 
 
-def decide(case_id: str, request_id: str, *, approved: bool, actor: str, st: CaseStore | None = None) -> dict:
+def decide(case_id: str, request_id: str, *, approved: bool, actor: str, st: CaseStore | None = None,
+           via: str = "legacy", role: str = "", external_actor: str = "", digest: "str | None" = None, rationale: str = "") -> dict:
     """Record a real decision (the HTTP layer calls this only for an authenticated operator). NO edge effect.
 
     The request must belong to the case. Approve is accepted from AWAITING_APPROVAL (or FAILED once retries are
@@ -275,6 +348,7 @@ def decide(case_id: str, request_id: str, *, approved: bool, actor: str, st: Cas
     st = st or store()
     with _LOCK:
         case, req = _resolve(st, case_id, request_id)
+        _check_digest(req, digest)
         _check_decidable(req, approved)
         _check_state_ok()
         actor = (actor or "").strip() or "anonymous"
@@ -284,8 +358,8 @@ def decide(case_id: str, request_id: str, *, approved: bool, actor: str, st: Cas
             _ATTEMPTS[request_id] = {"n": 0, "last": 0}
         decision = st.put_decision(SecurityDecision(
             request_id=request_id, actor=actor, approved=bool(approved),
-            rationale=("approved (staged for authenticated execution)" if approved
-                       else ("withdrawn" if withdrawn else "rejected"))))
+            rationale=((rationale or "").strip()[:200] or ("approved (staged for authenticated execution)" if approved
+                       else ("withdrawn" if withdrawn else "rejected")))))
         case.decision_refs = tuple(dict.fromkeys(case.decision_refs + (decision.decision_id,)))
         _set_state(st, req, ActionState.APPROVED if approved else ActionState.REJECTED)
         if not approved:
@@ -293,7 +367,11 @@ def decide(case_id: str, request_id: str, *, approved: bool, actor: str, st: Cas
         st.put_case(case)
         try:
             _persist(st)
-        except statefile.StateUnavailable as e:        # memory must never run ahead of the durable record
+            hs = history_store.get()
+            with hs.transaction():
+                hs.sync_store(st, attempts=_ATTEMPTS)
+                hs.record_decision(decision.to_dict(), case_id=case_id, actor_role=role, via=via, external_actor=external_actor)
+        except (statefile.StateUnavailable, history_store.StoreUnavailable) as e:        # memory must never run ahead of the durable record
             st.actions[request_id] = prev[0]
             case.status, case.decision_refs = prev[1], prev[2]
             st.decisions.pop(decision.decision_id, None)
@@ -313,7 +391,7 @@ def _approving_decision(st: CaseStore, case, request_id: str):
 
 
 def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None = None,
-            operator=None, enabled: bool | None = None) -> dict:
+            operator=None, enabled: bool | None = None, via: str = "legacy", role: str = "", digest: "str | None" = None) -> dict:
     """The AUTHENTICATED execution step. Call only from the auth-gated endpoint.
 
     Allowed from APPROVED, or from FAILED (a retry: at most MAX_ATTEMPTS, exponential backoff of 5s doubling to a
@@ -334,12 +412,15 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
         fixture_mode.refuse_if_enabled("execute")
     with _LOCK:
         case, req = _resolve(st, case_id, request_id)
+        _check_digest(req, digest)
         if req.state not in (ActionState.APPROVED, ActionState.FAILED):
             raise ExecutionError(f"action {request_id} is {req.state.value}, not APPROVED - approve it first")
         _check_state_ok()
         recorded = _approving_decision(st, case, request_id)
         if recorded is None:
             raise ExecutionError(f"action {request_id} has no recorded approving decision on this case")
+        if two_person_required() and via != "legacy" and recorded.actor == actor:
+            raise TwoPersonRequired(f"two-person rule: {actor} approved this action and may not also execute it")
         if request_id in _INFLIGHT:
             raise ExecutionError(f"action {request_id} is already executing")
         if enabled and req.state == ActionState.FAILED:
@@ -353,17 +434,81 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
             receipt = st.put_receipt(ActionReceipt(
                 request_id=request_id, decision_id=recorded.decision_id, status="DRY_RUN", external_ref="dry-run",
                 error="Dry run: nothing was blocked (SENTINEL_BLOCK_ENABLED not set; edge not touched)"))
+            vfy = {"state": "dry_run", "detail": "dry run: the edge was not touched, so there is nothing to read back", "at": history_store.now_iso()}
+            try:
+                history_store.get().record_receipt(receipt.to_dict(), case_id=case_id, actor_user=actor, via=via, dry_run=True, verification=vfy)
+            except history_store.StoreUnavailable:
+                pass
             return {"executed": False, "dry_run": True, "summary": "Dry run: nothing was blocked.", "receipt": receipt.to_dict(),
-                    "verification": None, "case_status": case.status.value}
+                    "verification": None, "verification_record": vfy, "case_status": case.status.value}
         _INFLIGHT.add(request_id)
     try:
-        return _execute_claimed(st, case, req, recorded, operator=operator)
+        return _execute_claimed(st, case, req, recorded, operator=operator, actor=actor, via=via, role=role)
     finally:
         with _LOCK:
             _INFLIGHT.discard(request_id)
 
 
-def _execute_claimed(st: CaseStore, case, req: ActionRequest, recorded, *, operator) -> dict:
+def execute_for_runtime(capability: str, inputs: dict, marker: dict, *, st: CaseStore | None = None) -> dict:
+    """The Mission Runtime's approved `sentinel.block_ip` / `sentinel.unblock_ip`, through the SAME case, decision, receipt and read-back
+    functions the browser UI uses (standalone profile only). Returns the capability's result dict: `ip_blocked` / `ip_unblocked` is the
+    READ-BACK result, never the status of the write."""
+    st = st or store()
+    kind = "block" if capability == "sentinel.block_ip" else "unblock"
+    ip = str(inputs.get("ip") or "").strip()
+    by = str((marker or {}).get("by") or (marker or {}).get("actor") or "runtime")[:80]
+    actor = f"runtime:{by}"
+    out_key = "ip_blocked" if kind == "block" else "ip_unblocked"
+    sync_cases(st)
+    rid = cid = None
+    for r, a in st.actions.items():
+        if a.capability == capability and a.parameters.get("ip") == ip and a.state in (ActionState.AWAITING_APPROVAL, ActionState.APPROVED, ActionState.FAILED):
+            rid = r
+            cid = next((c.case_id for c in st.cases.values() if r in c.action_refs), None)
+            break
+    try:
+        if rid is None:
+            staged = stage_manual(kind, ip, reason=str(inputs.get("reason") or "requested by the Mission Runtime"), duration=str(inputs.get("duration") or ""),
+                                  actor=actor, via="runtime", st=st)
+            cid, rid = staged["case_id"], staged["request_id"]
+        decide(cid, rid, approved=True, actor=actor, via="runtime", external_actor=by, digest=digest_of(st.actions[rid]))
+        res = execute(cid, rid, actor=actor, via="runtime", enabled=True, st=st)
+    except (ValueError, KeyError, ExecutionError) as e:
+        return {"status": "error", "error": str(e), out_key: False}
+    v = res.get("verification_record") or {}
+    verified = v.get("state") == "verified"
+    return {"status": "done" if verified else "error", out_key: verified, "request_id": rid, "case_id": cid, "receipt_id": res["receipt"]["receipt_id"],
+            "verification": v, **({} if verified else {"error": res["receipt"].get("error") or v.get("detail") or "not verified"})}
+
+
+def stage_for_runtime(capability: str, inputs: dict) -> dict:
+    """An UNAPPROVED runtime call only stages: the proposal appears in the approval queue as AWAITING_APPROVAL. Never raises."""
+    try:
+        kind = "block" if capability == "sentinel.block_ip" else "unblock"
+        staged = stage_manual(kind, str(inputs.get("ip") or ""), reason=str(inputs.get("reason") or "requested by the Mission Runtime"),
+                              duration=str(inputs.get("duration") or ""), actor="runtime", via="runtime")
+        return {"case_id": staged["case_id"], "request_id": staged["request_id"]}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _verify_lifted(op, proposal) -> tuple:
+    """The read-back for a lifted ban is the opposite one: the address must NOT be among the active decisions any more."""
+    from .response import _ip_in_posture
+    ip = proposal.inputs.get("ip", "")
+    try:
+        posture = op.invoke("sentinel.triage", {}) or {}
+    except Exception as e:  # noqa: BLE001
+        return False, f"read-back failed: {type(e).__name__}"
+    gone = bool(ip) and not _ip_in_posture(ip, posture)
+    return gone, f"{'ban no longer present' if gone else 'ban STILL present'} for {ip}"
+
+
+def two_person_required() -> bool:
+    return os.environ.get("SENTINEL_REQUIRE_TWO_PERSON", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _execute_claimed(st: CaseStore, case, req: ActionRequest, recorded, *, operator, actor: str = "", via: str = "legacy", role: str = "") -> dict:
     request_id, case_id = req.request_id, case.case_id
     att = _ATTEMPTS.setdefault(request_id, {"n": 0, "last": 0})
     prev_att, prev_req = dict(att), req
@@ -392,8 +537,11 @@ def _execute_claimed(st: CaseStore, case, req: ActionRequest, recorded, *, opera
             rr = execute_response(op, proposal, decision=recorded)      # the real ban, under the recorded decision
             ext, err = rr.external_ref, rr.error
             if rr.status == "SUCCEEDED":
-                ver = verify_response(op, proposal, rr)
-                verified, vdetail = ver.verified, ver.detail
+                if req.capability == "sentinel.unblock_ip":
+                    verified, vdetail = _verify_lifted(op, proposal)
+                else:
+                    ver = verify_response(op, proposal, rr)
+                    verified, vdetail = ver.verified, ver.detail
         else:
             result = core.block_ip(dict(req.parameters)) or {}
             if result.get("status") == "error":
@@ -406,19 +554,30 @@ def _execute_claimed(st: CaseStore, case, req: ActionRequest, recorded, *, opera
         err = f"{type(e).__name__}: {e}"
 
     status = "SUCCEEDED" if not err else "FAILED"
+    if status == "SUCCEEDED":
+        vstate = "verified" if verified else "unverified"
+    else:
+        vstate = "failed"
+    vrec = {"state": vstate, "detail": vdetail or err, "at": history_store.now_iso()}
     with _LOCK:
         receipt = st.put_receipt(ActionReceipt(request_id=request_id, decision_id=recorded.decision_id,
                                                status=status, external_ref=ext, error=err))
         _set_state(st, req, ActionState.EXECUTED if status == "SUCCEEDED" else ActionState.FAILED)
-        if status == "SUCCEEDED":
-            case.status = CaseStatus.CONTAINED
+        if status == "SUCCEEDED" and verified:
+            case.status = CaseStatus.CONTAINED        # CONTAINED is claimed only for a ban that was read back
+        elif status == "SUCCEEDED":
+            case.status = CaseStatus.INVESTIGATING    # the call succeeded, the read-back did not confirm it: not contained
         st.put_case(case)
         try:
             _persist(st)
-        except statefile.StateUnavailable as e:    # the ban happened; say that the record could not be saved
+            hs = history_store.get()
+            with hs.transaction():
+                hs.sync_store(st, attempts=_ATTEMPTS)
+                hs.record_receipt(receipt.to_dict(), case_id=case_id, actor_user=actor or recorded.actor, via=via, dry_run=False, verification=vrec)
+        except (statefile.StateUnavailable, history_store.StoreUnavailable) as e:    # the ban happened; say that the record could not be saved
             vdetail = (vdetail + f" [state not persisted: {e}]").strip()
     return {"executed": status == "SUCCEEDED", "dry_run": False, "receipt": receipt.to_dict(),
-            "verification": {"verified": verified, "detail": vdetail}, "case_status": case.status.value}
+            "verification": {"verified": verified, "detail": vdetail}, "verification_record": vrec, "case_status": case.status.value}
 
 
 def _operator():
