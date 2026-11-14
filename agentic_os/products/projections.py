@@ -285,7 +285,8 @@ def today_case(spec: ProductSpec, a: Mapping[str, Any], pid: str, att_id: str, n
     dec = a.get("decision") if isinstance(a.get("decision"), Mapping) else {}
     rid = str(a.get("request_id", ""))
     it = _item(tenant=_TENANT, project=pid, key=f"attention:{att_id}", dedupe=f"product:{spec.id}:{rid}",
-               title=sn.action_title(a), reason=line or sn.action_consequence(a), state=state, score=0.9,
+               title=sn.action_title(a).replace("Approve ", "Execute ") if st == "APPROVED" and not sn.settled_dry_run(a) else sn.action_title(a),
+               reason=line or sn.action_consequence(a), state=state, score=0.9,
                label="Execute the approved action" if st == "APPROVED" else "Approve the proposal", executable=True,
                source_refs=[f"{spec.id}:{rid}"] + ([f"{spec.id}:{a['case_id']}"] if a.get("case_id") else []),
                confidence=None, now=now, kind="case", domain="security", channel="CrowdSec", resurfaced=False,
