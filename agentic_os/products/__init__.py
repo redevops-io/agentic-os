@@ -61,6 +61,18 @@ def sidekick_hook(provider: Any, ctx: Dict[str, Any], text: str) -> Optional[Dic
     return try_handle(hub, getattr(provider, "products_tools"), ctx or {}, text or "")
 
 
+def ui_config_extra(provider: Any) -> Dict[str, Any]:
+    """An additive ``products`` section for ``GET /api/ui-config`` (the line that serves it): which products feed
+    Missions, Attention, Activity and Apps, and that those rows are the products' own records. The UI's existing
+    ``data_source`` / ``projections.basis`` are not touched: Overview, Workflows and Discovery keep their own basis."""
+    hub = hub_for(provider)
+    if hub is None:
+        return {}
+    return {"products": {"configured": [s.id for s in hub.specs()], "basis": "product_records",
+                         "rows": ["missions", "attention", "activity", "apps", "today"],
+                         "sample_rows_kept": bool(hub.registry.keep_sample_rows)}}
+
+
 def extend_apps(provider: Any, apps: list) -> list:
     hub = hub_for(provider)
     if hub is None:
@@ -69,4 +81,4 @@ def extend_apps(provider: Any, apps: list) -> list:
     return _ext(hub, apps)
 
 
-__all__ = ["mount_products", "sidekick_hook", "extend_apps", "hub_for", "ProductHub", "ProductRegistry"]
+__all__ = ["mount_products", "sidekick_hook", "extend_apps", "ui_config_extra", "hub_for", "ProductHub", "ProductRegistry"]
