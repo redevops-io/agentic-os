@@ -27,6 +27,7 @@ BODIES = {
     "approve": {"action": "approve", "account": ACCT},
     "send_all": {"action": "send_all"},
     "check_replies": {"action": "check_replies"},
+    "follow_up": {"action": "follow_up", "account": ACCT},
 }
 GATED = ("approve", "send_all")
 PATHS = ("/api/run", "/agent/run")
@@ -165,6 +166,13 @@ def test_draft_pitch_is_ungated_read(client):
     assert "<table" in j["html"] and _Twenty.writes == []
     row = next(row for row in core._STATE["accounts"] if row["account"] == ACCT)
     assert row["draft"]["body"] == j["body"]
+
+
+def test_follow_up_is_ungated_read(client):
+    r = client.post("/api/run", json=BODIES["follow_up"])
+    j = r.json()
+    assert j["ok"] is True and j["action"] == "follow_up" and j["follow_up_for"] == "no_reply"
+    assert "<table" in j["html"] and _Twenty.writes == []
 
 
 def test_enrich_is_ungated_read(client):

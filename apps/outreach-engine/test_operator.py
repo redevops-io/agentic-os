@@ -118,7 +118,8 @@ def test_capabilities_manifest(client):
     assert m["operator"] == "outreach-engine"
     caps = {c["name"]: c for c in m["capabilities"]}
     assert set(caps) == {"outreach.refresh", "outreach.enrich", "outreach.draft_pitch",
-                         "outreach.approve", "outreach.send_all", "outreach.check_replies"}
+                         "outreach.approve", "outreach.send_all", "outreach.check_replies",
+                         "outreach.follow_up"}
     # the gate is modules.yaml `approval_required: [send_sequence]` — only the send is gated
     assert caps["outreach.send_all"]["approval_required"] is True
     assert caps["outreach.refresh"]["approval_required"] is False
@@ -130,6 +131,7 @@ def test_capabilities_manifest(client):
     assert caps["outreach.enrich"]["side_effecting"] is False
     assert caps["outreach.draft_pitch"]["side_effecting"] is False
     assert caps["outreach.check_replies"]["side_effecting"] is False
+    assert caps["outreach.follow_up"]["side_effecting"] is False
     assert caps["outreach.approve"]["side_effecting"] is True
     assert caps["outreach.send_all"]["side_effecting"] is True
     assert "outreach_pipeline" in caps["outreach.refresh"]["provides"]
@@ -161,6 +163,17 @@ def test_invoke_draft_pitch_via_the_operator_sdk(client, monkeypatch):
     assert "<table" in res["html"]
     row = next(r for r in core._STATE["accounts"] if r["account"] == acct)
     assert row["draft"]["body"] == res["body"]
+
+
+def test_invoke_follow_up_via_the_operator_sdk(client, monkeypatch):
+    import importlib as _il
+    app_mod = _il.import_module("outreach-engine.app")
+    monkeypatch.setattr(app_mod, "_llm", lambda *a, **k: "")
+    _result(client, "outreach.refresh", {})
+    acct = core.DEMO[0]["account"]
+    res = _result(client, "outreach.follow_up", {"account": acct})
+    assert res["ok"] is True and res["action"] == "follow_up" and res["follow_up_for"] == "no_reply"
+    assert "<table" in res["html"]
 
 
 def test_invoke_approve_syncs_pilot_to_twenty(client):

@@ -8,7 +8,7 @@ demo tenant used across the agentic apps. Sends are approval-gated.
   GET  /health        -> {"status","core":"twenty","connected": <Twenty /healthz>}
   GET  /api/pipeline  -> ranked accounts + picked play + drafted opener + approval state
   GET  /              -> MD3 dashboard (source, rank, draft, approve — the GUI)
-  POST /agent/run     -> {"action":"refresh"|"enrich"|"draft_pitch"|"approve"|"send_all"|"check_replies", "account": "..."}
+  POST /agent/run     -> {"action":"refresh"|"enrich"|"draft_pitch"|"approve"|"send_all"|"check_replies"|"follow_up", "account": "..."}
 
 Config (env): TWENTY_URL · TWENTY_API_KEY · REDEVOPS_LLM_BASE_URL (in-boundary model; none => deterministic) ·
 OPERATOR_BASIC_AUTH / OUTREACH_BASIC_AUTH (`user:pass`; approve / send_all execute only for the operator) ·
@@ -464,10 +464,49 @@ def draft_pitch(body: dict | None = None) -> dict:
     return {"ok": True, "action": "draft_pitch", "account": acct, **draft}
 
 
-# registered here (not in the _ACTIONS/_TOOL_OF literal above) because draft_pitch is defined after it —
-# it lives in app.py, not core.py, since it needs the governed LLM, which core.py deliberately never touches.
+def follow_up(body: dict | None = None) -> dict:
+    """Draft the second touch for one account and attach it as that account's draft — a warm,
+    reply-aware thank-you if `check_replies` already found a reply (`row["replied"]`), otherwise a
+    polite no-reply nudge. Sending it is NOT this function's job: it only stages the draft, exactly like
+    `draft_pitch` does for the first touch; the operator calls the existing gated `send_all` to actually
+    dispatch it. Read-only w.r.t. Twenty/CRM and the outside world, same consequence level as `draft_pitch`."""
+    body = body or {}
+    acct = body.get("account", "")
+    row = next((r for r in core._STATE["accounts"] if r["account"] == acct), None)
+    if row is None:
+        return {"ok": False, "action": "follow_up", "account": acct,
+                "reason": "unknown account — refresh the pipeline first"}
+    replied = bool(row.get("replied"))
+    if replied:
+        reply = row.get("reply") or {}
+        out = _llm("Write a SHORT, warm reply (under 90 words; plain prose; no markdown; no subject "
+                   "line) from " + TENANT + " thanking " + acct + " for responding" +
+                   ((" (they wrote: “" + str(reply.get("subject") or "") + "”)") if reply.get("subject") else "") +
+                   ". Propose one specific next step: a short call this week. Output only the email body.", 180)
+        fallback = "Thanks for getting back to me — would a short call this week work to continue the conversation?"
+    else:
+        out = _llm("Write a SHORT, friendly follow-up email (under 90 words; plain prose; no markdown; no "
+                   "subject line) from " + TENANT + " (" + PITCH + ") to " + acct + ", following up on an "
+                   "earlier note that got no reply. One polite nudge, no guilt, no repeating the whole "
+                   "pitch. End with one short, specific call to action (a short call this week). Output "
+                   "only the email body.", 180)
+        fallback = core.neutral_followup(acct)
+    text = out.strip() if out else fallback
+    subject = ("Re: " if replied else "Following up — ") + acct
+    draft = {"subject": subject, "body": text, "draft_source": "llm" if out else "template",
+            "follow_up_for": "reply" if replied else "no_reply"}
+    draft["html"] = core.render_pitch_html(subject, text, row)
+    row["draft"] = draft
+    return {"ok": True, "action": "follow_up", "account": acct, **draft}
+
+
+# registered here (not in the _ACTIONS/_TOOL_OF literal above) because draft_pitch/follow_up are defined
+# after it — they live in app.py, not core.py, since they need the governed LLM, which core.py deliberately
+# never touches.
 _ACTIONS["draft_pitch"] = draft_pitch
 _TOOL_OF["draft_pitch"] = "outreach.draft_pitch"
+_ACTIONS["follow_up"] = follow_up
+_TOOL_OF["follow_up"] = "outreach.follow_up"
 
 
 def pipeline_summary() -> dict:

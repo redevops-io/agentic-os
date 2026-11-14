@@ -11,6 +11,7 @@ Capabilities (syscalls):
   outreach.approve      — human sign-off that syncs a real pilot to Twenty (Company+Person+Opportunity)  [approval gate]
   outreach.send_all     — dispatch the approved outreach sequences to prospects  [approval gate: send_sequence]
   outreach.check_replies — check the sender's own inbox for a prospect's reply (no CRM write, no send)
+  outreach.follow_up    — draft the second touch (reply-aware thank-you, or a no-reply nudge); send_all sends it
 
 Per control-plane modules.yaml the gate is `approval_required: [send_sequence]` — nothing reaches a
 prospect without a human sign-off — so `outreach.send_all` carries approval_required=True and the
@@ -30,6 +31,11 @@ def _draft_pitch(inp):
     # module-load time regardless of which one a caller imports first.
     from . import app as _app
     return _app.draft_pitch(inp)
+
+
+def _follow_up(inp):
+    from . import app as _app  # same reasoning as _draft_pitch above
+    return _app.follow_up(inp)
 
 
 def build_outreach_operator() -> Operator:
@@ -93,5 +99,14 @@ def build_outreach_operator() -> Operator:
             outputs={"reply_checked": "whether a reply from the prospect was found in the sender's inbox"},
             estimated_value="medium", deterministic=False, latency_ms=2000,
             concurrency_mode="read_only",   # reads the sender's own mailbox only, no CRM write, no send
+        ),
+        capability(
+            "outreach.follow_up",
+            lambda inp: _follow_up(inp),
+            provides=["followup_drafted"],
+            outputs={"followup_drafted": "the second-touch draft (reply-aware thank-you, or a no-reply "
+                                          "nudge) attached to the account; send_all dispatches it"},
+            estimated_value="medium", deterministic=False, latency_ms=1500,
+            concurrency_mode="read_only",   # only writes the in-memory pipeline row, no CRM write, no send
         ),
     ])
