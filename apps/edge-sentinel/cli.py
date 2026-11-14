@@ -33,8 +33,24 @@ def main(argv: "list[str] | None" = None) -> int:
                             "(or the named unauthenticated-demo opt-out) are set — see security.py.")
     serve.add_argument("--port", type=int, default=None,
                        help="default PORT environment or 8203")
+    users = sub.add_parser("users", help="manage the local users (needs SENTINEL_STATE_DIR, the same directory the server uses)")
+    usub = users.add_subparsers(dest="users_command", required=True)
+    add = usub.add_parser("add", help="create a user")
+    add.add_argument("name")
+    add.add_argument("--role", choices=("viewer", "operator", "admin"), required=True)
+    add.add_argument("--password-file", required=True, help="a file holding the password (it is never taken from the command line)")
+    usub.add_parser("list", help="list users")
+    pw = usub.add_parser("set-password", help="set a user's password (ends that user's sessions)")
+    pw.add_argument("name")
+    pw.add_argument("--password-file", required=True)
+    dis = usub.add_parser("disable", help="disable a user (ends their sessions)")
+    dis.add_argument("name")
+    ena = usub.add_parser("enable", help="enable a user")
+    ena.add_argument("name")
     args = parser.parse_args(argv)
 
+    if args.command == "users":
+        return _users(args)
     if args.command != "serve":
         parser.print_help()
         return 0
@@ -64,6 +80,35 @@ def main(argv: "list[str] | None" = None) -> int:
         sys.exit(f"edge-sentinel: startup refused: {refused}")
 
     uvicorn.run(_app_mod.app, host=host, port=port)
+    return 0
+
+
+def _users(args) -> int:
+    """`edge-sentinel users ...`: the CLI side of user management (the admin API is the other). Operates on SENTINEL_STATE_DIR directly."""
+    import json
+
+    from . import identity
+    if not __import__("os").environ.get("SENTINEL_STATE_DIR"):
+        sys.stderr.write("edge-sentinel users: SENTINEL_STATE_DIR is not set; the user table lives in the state directory the server uses.\n")
+        return 2
+    ident = identity.get()
+
+    def _password() -> str:
+        with open(args.password_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    try:
+        if args.users_command == "list":
+            print(json.dumps(ident.list_users(), indent=2))
+        elif args.users_command == "add":
+            print(json.dumps(ident.create_user(args.name, _password(), args.role, created_by="cli"), indent=2))
+        elif args.users_command == "set-password":
+            ident.set_password(args.name, _password(), actor="cli")
+            print("password set")
+        elif args.users_command in ("disable", "enable"):
+            print(json.dumps(ident.update_user(args.name, disabled=args.users_command == "disable", actor="cli"), indent=2))
+    except (identity.IdentityError, OSError) as e:
+        sys.stderr.write(f"edge-sentinel users: {e}\n")
+        return 1
     return 0
 
 

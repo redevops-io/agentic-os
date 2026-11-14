@@ -105,5 +105,15 @@ ENGINE_CONSOLES = {app: {("POST", "/api/agent"): _ENGINE} for app in ("growth-en
 _LOOP = "operator-only closed-loop surface (HTTP Basic, fail-closed 503); executes through the mission runtime and its operators, gated at Operator._execute"
 OPERATOR_AUTH_ROUTES = {"billing": {("POST", "/api/outcomes/observe"): _LOOP, ("POST", "/api/policy/refit"): _LOOP, ("POST", "/api/decide"): _LOOP,
                                     ("POST", "/api/decide/{mission_id}/approve"): _LOOP}}
+_V1 = ("the product API: authenticates itself in EVERY profile (session cookie + CSRF, Basic against the local user table, or the service credential for reads and staging); "
+       "no anonymous access; a decision or execution needs a user with the operator role or a verified approval token for a linked user")
+_V1_ROUTES = [("GET", "/api/v1/info"), ("GET", "/api/v1/posture"), ("GET", "/api/v1/events"), ("GET", "/api/v1/decisions"), ("GET", "/api/v1/cases"),
+              ("POST", "/api/v1/cases"), ("GET", "/api/v1/cases/{case_id}"), ("GET", "/api/v1/cases/{case_id}/evidence/{artifact_id}"),
+              ("GET", "/api/v1/actions"), ("GET", "/api/v1/actions/{request_id}"), ("GET", "/api/v1/actions/{request_id}/verification"),
+              ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/decision"), ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/execute"),
+              ("GET", "/api/v1/changes"), ("GET", "/api/v1/history"), ("POST", "/api/v1/session"), ("GET", "/api/v1/session"), ("DELETE", "/api/v1/session"),
+              ("POST", "/api/v1/session/password"), ("GET", "/api/v1/users"), ("POST", "/api/v1/users"), ("PATCH", "/api/v1/users/{name}"),
+              ("POST", "/api/v1/users/{name}/password"), ("GET", "/api/v1/actor-links"), ("POST", "/api/v1/actor-links"), ("DELETE", "/api/v1/actor-links/{external_actor}")]
+OPERATOR_AUTH_ROUTES["edge-sentinel"] = {r: _V1 for r in _V1_ROUTES}
 FRAMEWORK_ROUTES = {("GET", "/_security"), ("GET", "/openapi.json"), ("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("GET", "/redoc"), ("HEAD", "/openapi.json"), ("HEAD", "/docs"),
                     ("HEAD", "/docs/oauth2-redirect"), ("HEAD", "/redoc"), ("HEAD", "/health"), ("HEAD", "/"), ("HEAD", "/api/activity")}

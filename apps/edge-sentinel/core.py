@@ -669,7 +669,7 @@ def triage(blurb: Callable[[str], str | None] | None = None) -> dict:
         "summary": summary,
     }
     reasoning = blurb(
-        "You are a SOC analyst agent for a wealth-management firm's network. In ONE sentence, "
+        "You are a SOC analyst agent for this organisation's network. In ONE sentence, "
         f"triage these active CrowdSec block decisions and recommend a next step: {detail}. "
         "Be concrete and professional. Final answer only, no preamble."
     ) if blurb else None

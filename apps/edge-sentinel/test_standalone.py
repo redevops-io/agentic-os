@@ -323,11 +323,24 @@ REFERENCE_ENV = {
 }
 
 
-def test_every_reference_route_still_exists_and_new_ones_are_only_the_readiness_probe():
-    have = {(m.upper(), p) for p, ops in app_mod.app.openapi()["paths"].items() for m in ops if m.upper() in ("GET", "POST")}
+#: The routes added after the reference contract was frozen. Adding a route means adding it HERE, deliberately, in the same change.
+ADDED_ROUTES = {
+    ("GET", "/readyz"),
+    ("GET", "/api/v1/info"), ("GET", "/api/v1/posture"), ("GET", "/api/v1/events"), ("GET", "/api/v1/decisions"), ("GET", "/api/v1/cases"),
+    ("POST", "/api/v1/cases"), ("GET", "/api/v1/cases/{case_id}"), ("GET", "/api/v1/cases/{case_id}/evidence/{artifact_id}"),
+    ("GET", "/api/v1/actions"), ("GET", "/api/v1/actions/{request_id}"), ("GET", "/api/v1/actions/{request_id}/verification"),
+    ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/decision"), ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/execute"),
+    ("GET", "/api/v1/changes"), ("GET", "/api/v1/history"), ("POST", "/api/v1/session"), ("GET", "/api/v1/session"), ("DELETE", "/api/v1/session"),
+    ("POST", "/api/v1/session/password"), ("GET", "/api/v1/users"), ("POST", "/api/v1/users"), ("PATCH", "/api/v1/users/{name}"),
+    ("POST", "/api/v1/users/{name}/password"), ("GET", "/api/v1/actor-links"), ("POST", "/api/v1/actor-links"), ("DELETE", "/api/v1/actor-links/{external_actor}"),
+}
+
+
+def test_every_reference_route_still_exists_and_the_added_routes_are_exactly_the_listed_ones():
+    have = {(m.upper(), p) for p, ops in app_mod.app.openapi()["paths"].items() for m in ops if m.upper() in ("GET", "POST", "PATCH", "DELETE")}
     docs = {("GET", "/openapi.json"), ("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("GET", "/redoc")}
     assert REFERENCE_ROUTES <= have, REFERENCE_ROUTES - have
-    assert have - REFERENCE_ROUTES - docs == {("GET", "/readyz")}
+    assert have - REFERENCE_ROUTES - docs == ADDED_ROUTES, (have - REFERENCE_ROUTES - docs) ^ ADDED_ROUTES
 
 
 def test_every_reference_variable_is_still_documented_in_the_configuration_contract():

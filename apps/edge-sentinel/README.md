@@ -128,6 +128,7 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 | `CROWDSEC_MACHINE_ID`, `CROWDSEC_MACHINE_PASSWORD` | _(unset)_ | Optional CrowdSec watcher (machine) login. When both are set, alerts are read from the LAPI (`GET /v1/alerts`) and bans are written to it (`POST /v1/alerts` carrying the decision, `DELETE /v1/decisions` to lift) with a cached JWT, so no docker access is needed and a real LAPI accepts the write. Unset keeps the `cscli` alert path and the bouncer-key write path. |
 | `SENTINEL_REQUIRE_AUTH` | _(unset)_ | Standalone profile. When truthy, every route except `/health` and `/readyz` needs the operator credential (HTTP Basic, 401 otherwise) and the app refuses to start without one. `/invoke` is not covered by this switch: the operator router authenticates it with `AGENTIC_OS_CONTROL_TOKEN` (503 when unset). Unset keeps the reference behaviour (reads open, execution authenticated). |
 | `SENTINEL_TENANT` | _(unset)_ | The organisation name shown in the dashboard header, title and footer (80 characters at most). Unset shows no name: there is no default company. |
+| `SENTINEL_REQUIRE_TWO_PERSON` | _(unset)_ | When truthy, the person who approved an action may not be the one who executes it (`/api/v1`; the reference routes keep their single-operator behaviour). |
 ### Alert triage and the model boundary
 
 `triage` is deterministic: it counts active decisions and alerts, breaks them down by severity and names
@@ -218,3 +219,7 @@ Note: basic permissions authorise the app INSTANCE, not callers: an instance wit
 ## Standalone deployment
 
 A reproducible multi-architecture image (`Dockerfile.standalone`), Docker Compose and Kubernetes/k3s manifests (`deploy/standalone/edge-sentinel`) and the install, authentication, backup and upgrade guide ([docs/standalone/edge-sentinel.md](../../docs/standalone/edge-sentinel.md)) run Edge Sentinel on its own, with sign-in required on every route. The reference `Dockerfile` in this directory is unchanged.
+
+## The product API and local users (`/api/v1`)
+
+`/api/v1/*` is the one API the browser UI, Projects/Sidekick and scripts use: events, decisions, cases with their evidence and replay proof, the action queue, attributable approvals bound to the action digest, execution receipts with the persisted read-back, a change feed, a history, and local users. Every route needs a credential in every profile. Users, roles (`viewer` < `operator` < `admin`) and sessions live in the same SQLite file as the history (`SENTINEL_STATE_DIR/sentinel.db`); the operator credential the deployment ships with becomes the first admin; `edge-sentinel users add|list|set-password|disable|enable` manages users from the command line. See [docs/standalone/edge-sentinel.md](../../docs/standalone/edge-sentinel.md).

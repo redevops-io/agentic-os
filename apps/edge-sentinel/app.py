@@ -132,19 +132,28 @@ from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
 app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
+from . import api_v1 as _api_v1  # noqa: E402 — the one product API (browser UI, Projects/Sidekick, scripts)
+app.include_router(_api_v1.router)
+app.add_exception_handler(_api_v1.ApiError, _api_v1.error_handler)
 
 
 @app.middleware("http")
 async def _require_operator_everywhere(request: Request, call_next):
-    """Standalone profile (SENTINEL_REQUIRE_AUTH=1): every route except the two probes needs the operator credential.
-    Registered before the headers middleware so a refusal also carries the security headers. Off by default: the
-    reference behaviour the rAIlsApps distribution relies on is unchanged."""
+    """Standalone profile (SENTINEL_REQUIRE_AUTH=1): every route except the probes needs a signed-in user (session cookie or Basic against
+    the local user table). The sign-in call, the static UI files and `/api/v1/*` (which authenticates itself in EVERY profile, per route)
+    are let through to their own checks. Registered before the headers middleware so a refusal also carries the security headers. Off by
+    default: the reference behaviour the rAIlsApps distribution relies on is unchanged."""
     auth.align_kernel_operator_credential()
-    if (auth.require_auth_everywhere() and request.url.path not in auth.PUBLIC_PATHS
-            and request.url.path not in auth.SELF_AUTHENTICATED_PATHS):
-        if not auth.basic_header_valid(request.headers.get("authorization", "")):
-            return JSONResponse({"error": "operator authentication required"}, status_code=401,
-                                headers={"WWW-Authenticate": auth._REALM})
+    path = request.url.path
+    if (auth.require_auth_everywhere() and path not in auth.PUBLIC_PATHS and path not in auth.SELF_AUTHENTICATED_PATHS
+            and not path.startswith("/api/v1/") and not (path == "/ui" or path.startswith("/ui/"))):
+        from . import api_v1
+        principal = api_v1.authenticate(request)
+        if principal is None or principal.kind != "user":
+            return JSONResponse({"error": "operator authentication required"}, status_code=401, headers={"WWW-Authenticate": auth._REALM})
+        from . import identity as _identity
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not _identity.csrf_ok(principal, request.method, request.headers):
+            return JSONResponse({"error": "csrf_required"}, status_code=403)
     return await call_next(request)
 
 
@@ -168,6 +177,10 @@ def _check_declared_bind():
     edge-sentinel.app` path guards itself and prints the refusal as a startup error."""
     _security.auth_required_guard()          # SENTINEL_REQUIRE_AUTH=1 without a credential never starts
     auth.align_kernel_operator_credential()
+    from . import identity as _identity
+    if _identity.seed_from_environment():     # an empty user table: the shipped operator credential becomes the first admin
+        import logging as _lg
+        _lg.getLogger("edge_sentinel").warning("created the initial admin from the operator credential; create named users and rotate it")
     _declared = os.environ.get("SENTINEL_BIND_HOST", "").strip()
     if _declared:
         _security.exposure_guard(_declared)
@@ -1469,7 +1482,12 @@ def readyz() -> JSONResponse:
     the production profile has no authority store configured. CrowdSec reachability is reported but does not fail
     readiness (the dashboard says so itself when the core is down). Public, like /health; carries no case data."""
     sh = live.state_health()
-    checks = {"state": bool(sh["ok"])}
+    from . import history_store as _hstore
+    try:
+        _store_ok = bool(_hstore.get().health()["ok"])
+    except Exception:  # noqa: BLE001
+        _store_ok = False
+    checks = {"state": bool(sh["ok"]), "store": _store_ok}
     profile = os.environ.get("AGENTIC_OS_PROFILE", "").strip().lower()
     if profile == "production":
         checks["authority_store"] = bool(os.environ.get("AGENTIC_OS_AUTHORITY_DB", "").strip())
