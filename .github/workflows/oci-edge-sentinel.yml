@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Product release tag to build, for example edge-sentinel-v0.6.2"
+        description: "Product release tag to build, for example edge-sentinel-v0.6.3"
         required: true
       confirm:
         description: "Type exactly: PUBLISH <ref>"
@@ -38,7 +38,7 @@ jobs:
       - name: Check the confirmation and the ref
         run: |
           [ "$CONFIRM" = "PUBLISH $REF" ] || { echo "the confirmation does not match: type PUBLISH $REF"; exit 1; }
-          case "$REF" in edge-sentinel-v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "ref must be a product release tag like edge-sentinel-v0.6.2"; exit 1;; esac
+          case "$REF" in edge-sentinel-v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "ref must be a product release tag like edge-sentinel-v0.6.3"; exit 1;; esac
           [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "dispatch from the protected branch main only (got $GITHUB_REF)"; exit 1; }
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:

@@ -1,6 +1,6 @@
 #!/bin/sh
 # One-time bootstrap for the Docker Compose deployment. Idempotent: it never overwrites an existing secret.
-#   1. creates ./secrets/{operator_password,crowdsec_bouncer_key,crowdsec_machine_password} (random, mode 0600)
+#   1. creates ./secrets/{operator_password,crowdsec_bouncer_key,crowdsec_machine_password,control_token,approval_secret} (random, mode 0600)
 #   2. creates .env from .env.example when there is none
 #   3. starts CrowdSec, registers the bouncer key and the watcher login Sentinel uses, then starts Sentinel
 # Nothing secret is printed: the operator password is the file ./secrets/operator_password.
@@ -11,7 +11,7 @@ gen() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 umask 077
 mkdir -p secrets
 created=""
-for name in operator_password crowdsec_bouncer_key crowdsec_machine_password; do
+for name in operator_password crowdsec_bouncer_key crowdsec_machine_password control_token approval_secret; do
   if [ ! -s "secrets/$name" ]; then gen > "secrets/$name"; created="$created $name"; fi
 done
 [ -f .env ] || cp .env.example .env

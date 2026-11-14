@@ -134,6 +134,10 @@ _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for e
 app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 from . import api_v1 as _api_v1  # noqa: E402 — the one product API (browser UI, Projects/Sidekick, scripts)
 app.include_router(_api_v1.router)
+from . import api_modules as _api_modules  # noqa: E402 — validated, read-only analysis routes
+app.include_router(_api_modules.router)
+from . import ui_routes as _ui_routes  # noqa: E402 — the browser console (static, strict CSP)
+app.include_router(_ui_routes.router)
 app.add_exception_handler(_api_v1.ApiError, _api_v1.error_handler)
 
 
@@ -146,7 +150,8 @@ async def _require_operator_everywhere(request: Request, call_next):
     auth.align_kernel_operator_credential()
     path = request.url.path
     if (auth.require_auth_everywhere() and path not in auth.PUBLIC_PATHS and path not in auth.SELF_AUTHENTICATED_PATHS
-            and not path.startswith("/api/v1/") and not (path == "/ui" or path.startswith("/ui/"))):
+            and not path.startswith("/api/v1/") and not (path == "/ui" or path.startswith("/ui/"))
+            and not (path == "/" and _ui_routes.ui_enabled())):          # the front page only redirects to the console
         from . import api_v1
         principal = api_v1.authenticate(request)
         if principal is None or principal.kind != "user":
@@ -1672,7 +1677,14 @@ _CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear
 
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
+def index():
+    if _ui_routes.ui_enabled():                      # standalone profile: the console is the front page
+        from fastapi.responses import RedirectResponse as _Redirect
+        return _Redirect("/ui/", status_code=302)
+    return _legacy_index()
+
+
+def _legacy_index() -> str:
     if (_r := _deny_response(_GATE_APP, "threat_summary")):
         return _r
     import re as _cr_re

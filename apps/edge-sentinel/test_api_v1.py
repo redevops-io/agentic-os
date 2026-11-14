@@ -553,6 +553,73 @@ def test_a_runtime_call_for_a_protected_address_is_refused_before_anything_is_re
     assert res["status"] == "error" and res["ip_blocked"] is False and env["bans"] == set()
 
 
+# ── the analysis modules that are routed ───────────────────────────────────────────────────────────────────
+
+def test_hunt_validate_accepts_a_read_only_query_refuses_a_mutating_one_and_executes_nothing(env):
+    s = session(ADMIN)
+    ok = s.post("/api/v1/hunt/validate", json={"backend": "crowdsec", "text": "alerts where scenario contains 'ssh'"}).json()
+    assert ok["ok"] is True and ok["executed"] is False and ok["query_id"].startswith("q-")
+    bad = s.post("/api/v1/hunt/validate", json={"backend": "sql", "text": "select 1; drop table users"}).json()
+    assert bad["ok"] is False and "drop" in bad["reason"]
+    assert s.post("/api/v1/hunt/validate", json={"backend": "sql", "text": "select 1", "read_only": False}).json()["ok"] is False
+    assert s.post("/api/v1/hunt/validate", json={"backend": "sql", "text": "x" * 5000}).status_code == 422
+    assert client().post("/api/v1/hunt/validate", json={"backend": "sql", "text": "select 1"}).status_code == 401
+
+
+def test_attack_map_is_deterministic_and_explains_its_basis(env):
+    s = session(ADMIN)
+    r = s.get("/api/v1/attack/map", params={"scenario": "crowdsecurity/ssh-bf"}).json()
+    assert r["techniques"] and all({"technique_id", "name", "tactic", "basis", "url"} <= set(t) for t in r["techniques"])
+    assert r == s.get("/api/v1/attack/map", params={"scenario": "crowdsecurity/ssh-bf"}).json()
+    assert s.get("/api/v1/attack/map").status_code == 422
+
+
+def test_ioc_normalize_canonicalises_and_refangs(env):
+    s = session(ADMIN)
+    r = s.post("/api/v1/ioc/normalize", json={"value": "hxxp://Evil[.]example/x"}).json()
+    assert r["kind"] == "url" and "evil" in json.dumps(r).lower() and r["indicator"]["type"] == "indicator"
+    assert s.post("/api/v1/ioc/normalize", json={"value": "8.8.4.4"}).json()["kind"] == "ipv4"
+    assert s.post("/api/v1/ioc/normalize", json={"value": ""}).status_code == 422
+
+
+SIGMA_OK = "title: t\nlogsource:\n  product: linux\ndetection:\n  sel:\n    msg|contains: x\n  condition: sel\n"
+
+
+def test_detection_validate_checks_structure_and_never_publishes(env):
+    s = session(ADMIN)
+    ok = s.post("/api/v1/detections/validate", json={"language": "sigma", "content": SIGMA_OK}).json()
+    assert ok["valid"] is True and ok["published"] is False
+    bad = s.post("/api/v1/detections/validate", json={"language": "sigma", "content": "title: t\ndetection:\n  condition: nope\n"}).json()
+    assert bad["valid"] is False and bad["errors"]
+    assert s.post("/api/v1/detections/validate", json={"language": "sigma", "content": "a: &x [1]\nb: *x\n"}).status_code == 422     # no YAML aliases
+    assert s.post("/api/v1/detections/validate", json={"language": "yara", "content": "rule r { condition: true }"}).json()["valid"] is True
+    assert s.post("/api/v1/detections/validate", json={"language": "perl", "content": "x"}).status_code == 422
+
+
+def test_an_agent_event_opens_an_investigating_case_that_proposes_nothing_and_survives_a_restart(env):
+    s = session(ADMIN)
+    ev = {"kind": "goal_loop_stuck", "severity": "high", "subject": "mission-7", "source": "mission-kernel", "detail": "no progress for 20 minutes", "ts": 1.79e9}
+    r = s.post("/api/v1/agent-events", json=ev)
+    assert r.status_code == 201 and r.json()["status"] == "INVESTIGATING"
+    cid = r.json()["case_id"]
+    assert s.get(f"/api/v1/cases/{cid}").json()["actions_detail"] == []
+    assert s.post("/api/v1/agent-events", json={**ev, "severity": "low"}).json()["reason"] == "below_min_severity"
+    assert s.post("/api/v1/agent-events", json={**ev, "extra": "x"}).status_code == 422
+    assert s.post("/api/v1/agent-events", json={"kind": "k", "severity": "urgent"}).status_code == 422
+    assert s.post("/api/v1/agent-events", json={**ev, "detail": "x" * 600}).status_code == 422
+    v = session(make_user(s, "vera", "viewer"))
+    assert v.post("/api/v1/agent-events", json=ev).json()["error"] == "role_required"
+    _restart(env)
+    env["state"]["alerts"] = []
+    assert cid in [c["case_id"] for c in session(ADMIN).get("/api/v1/cases").json()["items"]]
+
+
+def test_soc2_controls_lists_the_catalogue_and_says_what_it_is_not(env):
+    r = session(ADMIN).get("/api/v1/soc2/controls").json()
+    ids = {c["control_id"] for c in r["items"]}
+    assert {"SEC-ACC-01", "AVL-BCK-01"} <= ids and "supports it; it does not satisfy it" in r["note"]
+
+
 def test_concurrent_requests_never_see_another_threads_cursor(env):
     """Found by the browser run: a cursor read outside the store's lock saw a neighbouring statement (a session row with a NULL expiry)."""
     import threading
@@ -574,3 +641,14 @@ def test_concurrent_requests_never_see_another_threads_cursor(env):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == []
+
+
+def test_manual_and_agent_event_cases_have_their_own_replay_proof_and_source(env):
+    s = session(ADMIN)
+    r = s.post("/api/v1/cases", json={"type": "manual_block", "ip": "8.8.4.4", "reason": "x"}).json()
+    got = s.get(f"/api/v1/cases/{r['case_id']}").json()
+    assert got["replay"]["deterministic"] is True
+    assert [h["via"] for h in got["history"] if h["type"] == "case.opened"] == ["manual"]
+    ev = s.post("/api/v1/agent-events", json={"kind": "k", "severity": "high"}).json()
+    got = s.get(f"/api/v1/cases/{ev['case_id']}").json()
+    assert got["replay"]["deterministic"] is True and [h["via"] for h in got["history"] if h["type"] == "case.opened"] == ["agent-runtime"]

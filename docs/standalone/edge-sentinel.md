@@ -17,10 +17,12 @@ The image is `ghcr.io/redevops-io/edge-sentinel`, for `linux/amd64` and `linux/a
 | Probes | `GET /health` (liveness) and `GET /readyz` (readiness: the state directory is usable and, in the production profile, an authority store is configured). Both are public and carry no case data. |
 | Dashboard | `GET /`: status banner, KPI tiles, alert feed by severity, scenario meter, active decisions, the case panel with approve/reject/execute buttons, and the assistant. |
 
+The analysis modules that are safe to expose are routed under `/api/v1`, each with validated, bounded input and no side effect: `POST /hunt/validate` (is this query read-only and well formed; nothing is executed), `GET /attack/map?scenario=` (ATT&CK techniques for a CrowdSec scenario, deterministic, with the matched token as the basis), `POST /ioc/normalize` (canonical STIX observable and indicator), `POST /detections/validate` (Sigma or YARA structure; never published), `POST /agent-events` (one agent-runtime event becomes an investigating case: a signal that proposes no action; operator role or the service credential) and `GET /soc2/controls` (the control catalogue). `GET /api/v1/info` lists everything that is not routed, each with its reason.
+
 What the standalone image does not do, so nothing is promised that is not there:
 
 * The detection engine is CrowdSec. Edge Sentinel does not read logs itself; point CrowdSec at your logs (see [CrowdSec log sources](#crowdsec-log-sources)).
-* The repository's hunting, AI-security, agent-event, STIX/ATT&CK and SOC 2 evidence modules are libraries with their own tests. They are not wired to any route of this app in this release, so there is no API to ingest an agent event or a log batch into Edge Sentinel.
+* DFIR timelines, enrichment providers, the evaluation harness, the risk handoff, AI-security assessment of runtime events, the CTI graph, detection publishing and the SOC 2 evidence collectors are library code without a safe client input path or a consumer in this deployment: they are not routed, and `/api/v1/info` says so. A log batch cannot be ingested into Edge Sentinel; CrowdSec reads the logs.
 * The network-access (NetBird), backup (Portabase), runtime scan (deploy-scan), Wazuh and ClamAV panels need those services (`NETBIRD_API_URL`/`NETBIRD_API_TOKEN`, `PORTABASE_API_URL`/`PORTABASE_API_TOKEN`, `DEPLOY_SCAN_MCP_URL`, `WAZUH_API_URL`, `CLAMAV_HOST`). Without them the panels show labelled sample data or report themselves unavailable. They were not exercised against live services for this release.
 * The supply-chain console tools (`supply_chain_scan`, `sbom`, `list_vulnerabilities`) need Trivy and Syft, which are not in the default image. Build with `--build-arg WITH_SCANNERS=1` to include both (pinned versions, sha256-verified for each architecture) and they run against the container's own filesystem. Scanning other containers needs Docker access, which the standalone image does not use.
 * No docker CLI and no Docker socket: alerts and bans go over the CrowdSec Local API with a watcher login.
@@ -80,11 +82,34 @@ The pod runs as uid 10001 with a read-only root filesystem, no capabilities and 
 
 `deploy/standalone/edge-sentinel/verify-k3s.sh [IMAGE]` starts a throwaway k3s (the pinned `rancher/k3s` image, privileged, in Docker, under unique names), installs Edge Sentinel with `k8s/bootstrap.sh`, runs `routewalk.py` and `smoke.sh` (alert, case, approval, execution, read-back of the ban, pod restart, state kept), prints the pod security context and removes everything. It uses its own kubeconfig and never reads or changes yours. With no argument it tests the published 0.6.2 digest; a local image tag is loaded into the k3s. It needs docker, kubectl, python3 and curl, and runs in about three minutes; a CI job can call it as is.
 
+## The browser console
+
+`http://127.0.0.1:8203/` opens the console at `/ui/` (the image sets `SENTINEL_UI=1`; unset keeps the legacy dashboard at `/`). It is plain static files served by the app itself: no build step, no third-party script, font or image, a Content-Security-Policy with no inline script or style and no `eval`, and everything it shows comes from `/api/v1`. Pages:
+
+| Page | What it shows and does |
+|---|---|
+| Overview | decisions, alerts, what is waiting for you, recent changes; a banner states whether the deployment is live, a dry run or a demo, and any panel that is unavailable and why |
+| Events | CrowdSec alerts, filterable, each linked to the case it became |
+| Cases | the cases (worst first) with filters and search; a form to stage a manual ban or unban (it only proposes) |
+| Case | the proposed actions with their digest, decision, receipt and read-back; approve, reject, execute and withdraw dialogs that state the consequence (and DRY RUN or LIVE) before anything happens; findings; the evidence viewer and download with the replay proof; the case history |
+| Actions | the queue by state: awaiting approval, approved, executed, failed, rejected |
+| History | the audit trail, newest first (the same rows as the change feed) |
+| Users | admin only: add users, change roles, disable, and link Projects principals |
+| About | version, mode, store, the signed-in user, and the list of what is unavailable here and why |
+
+The console polls the change feed every 5 seconds while the tab is visible (30 seconds when hidden) and refreshes the page it is on unless a dialog or a field is in use. It works at 390 px and at 1440 px without horizontal scrolling and passes the axe-core accessibility rules in light and dark schemes.
+
+`deploy/standalone/edge-sentinel/e2e/console_e2e.py` is the browser test that was run against the Compose stack and against k3s with a real CrowdSec: it signs in, seeds a real CrowdSec decision, approves, executes and reads the ban back, rejects another, stages a manual action, checks a viewer cannot decide, a write without the CSRF token, an ended session, a restart, overflow at both widths, same-origin requests only, and a clean console. It needs `playwright` (and optionally `axe-playwright-python`) in the Python that runs it:
+
+```bash
+python3 e2e/console_e2e.py --base http://127.0.0.1:8203 --admin operator --admin-password-file secrets/operator_password
+```
+
 ## First run
 
-1. Open the dashboard and sign in as `operator`.
-2. Add a test decision as above. Within one refresh (the dashboard caches CrowdSec reads for 10 seconds) a case appears in the case panel, awaiting approval.
-3. Approve it. The decision is recorded as `operator:operator`. Execute it: with `SENTINEL_BLOCK_ENABLED` unset the result is `DRY_RUN`. Set `SENTINEL_BLOCK_ENABLED=1` (and `SENTINEL_BLOCK_ALLOW_NETWORKS` for test ranges) in `.env` to enforce real bans.
+1. Open the console and sign in as `operator` (the initial admin, with the password in `secrets/operator_password`).
+2. Add a test decision as above. Within one refresh (CrowdSec reads are cached for 10 seconds) a case appears under Cases, awaiting approval.
+3. Open it and approve it. The decision is recorded under your user name, your role and the channel. Execute it: with `SENTINEL_BLOCK_ENABLED` unset the result is `DRY_RUN`. Set `SENTINEL_BLOCK_ENABLED=1` (and `SENTINEL_BLOCK_ALLOW_NETWORKS` for test ranges) in `.env` to enforce real bans.
 
 `deploy/standalone/edge-sentinel/smoke.sh` runs this whole path against a Compose deployment and prints PASS or FAIL for each step, including a restart.
 
@@ -135,7 +160,8 @@ Set these in `.env` (Compose) or the Deployment environment (Kubernetes). A name
 | `SENTINEL_REQUIRE_AUTH` | `1` | Standalone profile: sign-in on every route but the probes. |
 | `AGENTIC_OS_PROFILE` | `production` | `production` or `development`. |
 | `AGENTIC_OS_AUTHORITY_DB`, `AGENTIC_OS_REPLAY_DB` | `/data/authority.db`, `/data/replay.db` | Durable authority ledger and replay guard for the operator surface. |
-| `AGENTIC_OS_CONTROL_TOKEN` (`_FILE`) | none | Credential for `/invoke`. Unset disables `/invoke`. |
+| `AGENTIC_OS_CONTROL_TOKEN` (`_FILE`) | none (the Compose and Kubernetes files generate one) | The service credential (`X-Control-Token`): `/invoke`, and reads and staging from Projects/Sidekick. Unset disables both. |
+| `AGENTIC_OS_APPROVAL_SECRET` (`_FILE`) | none (generated likewise) | Verifies the per-click approval tokens Projects mints; the same value must be given to Projects. Unset: such tokens are refused and Projects can read and stage but not decide. |
 | `CROWDSEC_LAPI_URL` | `http://localhost:8086` (the manifests set `http://crowdsec:8080`) | CrowdSec Local API. |
 | `CROWDSEC_BOUNCER_KEY` (`_FILE`) | none | Reads decisions and verifies bans. |
 | `CROWDSEC_MACHINE_ID`, `CROWDSEC_MACHINE_PASSWORD` (`_FILE`) | none | Watcher login: reads alerts and writes and lifts bans over the LAPI. Without it alerts need `cscli` through Docker, which this image lacks. |
@@ -186,6 +212,10 @@ Upgrade by changing the image tag or digest and running `docker compose pull && 
 ## Operating limits
 
 One replica per deployment; CrowdSec reads are cached for 10 seconds; the alert feed shows the most recent 50 alerts from the LAPI; the POST routes are rate limited per client address; approved executions retry at most five times with backoff; case state does not follow an alert that CrowdSec has expired. Sizing beyond a single host's worth of alerts has not been measured.
+
+## Using it from Projects and Sidekick
+
+`bootstrap.sh` (Compose) and `k8s/bootstrap.sh` generate a service credential (`secrets/control_token`) and an approval secret (`secrets/approval_secret`; Kubernetes keys `control-token`, `approval-secret`). To connect Projects, give it the product URL, the control token and the same approval secret, then, as an admin, link each Projects principal that may approve to an Edge Sentinel user with the `operator` role (Users, Projects links, or `POST /api/v1/actor-links`). Projects can then read the queue and stage proposals with the service credential; an approval clicked in Projects is accepted only as a single-use token bound to that action's digest and to the linked user, and is recorded as that user with `via: projects`. The product pages Projects links to are `/ui/cases/<case-id>` and `/ui/actions/<act-id>`. The same records are what the browser console shows.
 
 ## Compatibility with the rAIlsApps distribution
 

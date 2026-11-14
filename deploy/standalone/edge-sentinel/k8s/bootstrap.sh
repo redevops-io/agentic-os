@@ -14,16 +14,23 @@ fi
 gen() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 kubectl apply -f namespace.yaml
 if ! kubectl -n "$NS" get secret edge-sentinel >/dev/null 2>&1; then
-  OP="$(gen)"; BK="$(gen)"; MP="$(gen)"
+  OP="$(gen)"; BK="$(gen)"; MP="$(gen)"; CT="$(gen)"; AS="$(gen)"
   kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: v1
 kind: Secret
 metadata: {name: edge-sentinel, namespace: $NS}
 type: Opaque
-stringData: {operator-password: "$OP", crowdsec-bouncer-key: "$BK", crowdsec-machine-password: "$MP"}
+stringData: {operator-password: "$OP", crowdsec-bouncer-key: "$BK", crowdsec-machine-password: "$MP", control-token: "$CT", approval-secret: "$AS"}
 YAML
   echo "created Secret edge-sentinel"
 fi
+# a Secret made by an earlier version of this script lacks the two newest keys: add them, never touch the existing ones
+for key in control-token approval-secret; do
+  if [ -z "$(kubectl -n "$NS" get secret edge-sentinel -o jsonpath="{.data.$key}")" ]; then
+    kubectl -n "$NS" patch secret edge-sentinel --type merge -p "{\"stringData\":{\"$key\":\"$(gen)\"}}" >/dev/null
+    echo "added $key to Secret edge-sentinel"
+  fi
+done
 # EDGE_SENTINEL_IMAGE=<registry/name@sha256:digest or :tag> installs that image instead of the one in kustomization.yaml
 # (verify-k3s.sh uses it to test a published digest); the manifests in this directory are not edited.
 if [ -n "${EDGE_SENTINEL_IMAGE:-}" ]; then
