@@ -135,8 +135,9 @@ modules:
     agents: [coder]
   - name: redevops-qa
     source:
+    repo: redevops-io/redevops-qa
     pain: QA & test evidence for your own rAIls deployments
-    deploy: external
+    deploy: compose
     port: 8080
     tagline: Frozen test plans run against your rAIls deployment, with a hash-chained evidence bundle.
     agents: [qa]
