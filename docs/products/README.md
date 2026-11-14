@@ -11,7 +11,7 @@ With `AGENTIC_OS_PRODUCTS` unset nothing in the Projects server changes.
    | File | Used for |
    |---|---|
    | `service_token_file` | reads and staging proposals (`X-Control-Token`, or `Authorization: Bearer` for `scheme: bearer`) |
-   | `decision_token_file` | carries a person's decision or execute click; falls back to the service token when absent |
+   | `decision_token_file` | optional second token for a person's decision or execute click; falls back to the service token. Edge Sentinel accepts its service credential plus the signed approval token on those routes |
    | `approval_secret_file` | `AGENTIC_OS_APPROVAL_SECRET`, shared with the product, signs the single-use approval token |
 
    The pair is dedicated per product: it is not the runtime admin token, so a leaked product token cannot call the runtime.
@@ -57,9 +57,9 @@ Decide and execute are never tools. A message such as "approve act-…" is answe
 2. Projects shows it in Attention and Today with its consequence ("dry run: nothing will be blocked" or the live effect) and the action digest.
 3. A person approves in Projects. Projects re-reads the action from the product, refuses a changed digest (`409 stale_approval`), then mints an approval token with `agentic_os.mission.approval` (HMAC, bound to the operator, the capability and the sha256 of `{case_id, request_id, approved, digest}`, 120 s, single use) whose marker is `{approved, by: "projects:<principal>", via: "projects"}`, and sends it with the decision token.
 4. The product verifies the token and its replay guard, maps `by` to a user linked to that Projects principal (`actor_links`) and records the decision with that user as actor and `via: projects`. An unlinked principal is refused (`403 actor_not_linked`).
-5. Execution is a second, separate human step, bound to a different digest so one click can never decide and execute. The product executes through its own mandatory approval and then re-reads the edge; the result (`verified`, `unverified`, `dry_run`) is the product's persisted record, and Projects only displays it.
+5. Execution is a second, separate human step, bound to a different digest so one click can never decide and execute. The product executes through its own mandatory approval and then re-reads the edge; the result (`verified`, `unverified`, `failed`, `dry_run`) is the product's persisted record, and Projects only displays it. While blocking is not enabled in the product (`SENTINEL_BLOCK_ENABLED` unset) an execution is a dry run: the product keeps the action `APPROVED` with a `DRY_RUN` receipt, and Projects shows it as a settled "Dry run" and offers no second execute until blocking is enabled. A ban the product's own guard refuses (reserved address space, protected addresses) is recorded by the product as `FAILED` with the reason, and Projects shows that failure.
 
-The principal is never taken from a request body. It is the desktop session (`local-owner`), a control credential in `Authorization: Bearer` (`admin`, `approver:<tenant>`; a requester is refused while approver credentials exist), or the `principal.single_owner` the operator declared for a Projects only one person can reach. Without a principal the decision is refused (401) and nothing is sent. The product's own UI always remains a way to decide.
+The principal is never taken from a request body. It is the desktop session (`local-owner`), the operator's HTTP Basic credential that the shipped Projects server asks the browser for (`operator`), a control credential in `Authorization: Bearer` (`admin`, `approver:<tenant>`; a requester is refused while approver credentials exist), or the `principal.single_owner` the operator declared for a Projects only one person can reach. Link the principal that applies in the product once (for Edge Sentinel: `POST /api/v1/actor-links {"external_actor": "projects:operator", "user": "<name>"}`). Without a principal the decision is refused (401) and nothing is sent. The product's own UI always remains a way to decide.
 
 ## Gates
 
@@ -68,6 +68,10 @@ The redevops-qa tools, the QA projection and the QA catalog entry are enabled on
 ## Tier A and Tier B
 
 Tier A is everything above: server-side projections, the Today approval control, Sidekick replies and app-directory links. It works with the shipped Projects UI bundles without a UI change, including the desktop bundle. Its limits come from that UI: the Today control is worded for messages ("Approve & send"), Missions has no decide control, and Sidekick shows text and navigation actions only. Tier B (purpose-built case and run pages with evidence tables and live progress inside Projects) needs new views in the public `redevops-projects` repository and is not claimed for the desktop bundle, whose UI source is unpublished.
+
+## Release line: `/api/ui-config`
+
+On the Projects line that serves `GET /api/ui-config`, the response carries an additive `products` section (`configured`, `basis: product_records`, the views fed) next to the existing `data_source` and `projections.basis`. The shipped desktop UI labels its data "Sample" at the top level unless the drill-down store is mounted; product rows are the products' own records and carry them in `source_refs`, but that chip is the UI's, not the products package's.
 
 ## Desktop bundle
 
