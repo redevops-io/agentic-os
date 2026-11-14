@@ -19,8 +19,8 @@ class _FakeSender:
     def __init__(self):
         self.calls = []
 
-    def send(self, *, to, subject, body, tag="gtm"):
-        self.calls.append({"to": to, "subject": subject, "body": body, "tag": tag})
+    def send(self, *, to, subject, body, tag="gtm", html=None):
+        self.calls.append({"to": to, "subject": subject, "body": body, "tag": tag, "html": html})
         if to == "bounces@example.com":
             return {"message_id": None, "to": to, "error_code": 1, "error": "RuntimeError: mailbox full"}
         return {"message_id": f"mid-{len(self.calls)}", "to": to, "error_code": 0}
@@ -76,6 +76,7 @@ def test_send_all_sends_only_to_verified_accounts_once_a_sender_is_wired(monkeyp
     # exactly one real send attempt was made, and only to the verified recipient
     assert [c["to"] for c in fake.calls] == ["rob@kaizenrw.com"]
     assert fake.calls[0]["subject"] == "hi Verified Co" and fake.calls[0]["tag"] == "outreach-engine"
+    assert "<table" in fake.calls[0]["html"]   # the evidence visualization is a real, generated fallback
 
 
 def test_send_all_reports_a_provider_failure_without_crashing(monkeypatch):

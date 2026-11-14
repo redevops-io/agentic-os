@@ -23,6 +23,7 @@ ACCT = core.DEMO[0]["account"]
 BODIES = {
     "refresh": {"action": "refresh", "live": False},
     "enrich": {"action": "enrich", "account": ACCT},
+    "draft_pitch": {"action": "draft_pitch", "account": ACCT},
     "approve": {"action": "approve", "account": ACCT},
     "send_all": {"action": "send_all"},
 }
@@ -152,6 +153,17 @@ def test_operator_send_all_executes_through_core_honestly(client):
 def test_refresh_is_ungated_read(client):
     r = client.post("/api/run", json=BODIES["refresh"])
     assert r.json()["action"] == "refresh" and _Twenty.writes == []
+
+
+def test_draft_pitch_is_ungated_read(client):
+    # app_mod._llm is forced to "" by the autouse fixture, so this exercises the deterministic
+    # template fallback -- still runs with no approval marker, and still never touches Twenty.
+    r = client.post("/api/run", json=BODIES["draft_pitch"])
+    j = r.json()
+    assert j["ok"] is True and j["action"] == "draft_pitch" and j["draft_source"] == "template"
+    assert "<table" in j["html"] and _Twenty.writes == []
+    row = next(row for row in core._STATE["accounts"] if row["account"] == ACCT)
+    assert row["draft"]["body"] == j["body"]
 
 
 def test_enrich_is_ungated_read(client):
