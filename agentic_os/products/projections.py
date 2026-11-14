@@ -363,6 +363,14 @@ class ProductProjectionsMixin:
         base = super().activity(project_id) if self._keep() else []   # type: ignore[misc]
         return list(base) + product_activity(self.products_hub)
 
+    def priorities(self, project_id: str) -> dict:
+        out = super().priorities(project_id)   # type: ignore[misc]
+        if not self._keep() and isinstance(out, dict) and out.get("basis") == "sample":
+            # the base provider's sample fallback would put demo "needs you" items next to real product approvals
+            return {"summary": "Nothing needs you right now.", "surfaced": [], "deferred": [],
+                    "handled_automatically": 0, "abstained": 0, "basis": "products"}
+        return out
+
     def apps(self, project_id: str) -> List[dict]:
         return extend_apps(self.products_hub, list(super().apps(project_id)))   # type: ignore[misc]
 
@@ -397,6 +405,8 @@ class ProductProjectionsMixin:
                     feed["items"][by_id[tid]] = case
                 else:
                     feed["items"].append(case)
+        if not feed.get("simulated_actions") and any(i.get("kind") == "case" and i.get("domain") == "security" for i in feed["items"]):
+            feed["basis"] = "live"             # real product records; the "sample data" banner would be false
         counts = {s: 0 for s in STATES}
         for it in feed["items"]:
             counts[it["state"]] += 1
