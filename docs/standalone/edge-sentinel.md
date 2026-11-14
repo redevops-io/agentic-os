@@ -80,7 +80,7 @@ The pod runs as uid 10001 with a read-only root filesystem, no capabilities and 
 
 ### Verify the Kubernetes install on a real k3s
 
-`deploy/standalone/edge-sentinel/verify-k3s.sh [IMAGE]` starts a throwaway k3s (the pinned `rancher/k3s` image, privileged, in Docker, under unique names), installs Edge Sentinel with `k8s/bootstrap.sh`, runs `routewalk.py` and `smoke.sh` (alert, case, approval, execution, read-back of the ban, pod restart, state kept), prints the pod security context and removes everything. It uses its own kubeconfig and never reads or changes yours. With no argument it tests the published 0.6.2 digest; a local image tag is loaded into the k3s. It needs docker, kubectl, python3 and curl, and runs in about three minutes; a CI job can call it as is.
+`deploy/standalone/edge-sentinel/verify-k3s.sh [IMAGE]` starts a throwaway k3s (the pinned `rancher/k3s` image, privileged, in Docker, under unique names), installs Edge Sentinel with `k8s/bootstrap.sh`, runs `routewalk.py` and `smoke.sh` (alert, case, approval, execution, read-back of the ban, pod restart, state kept), prints the pod security context and removes everything. It uses its own kubeconfig and never reads or changes yours. With no argument it tests the published 0.6.3 digest; a local image tag is loaded into the k3s. It needs docker, kubectl, python3 and curl, and runs in about three minutes; a CI job can call it as is.
 
 ## The browser console
 
@@ -235,8 +235,9 @@ The image labels name the source commit. The signature and the GitHub attestatio
 | Release | Tags | Index digest | amd64 | arm64 | Source commit |
 |---|---|---|---|---|---|
 | 0.6.2 | `0.6.2`, `0.6.2-8fdd81761a4f` | `sha256:90fd0ab8be167535c63ef57c124f17f5ee436f255e47c9106187c49b6cb1e31b` | `sha256:641f0554286ccac1d6533f78522de02e73e114b22fc381f896d2959806ebd86d` | `sha256:0243be7012c44af3a9f032191329630e02d69c8f3ff416b06747c783f14517ec` | `8fdd81761a4fb4040a2436a8b5010b390620ca43` (tag `edge-sentinel-v0.6.2`, on `main`) |
+| 0.6.3 | `0.6.3`, `0.6.3-d7b79530d496` | `sha256:0650bba74539e9500d537236cf843eca407e45be99fe5b7ae2530096e0abbd72` | `sha256:56dcfea3d6c58022a6285dae0fe77e8866f22bbb107326f19f2fa1be109c0791` | `sha256:a279428ccc7bdb740a8f8487ccb05895679bbb38efdf26c34fd89af553c6a75f` | `d7b79530d4969cc9e473118bab0d139690e455f4` (tag `edge-sentinel-v0.6.3`, on `main`) |
 
-To install exactly this release, set `EDGE_SENTINEL_IMAGE=ghcr.io/redevops-io/edge-sentinel@sha256:90fd0ab8be167535c63ef57c124f17f5ee436f255e47c9106187c49b6cb1e31b` in `.env`. Each later release adds a row.
+To install exactly this release, set `EDGE_SENTINEL_IMAGE=ghcr.io/redevops-io/edge-sentinel@sha256:0650bba74539e9500d537236cf843eca407e45be99fe5b7ae2530096e0abbd72` in `.env`. Each later release adds a row.
 
 ## Build it yourself
 
