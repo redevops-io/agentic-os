@@ -281,3 +281,15 @@ def test_the_operator_basic_credential_the_shipped_server_asks_for_is_a_principa
     assert c2.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": card["digest"]}, headers=bad).status_code in (401, 403)
     r = c2.post(f"/api/products/edge-sentinel/actions/{ACT}/decision", json={"approved": True, "digest": card["digest"]}, headers=good)
     assert r.status_code == 200 and fake.actions[ACT]["decision"]["actor"] == "user:alex"
+
+
+def test_ui_config_extra_names_the_products_that_feed_the_views(stack):
+    from agentic_os.products import ui_config_extra
+    fake, c, *_ = stack
+    prov = c.app.state.products_hub
+    assert ui_config_extra(SampleProjectionProvider()) == {}
+    from agentic_os.products import hub_for
+    # the provider the app was built with carries the hub
+    class P: products_hub = prov
+    x = ui_config_extra(P())
+    assert x["products"]["configured"] == ["edge-sentinel"] and x["products"]["basis"] == "product_records" and x["products"]["sample_rows_kept"] is False
