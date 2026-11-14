@@ -82,11 +82,34 @@ The pod runs as uid 10001 with a read-only root filesystem, no capabilities and 
 
 `deploy/standalone/edge-sentinel/verify-k3s.sh [IMAGE]` starts a throwaway k3s (the pinned `rancher/k3s` image, privileged, in Docker, under unique names), installs Edge Sentinel with `k8s/bootstrap.sh`, runs `routewalk.py` and `smoke.sh` (alert, case, approval, execution, read-back of the ban, pod restart, state kept), prints the pod security context and removes everything. It uses its own kubeconfig and never reads or changes yours. With no argument it tests the published 0.6.2 digest; a local image tag is loaded into the k3s. It needs docker, kubectl, python3 and curl, and runs in about three minutes; a CI job can call it as is.
 
+## The browser console
+
+`http://127.0.0.1:8203/` opens the console at `/ui/` (the image sets `SENTINEL_UI=1`; unset keeps the legacy dashboard at `/`). It is plain static files served by the app itself: no build step, no third-party script, font or image, a Content-Security-Policy with no inline script or style and no `eval`, and everything it shows comes from `/api/v1`. Pages:
+
+| Page | What it shows and does |
+|---|---|
+| Overview | decisions, alerts, what is waiting for you, recent changes; a banner states whether the deployment is live, a dry run or a demo, and any panel that is unavailable and why |
+| Events | CrowdSec alerts, filterable, each linked to the case it became |
+| Cases | the cases (worst first) with filters and search; a form to stage a manual ban or unban (it only proposes) |
+| Case | the proposed actions with their digest, decision, receipt and read-back; approve, reject, execute and withdraw dialogs that state the consequence (and DRY RUN or LIVE) before anything happens; findings; the evidence viewer and download with the replay proof; the case history |
+| Actions | the queue by state: awaiting approval, approved, executed, failed, rejected |
+| History | the audit trail, newest first (the same rows as the change feed) |
+| Users | admin only: add users, change roles, disable, and link Projects principals |
+| About | version, mode, store, the signed-in user, and the list of what is unavailable here and why |
+
+The console polls the change feed every 5 seconds while the tab is visible (30 seconds when hidden) and refreshes the page it is on unless a dialog or a field is in use. It works at 390 px and at 1440 px without horizontal scrolling and passes the axe-core accessibility rules in light and dark schemes.
+
+`deploy/standalone/edge-sentinel/e2e/console_e2e.py` is the browser test that was run against the Compose stack and against k3s with a real CrowdSec: it signs in, seeds a real CrowdSec decision, approves, executes and reads the ban back, rejects another, stages a manual action, checks a viewer cannot decide, a write without the CSRF token, an ended session, a restart, overflow at both widths, same-origin requests only, and a clean console. It needs `playwright` (and optionally `axe-playwright-python`) in the Python that runs it:
+
+```bash
+python3 e2e/console_e2e.py --base http://127.0.0.1:8203 --admin operator --admin-password-file secrets/operator_password
+```
+
 ## First run
 
-1. Open the dashboard and sign in as `operator`.
-2. Add a test decision as above. Within one refresh (the dashboard caches CrowdSec reads for 10 seconds) a case appears in the case panel, awaiting approval.
-3. Approve it. The decision is recorded as `operator:operator`. Execute it: with `SENTINEL_BLOCK_ENABLED` unset the result is `DRY_RUN`. Set `SENTINEL_BLOCK_ENABLED=1` (and `SENTINEL_BLOCK_ALLOW_NETWORKS` for test ranges) in `.env` to enforce real bans.
+1. Open the console and sign in as `operator` (the initial admin, with the password in `secrets/operator_password`).
+2. Add a test decision as above. Within one refresh (CrowdSec reads are cached for 10 seconds) a case appears under Cases, awaiting approval.
+3. Open it and approve it. The decision is recorded under your user name, your role and the channel. Execute it: with `SENTINEL_BLOCK_ENABLED` unset the result is `DRY_RUN`. Set `SENTINEL_BLOCK_ENABLED=1` (and `SENTINEL_BLOCK_ALLOW_NETWORKS` for test ranges) in `.env` to enforce real bans.
 
 `deploy/standalone/edge-sentinel/smoke.sh` runs this whole path against a Compose deployment and prints PASS or FAIL for each step, including a restart.
 

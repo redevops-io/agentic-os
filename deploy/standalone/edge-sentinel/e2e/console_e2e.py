@@ -228,7 +228,8 @@ with sync_playwright() as pw:
     foreign = [u for u in requests if urlparse(u).netloc and urlparse(u).netloc != urlparse(BASE).netloc]
     check("only same-origin requests were made", not foreign, str(foreign[:3]))
     # the 401/403 resource lines are the deliberate wrong-password, ended-session and missing-CSRF steps above
-    noise = re.compile(r"Failed to load resource: the server responded with a status of (401|403)")
+    # (and the change-feed poll that finds the service down for the restart step)
+    noise = re.compile(r"Failed to load resource: (the server responded with a status of (401|403)|net::ERR_(CONNECTION_REFUSED|CONNECTION_RESET|EMPTY_RESPONSE))")
     check("the browser console stayed clean (apart from the deliberate refusals)", not [m for m in console_errors if not noise.search(m)], str([m for m in console_errors if not noise.search(m)][:3]))
     browser.close()
 print(f"CONSOLE E2E OK: {len(results)} checks")

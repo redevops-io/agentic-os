@@ -27,10 +27,12 @@ auth() { curl -s -u "${USER_}:${PW}" "$@"; }
 
 [ "$(code "$BASE/health")" = 200 ] && ok "/health is public and answers" || bad "/health"
 [ "$(code "$BASE/readyz")" = 200 ] && ok "/readyz reports ready" || bad "/readyz"
-for p in / /api/activity /api/cases /capabilities /openapi.json; do
+for p in /api/activity /api/cases /api/v1/cases /api/v1/info /capabilities /openapi.json; do
   [ "$(code "$BASE$p")" = 401 ] || bad "anonymous GET $p was not refused"
 done
-ok "anonymous GET is refused (401) on /, /api/activity, /api/cases, /capabilities, /openapi.json"
+ok "anonymous GET is refused (401) on /api/activity, /api/cases, /api/v1/cases, /api/v1/info, /capabilities, /openapi.json"
+c="$(code "$BASE/")"; [ "$c" = 401 ] || [ "$c" = 302 ] && ok "the front page only redirects to the console (or asks for sign-in): $c" || bad "GET / answered $c"
+[ "$(code "$BASE/ui/")" = 200 ] && ok "the console's static page loads before sign-in and carries no data" || bad "/ui/"
 [ "$(code -X POST -H 'Content-Type: application/json' -d '{"action":"triage"}' "$BASE/agent/run")" = 401 ] && ok "anonymous POST /agent/run is refused" || bad "POST /agent/run"
 [ "$(code -u "${USER_}:wrong-password" "$BASE/api/cases")" = 401 ] && ok "a wrong password is refused" || bad "wrong password"
 [ "$(code -u "${USER_}:${PW}" "$BASE/api/cases")" = 200 ] && ok "the operator is served" || bad "operator GET /api/cases"

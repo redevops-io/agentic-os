@@ -3,7 +3,7 @@
 # Edge Sentinel with the documented k8s/bootstrap.sh, runs the route walk and smoke.sh (alert -> case -> approve -> execute ->
 # read-back -> pod restart -> state kept) against it, prints the pod security context, and removes everything it created.
 #
-#   usage: ./verify-k3s.sh [IMAGE]      IMAGE defaults to the digest of the current release (see docs/standalone/edge-sentinel.md);
+#   usage: [CONSOLE_E2E_PYTHON=<python with playwright> [CONSOLE_E2E_SHOTS=<dir>]] ./verify-k3s.sh [IMAGE]      IMAGE defaults to the digest of the current release (see docs/standalone/edge-sentinel.md);
 #                                       a local image works too: ./verify-k3s.sh my/image:tag (it is loaded into k3s)
 #
 # Safety: it only ever talks to the k3s it started (its own kubeconfig file; your KUBECONFIG and contexts are never read or
@@ -52,7 +52,8 @@ echo "running image: $(kubectl -n edge-sentinel get pod -l app.kubernetes.io/nam
 echo "network policies: $(kubectl -n edge-sentinel get networkpolicy -o name | tr '\n' ' ')"
 
 step "enabling real execution for the test (throwaway cluster only): SENTINEL_BLOCK_ENABLED=1, test range 203.0.113.0/24 bannable"
-kubectl -n edge-sentinel set env deploy/edge-sentinel SENTINEL_BLOCK_ENABLED=1 SENTINEL_BLOCK_ALLOW_NETWORKS=203.0.113.0/24 >/dev/null
+# (and a larger rate-limit bucket: the route walk and the smoke test make many writes in a minute from one address)
+kubectl -n edge-sentinel set env deploy/edge-sentinel SENTINEL_BLOCK_ENABLED=1 SENTINEL_BLOCK_ALLOW_NETWORKS=203.0.113.0/24 SENTINEL_RATE_BURST=300 SENTINEL_RATE_PER_MIN=3000 >/dev/null
 kubectl -n edge-sentinel rollout status deploy/edge-sentinel --timeout=180s | tail -1
 
 step "port-forward and checks"
@@ -66,4 +67,12 @@ SMOKE_BASE="http://127.0.0.1:$FWD_PORT" SMOKE_USER=operator SMOKE_PASSWORD="$PW"
 SMOKE_CROWDSEC="kubectl -n edge-sentinel exec deploy/crowdsec --" \
 SMOKE_RESTART="kubectl -n edge-sentinel rollout restart deploy/edge-sentinel && kubectl -n edge-sentinel rollout status deploy/edge-sentinel --timeout=180s" \
   ./smoke.sh
+if [ -n "${CONSOLE_E2E_PYTHON:-}" ]; then
+  step "browser end-to-end test of the console through the port-forward (python: $CONSOLE_E2E_PYTHON)"
+  umask 077; printf '%s' "$PW" > "$WORK/operator_password"
+  "$CONSOLE_E2E_PYTHON" ./e2e/console_e2e.py --base "http://127.0.0.1:$FWD_PORT" --admin operator --admin-password-file "$WORK/operator_password" \
+    --shots "${CONSOLE_E2E_SHOTS:-}" --cscli "kubectl -n edge-sentinel exec deploy/crowdsec -- cscli" \
+    --restart "kubectl -n edge-sentinel rollout restart deploy/edge-sentinel && kubectl -n edge-sentinel rollout status deploy/edge-sentinel --timeout=180s"
+  rm -f "$WORK/operator_password"
+fi
 echo "VERIFY-K3S OK"

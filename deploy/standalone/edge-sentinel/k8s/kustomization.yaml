@@ -10,4 +10,4 @@ resources:
 #   kustomize edit set image ghcr.io/redevops-io/edge-sentinel=ghcr.io/redevops-io/edge-sentinel@sha256:<digest>
 images:
   - name: ghcr.io/redevops-io/edge-sentinel
-    newTag: 0.6.2
+    newTag: 0.6.3

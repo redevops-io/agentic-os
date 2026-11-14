@@ -12,6 +12,7 @@ def call(method, path, auth=False, body=None):
     except urllib.error.HTTPError as e: return e.code
 spec = json.loads(urllib.request.urlopen(urllib.request.Request(base + "/openapi.json", headers={"Authorization": "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()})).read())
 public, bad, rows = {"/health", "/readyz"}, [], []
+REDIRECTS = {"/"}                                   # the front page only redirects to the console, which carries no data
 for path, ops in sorted(spec["paths"].items()):
     p = path.replace("{case_id}", "x")
     for m in ops:
@@ -20,6 +21,13 @@ for path, ops in sorted(spec["paths"].items()):
         anon = call(m, p, False, ({"capability":"sentinel.triage","inputs":{}} if path == "/invoke" else {}) if m == "POST" else None)
         authed = call(m, p, True, ({"capability":"sentinel.triage","inputs":{}} if path == "/invoke" else {}) if m == "POST" else None)
         want_public = path in public
+        if path in REDIRECTS and anon == 200:
+            rows.append((m, path, anon, authed, "redirect", "ok")); continue
+        if (m, path) == ("POST", "/api/v1/session"):          # the sign-in: refuses a bad credential, grants nothing else
+            ok = anon == 401
+            rows.append((m, path, anon, authed, "login", "ok" if ok else "FAIL"))
+            if not ok: bad.append(rows[-1])
+            continue
         ok = (anon in (200,) if want_public else (anon == 401 or (path == "/invoke" and anon in (401, 503)))) and (authed != 401 or path == '/invoke')
         rows.append((m, path, anon, authed, "public" if want_public else "gated", "ok" if ok else "FAIL"))
         if not ok: bad.append(rows[-1])

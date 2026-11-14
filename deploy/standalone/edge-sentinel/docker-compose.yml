@@ -32,7 +32,7 @@ services:
     # no published ports: only Sentinel on the private network talks to the LAPI
 
   edge-sentinel:
-    image: ${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel:0.6.2}
+    image: ${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel:0.6.3}
     restart: unless-stopped
     depends_on:
       crowdsec:
