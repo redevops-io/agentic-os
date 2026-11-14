@@ -78,6 +78,18 @@ _TOOLS: Tuple[Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, 
      ("qa evidence", "run evidence", "evidence bundle"), ("run_id",), (), ()),
     ("quality.qa_verify", "quality", "Independent re-verification of a redevops-qa evidence bundle.",
      ("verify run", "qa verify", "reverify evidence"), ("run_id",), (), ()),
+    ("quality.ui_audit", "quality", "Audit a registered target's UI: an accessibility/usability audit run through the QA service, with full evidence. Starts a normal QA run; a run that needs approval waits for a person.",
+     ("ui audit", "audit ui", "accessibility audit", "check the ui", "audit the app ui", "is the ui accessible"),
+     ("target_id",), ("profile_id",), ("request_run_approval",)),
+    ("quality.plan_generate", "quality", "Generate a frozen test plan for a registered target. The plan body is composed by the QA service from its own allow-listed builders, never by the caller.",
+     ("generate test plan", "plan tests", "make a test plan", "regression plan", "plan a follow-up"),
+     ("target_id", "scope"), ("source_run_id",), ()),
+    ("security.deployment_scan", "security", "Read-only inspection of a deployment's own state: GETs only the endpoints the product already serves to readers and derives findings from the live answers.",
+     ("deployment scan", "check deployment", "scan security", "inspect deployment", "security check", "is the deployment healthy"),
+     ("product_id",), (), ()),
+    ("findings.consolidate", "findings", "One report of UI, functional and security findings, folded from the products' own records: every row cites a product record id and an evidence link.",
+     ("consolidate findings", "combined report", "all findings", "one report", "summary of findings", "what did we find"),
+     (), ("product_ids", "run_ids", "case_ids", "severity_min"), ()),
 )
 
 
@@ -116,6 +128,19 @@ def _fmt_counts(d: Any) -> str:
     return ""
 
 
+# ── severity vocabulary (SKILLS_DESIGN.md §2/§5) ─────────────────────────────────────────────────
+# The consolidated report's vocabulary is `note < minor < major < blocker`. Products keep their own vocabularies;
+# every mapping INTO this one is a table pinned by a test, never an inference. An unmapped severity never
+# becomes a row — inventing a severity for a record is exactly the fabricated row the design forbids.
+SEVERITY_RANK = {"note": 0, "minor": 1, "major": 2, "blocker": 3}
+CASE_SEVERITY = {"critical": "blocker", "high": "major", "medium": "minor", "low": "note", "info": "note"}
+DEPLOY_SEVERITY = {"critical": "blocker", "high": "major", "medium": "minor", "low": "note"}
+AUDIT_RULE_SEVERITY = {"a11y-blocker": "blocker", "a11y": "major", "usability-blocking": "blocker",
+                       "usability": "minor", "note": "note"}
+# The profile the audit runs on; overridable only to another id the SERVICE advertises (schemas close the shape).
+AUDIT_PROFILE_DEFAULT = "ui-audit"
+
+
 # ── the tools ─────────────────────────────────────────────────────────────────────────────────────
 class ProductTools:
     """Handlers for every tool, bound to one hub. ``call`` is the single entry (validate, gate, run, wrap)."""
@@ -125,6 +150,15 @@ class ProductTools:
 
     def product_for(self, cap_id: str) -> Optional[str]:
         kind = cap_id.split(".", 1)[0]
+        if kind == "findings":
+            # Consolidation reads the products; it owns none. Anchor on a ready quality product, else a ready
+            # security product, else the first registered one (call() then says explicitly why it is unavailable).
+            owned = [s for s in self.hub.specs() if s.kind in ("quality", "security")]
+            for pref in ("quality", "security"):
+                for s in owned:
+                    if s.kind == pref and self.hub.ready(s.id):
+                        return s.id
+            return owned[0].id if owned else None
         for s in self.hub.specs():
             if s.kind == kind and (not s.capabilities or cap_id in s.capabilities):
                 return s.id
@@ -338,6 +372,182 @@ class ProductTools:
         return CapabilityResult(capability_id="quality.qa_verify", answer=f"Independent verification of {inp['run_id']}: {r.get('outcome', r.get('status', 'done'))}.",
                                 data={"product": spec.id, "verify": r, "executed": False}, evidence=(inp["run_id"],))
 
+    # skills (SKILLS_DESIGN.md) -------------------------------------------------------------------
+    def _ui_audit(self, spec, inp, who):
+        """Audit a UI THROUGH the QA service — the only component with a real browser, budgets, egress gating and
+        the evidence chain. The audit profile must be advertised by the service; while it is not, the answer is an
+        explicit unavailable (never a simulated audit), so no claim can outrun the redevops-qa CI evidence (§8.4)."""
+        qa = self.hub.qa(spec.id)
+        want = inp.get("profile_id") or AUDIT_PROFILE_DEFAULT
+        prof = qa.profiles(target_id=inp["target_id"], actor=who, source="sidekick")
+        entry = next((p for p in (prof.get("items") or []) if isinstance(p, Mapping) and p.get("id") == want), None)
+        if entry is None or not entry.get("available"):
+            u = dict(entry.get("unavailable") or {}) if isinstance(entry, Mapping) else {}
+            return unavailable_result("quality.ui_audit", spec.display_name, {
+                "code": str(u.get("code") or "profile_unavailable"),
+                "reason": str(u.get("reason") or f"the audit profile {want} is not available on this service"),
+                "remedy": str(u.get("remedy") or f"the audit suite lands in redevops-qa with its own CI evidence before "
+                                                  f"{want} says anything other than unavailable")})
+        est = qa.estimate(inp["target_id"], want, actor=who, source="sidekick")
+        body = {"target_id": inp["target_id"], "profile": want}
+        if est.get("digest"):
+            body["estimate_digest"] = str(est["digest"])
+        r = qa.start_run(body, actor=who, source="sidekick")
+        rid, st = str(r.get("id") or r.get("run_id") or ""), str(r.get("state") or "")
+        card = qamod.approval_card(spec, r) if st == "awaiting_approval" else None
+        self.hub.invalidate(spec.id)
+        ans = (f"Audit run {rid} is {st.replace('_', ' ')}."
+               + (" It needs a person's approval before anything runs." if card else " Findings land with the run."))
+        return CapabilityResult(capability_id="quality.ui_audit", answer=ans, data={
+            "product": spec.id, "run_id": rid, "state": st, "profile": want, "approval": card,
+            "findings": [], "severity_map": AUDIT_RULE_SEVERITY, "executed": False},
+            evidence=(rid,), artifacts=(_link(spec, "run", rid, f"/ui/runs/{rid}"),))
+
+    def _plan_generate(self, spec, inp, who):
+        """The plan body is composed by the SERVICE from allow-listed builders; the tool carries ids and one closed
+        enum. A service without the plan builder answers unavailable with the remedy — never a locally invented plan."""
+        if not (self.hub.status(spec.id).get("features") or {}).get("plans"):
+            return unavailable_result("quality.plan_generate", spec.display_name, {
+                "code": "plans_not_shipped",
+                "reason": "this redevops-qa service exposes no plan builder; plan bodies are composed by the service "
+                          "itself, never by a caller or a model",
+                "remedy": "the allow-listed plan builders (smoke, regression_suite, audit_followup) land in "
+                          "redevops-qa behind /v1/plans; until then this tool says unavailable"})
+        body = {"target_id": inp["target_id"], "scope": inp["scope"]}
+        if inp.get("source_run_id"):
+            body["source_run_id"] = inp["source_run_id"]
+        r = self.hub.qa(spec.id).plan_generate(body, actor=who, source="sidekick")
+        pid, digest = str(r.get("plan_id") or r.get("id") or ""), str(r.get("digest") or "")
+        return CapabilityResult(capability_id="quality.plan_generate",
+                                answer=f"Frozen plan {pid} ({inp['scope']})" + (f", digest {digest[:19]}…" if digest else "")
+                                       + ". A run can be pinned to it.",
+                                data={"product": spec.id, "plan": r, "executed": False},
+                                evidence=tuple(x for x in (pid, digest) if x),
+                                artifacts=(_link(spec, "plan", pid, f"/ui/plans/{pid}"),))
+
+    def _deployment_scan(self, spec, inp, who):
+        """The existing GET-only inspection, promoted to a tool: reads ONLY the endpoints the product already serves
+        to readers, through the product's own client (one token, one transport — no new network surface)."""
+        if inp["product_id"] != spec.id:
+            return CapabilityResult(capability_id="security.deployment_scan", confidence=0.0,
+                                    answer=f"{inp['product_id']} is not the registered security product (this hub serves {spec.id}).",
+                                    data={"status": "refused", "product": inp["product_id"], "executed": False})
+        from agentic_os.agent_gateway.external.deployment_inspection import (
+            SENTINEL_READ_ENDPOINTS, derive_findings, sample_sources)   # lazy: the gateway's pure read side
+        cli = self.hub.client(spec.id)
+
+        def _get(path: str):
+            try:
+                return cli.get(path, actor=who, source="sidekick")
+            except ProductError:
+                return None
+
+        snap = self.hub.cached(f"{spec.id}:deployment-scan", lambda: {p: _get(p) for p in SENTINEL_READ_ENDPOINTS})
+        findings = [f.view() for f in derive_findings(snap)]
+        samples = sample_sources(snap)
+        connected = any(v is not None for v in snap.values())
+        ans = (f"{spec.display_name} deployment scan: {len(findings)} finding(s) from live answers"
+               + (f", {len(samples)} plane(s) answered with sample data" if samples else "") + ".") if connected else \
+            f"{spec.display_name} answered none of its read endpoints."
+        return CapabilityResult(capability_id="security.deployment_scan", answer=ans, confidence=1.0 if connected else 0.0,
+                                data={"product": spec.id, "connected": connected,
+                                      "scan": {"target": spec.api_base, "connected": connected, "findings": findings,
+                                               "sample_sources": samples},
+                                      "severity_map": DEPLOY_SEVERITY, "executed": False},
+                                evidence=tuple(f["evidence_ref"] for f in findings),
+                                artifacts=(_link(spec, "scan", "deployment", "/ui/"),))
+
+    def _consolidate(self, spec, inp, who):
+        """A fold over records each product already exposes through the existing tool paths. No store, no second copy:
+        every row cites a product record id and at least one evidence link, and an unknown severity never becomes a row."""
+        want = set(inp.get("product_ids") or [])
+        floor = SEVERITY_RANK.get(inp.get("severity_min") or "note", 0)
+        rows: List[Dict[str, Any]] = []
+        sections: Dict[str, Any] = {}
+
+        def add(section: str, sev: Optional[str], finding: str, steps: str, fix: str, record: str,
+                links: List[str], status: str) -> None:
+            if sev is None or SEVERITY_RANK.get(sev, -1) < floor or not record:
+                return
+            rows.append({"section": section, "severity": sev, "finding": finding, "reproduction": steps,
+                         "recommended_fix": fix, "record_id": record, "links": links, "verification": status})
+
+        sec = next((s for s in self.hub.specs() if s.kind == "security"), None)
+        if sec and (not want or sec.id in want):
+            try:
+                scan = self._deployment_scan(sec, {"product_id": sec.id}, who)
+                sd = scan.data or {}
+                if not sd.get("connected"):
+                    sections["deployment"] = {"included": False, "reason": "the product answered none of its read endpoints"}
+                else:
+                    flist = (sd.get("scan") or {}).get("findings") or []
+                    sections["deployment"] = {"included": True, "count": len(flist)}
+                    for f in flist:
+                        add("deployment", DEPLOY_SEVERITY.get(str(f.get("severity"))),
+                            f"{f.get('source')}: {f.get('detail')}",
+                            f"GET {f.get('source')} on the deployment answers this state",
+                            "the endpoint's own remedy text where present; otherwise a deployment-side configuration change",
+                            str(f.get("evidence_ref")), [sec.ui_link("/ui/")], "derived from live deployment state")
+            except ProductError as e:
+                sections["deployment"] = {"included": False, "reason": e.code}
+            try:
+                snag = self.hub.sentinel(sec.id)
+                items = [(snag.case(cid, actor=who, source="sidekick"),) for cid in (inp.get("case_ids") or [])]
+                pairs = []
+                for tup in items:
+                    full = tup[0]
+                    pairs.append((full.get("summary") if isinstance(full.get("summary"), Mapping) else full, full))
+                if not inp.get("case_ids"):
+                    pairs = [(c, c) for c in (snag.cases(limit=20, actor=who, source="sidekick").get("items") or [])]
+                for summ, full in pairs:
+                    ev = full.get("evidence") or []
+                    e0 = ev[0] if ev and isinstance(ev[0], Mapping) else {}
+                    acts = full.get("actions_detail") or full.get("actions") or []
+                    cid = str(summ.get("case_id") or "")
+                    add("cases", CASE_SEVERITY.get(str(summ.get("severity"))),
+                        str(summ.get("title") or summ.get("case_type") or "security case"),
+                        (f"evidence {e0.get('artifact_id')} from {e0.get('source')} at {e0.get('acquired_at')}" if e0
+                         else "the case's evidence chain"),
+                        sn.action_consequence(acts[0]) if acts else "triage the case; any action goes through a person's approval",
+                        cid, [sec.ui_link(f"/ui/cases/{cid}")], str(summ.get("status") or ""))
+                sections["cases"] = {"included": True, "count": len(pairs)}
+            except ProductError as e:
+                sections["cases"] = {"included": False, "reason": e.code}
+        qua = next((s for s in self.hub.specs() if s.kind == "quality"), None)
+        if qua and (not want or qua.id in want):
+            try:
+                qa = self.hub.qa(qua.id)
+                runs = ([qa.run(rid, actor=who, source="sidekick") for rid in (inp.get("run_ids") or [])]
+                        or (qa.runs(limit=20, actor=who, source="sidekick").get("items") or []))
+                n = 0
+                for run in runs:
+                    rid, outcome = str(run.get("id") or ""), str(run.get("outcome") or "")
+                    stt = str(run.get("state") or "")
+                    if not rid or (outcome or stt) in ("VERIFIED", "CORROBORATED", "awaiting_approval", "queued", "running"):
+                        continue          # a passing or unfinished run is not a finding
+                    sev = "major" if (outcome == "FAILED" or stt == "failed") else "note"
+                    add("runs", sev, f"QA run {rid} on profile {run.get('profile')}",
+                        f"the frozen profile {run.get('profile')} against target {run.get('target_id')}",
+                        "the run's evidence bundle names the failed assertion and its step", rid,
+                        [qua.ui_link(f"/ui/runs/{rid}/evidence")], outcome or stt)
+                    n += 1
+                sections["runs"] = {"included": True, "count": n}
+            except ProductError as e:
+                sections["runs"] = {"included": False, "reason": e.code}
+        if not any(s.get("included") for s in sections.values()):
+            reasons = "; ".join(f"{k}: {v.get('reason')}" for k, v in sections.items() if not v.get("included"))
+            return unavailable_result("findings.consolidate", spec.display_name,
+                                      {"code": "nothing_to_fold", "reason": reasons or "no product registered",
+                                       "remedy": "start the products or check their entries in the products registry"})
+        out = sorted(rows, key=lambda r: -SEVERITY_RANK.get(r["severity"], -1))
+        ans = (f"Consolidated {len(out)} finding(s): " + "; ".join(f"{r['record_id']} [{r['severity']}]" for r in out[:6]) + "."
+               if out else "No findings at or above the requested severity right now.")
+        return CapabilityResult(capability_id="findings.consolidate", answer=ans, data={
+            "report": {"rows": out, "sections": sections}, "executed": False},
+            evidence=tuple(r["record_id"] for r in out),
+            artifacts=tuple(ArtifactLink(provider="products", resource_type="finding", resource_id=r["record_id"],
+                                         native_url=r["links"][0]) for r in out))
+
 
 # ── registry ──────────────────────────────────────────────────────────────────────────────────────
 def build_registry(hub: ProductHub) -> CapabilityRegistry:
@@ -348,8 +558,12 @@ def build_registry(hub: ProductHub) -> CapabilityRegistry:
     kinds = {s.kind for s in hub.specs()}
     for cid, dom, summary, intents, req, opt, cands in _TOOLS:
         assert cid not in FORBIDDEN_TOOLS and cid in INPUT_SCHEMAS and cid in TOOL_CLASS
-        if dom not in kinds:
+        if dom == "findings":
+            if not kinds & {"quality", "security"}:
+                continue
+        elif dom not in kinds:
             continue
+        provs = ("product:security", "product:quality") if dom == "findings" else (f"product:{dom}",)
         authority = {"read": ("read",), "stage": ("stage: creates a proposal only; a person decides",),
                      "present": ("read",), "bounded_write": ("bounded write: service token + product role + product approval policy",)}[TOOL_CLASS[cid]]
 
@@ -358,7 +572,7 @@ def build_registry(hub: ProductHub) -> CapabilityRegistry:
             return tools.call(_cid, kw, actor)
         reg.register(SidekickCapability(
             capability_id=cid, domain=D(dom), summary=summary, intents=intents, required_inputs=req,
-            optional_inputs=opt, required_provider_capabilities=(f"product:{dom}",), candidate_actions=cands,
+            optional_inputs=opt, required_provider_capabilities=provs, candidate_actions=cands,
             authority_requirements=authority,
             verification_contract="the product's own persisted record and, for actions, its post-action read-back",
             learning_contract="", maturity=M.L2_GENERALIZED, status="IMPLEMENTED",

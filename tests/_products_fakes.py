@@ -45,6 +45,14 @@ class FakeSentinel:
         self.server: Optional[ThreadingHTTPServer] = None
         self.verify_ok = True
         self.add_alert_case()
+        # the four GET-only deployment-inspection planes (deployment_scan reads exactly these)
+        self.deployment: Dict[str, Any] = {
+            "/health": {"status": "ok", "connected": False, "core": "crowdsec"},
+            "/api/activity": {"has_threat": True, "decisions": [{"id": "d-1"}], "decisions_status": {"ok": True}},
+            "/api/backups/status": {"never": ["cases.db"], "no_offsite": [], "unencrypted": []},
+            "/api/network/review": {"live": True, "risks": [{"kind": "exposed_admin", "severity": "high",
+                                                             "detail": "the admin port listens on all interfaces"}]},
+        }
 
     # ── state ────────────────────────────────────────────────────────────────────────────────────
     def _chg(self, typ: str, **kw: Any) -> None:
@@ -128,6 +136,8 @@ class FakeSentinel:
                 if p == "/api/v1/changes":
                     after = int(q.get("after", 0))
                     return self._send(200, {"items": [c for c in fake.changes if c["seq"] > after], "head": len(fake.changes)})
+                if p in fake.deployment:
+                    return self._send(200, fake.deployment[p])
                 return self._send(404, {"error": "not_found", "detail": "no route"})
 
             def do_POST(self):  # noqa: N802
@@ -256,7 +266,9 @@ EST = "sha256:" + "e" * 64
 class FakeQa:
     """redevops-qa contract double (``/v1``), used only with the gate opened by a test."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, audit: bool = False, plans: bool = False) -> None:
+        self.audit = audit        # advertise the ui-audit profile
+        self.plans = plans        # advertise and serve the allow-listed plan builders (/v1/plans)
         self.guard = ReplayGuard()
         self.calls: List[Dict[str, Any]] = []
         self.started: List[Dict[str, Any]] = []
@@ -289,12 +301,16 @@ class FakeQa:
                     return self._send(401, {"error": "unauthenticated", "detail": "no"})
                 p = u.path
                 if p == "/v1/info":
-                    return self._send(200, {"version": "0.6.3", "profiles": [{"id": "edge-sentinel-fixture-readonly", "available": True},
-                                                                              {"id": "robot", "available": False, "unavailable": {"code": "ARCHITECTURE_UNSUPPORTED", "reason": "arm64", "remedy": "x86_64"}}]})
+                    return self._send(200, {"version": "0.6.3", "features": {"plans": fake.plans},
+                                            "profiles": [{"id": "edge-sentinel-fixture-readonly", "available": True},
+                                                         {"id": "robot", "available": False, "unavailable": {"code": "ARCHITECTURE_UNSUPPORTED", "reason": "arm64", "remedy": "x86_64"}}]})
                 if p == "/v1/targets":
                     return self._send(200, {"items": [{"id": TGT, "name": "edge sentinel fixture", "kind": "external-origin"}]})
                 if p == "/v1/profiles":
-                    return self._send(200, {"items": [{"id": "edge-sentinel-fixture-readonly", "available": True}]})
+                    items = [{"id": "edge-sentinel-fixture-readonly", "available": True}]
+                    if fake.audit:
+                        items.append({"id": "ui-audit", "available": True})
+                    return self._send(200, {"items": items})
                 if p == "/v1/runs":
                     return self._send(200, {"items": list(fake.runs.values()), "next_cursor": None})
                 if p.startswith("/v1/runs/") and p.endswith("/events"):
@@ -314,6 +330,10 @@ class FakeQa:
                     return self._send(202, {**fake.runs[RUN], "state": "awaiting_approval"})
                 if p == "/v1/estimates":
                     return self._send(200, {"estimate_id": "est-1", "digest": EST, "will_refuse": False})
+                if p == "/v1/plans":
+                    return self._send(201, {"plan_id": "plan-0123456789ab", "digest": EST,
+                                            "scope": body.get("scope"), "target_id": body.get("target_id"),
+                                            "composed_by": "service"})
                 if p.endswith("/approval"):
                     run_id = p.split("/")[3]
                     inputs = {"run_id": run_id, "approved": body.get("approved"), "estimate_digest": body.get("estimate_digest")}
