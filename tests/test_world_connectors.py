@@ -39,6 +39,62 @@ def test_postmark_send_request_shape(monkeypatch):
     assert calls["body"]["MessageStream"] == "outbound" and calls["body"]["From"] == "hello@redevops.io"
 
 
+def test_gmail_smtp_send_logs_in_and_sends_from_the_authenticated_mailbox(monkeypatch):
+    calls = {"starttls": False, "login": None, "sent": None, "closed": False}
+
+    class _FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            calls["host"], calls["port"] = host, port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            calls["closed"] = True
+            return False
+
+        def starttls(self):
+            calls["starttls"] = True
+
+        def login(self, user, password):
+            calls["login"] = (user, password)
+
+        def send_message(self, msg):
+            calls["sent"] = msg
+
+    import smtplib
+    monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
+    conn = C.GmailSMTPConnector("alex@joinredevops.com", "app-pw-1234")
+    r = conn.send(to="prospect@example.com", subject="hi", body="a pitch", tag="outreach-engine")
+    assert r["error_code"] == 0 and r["to"] == "prospect@example.com"
+    assert r["message_id"] and r["message_id"].endswith("@joinredevops.com>")
+    assert calls["host"] == "smtp.gmail.com" and calls["port"] == 587 and calls["starttls"] is True
+    assert calls["login"] == ("alex@joinredevops.com", "app-pw-1234") and calls["closed"] is True
+    sent = calls["sent"]
+    assert sent["From"] == "alex@joinredevops.com" and sent["To"] == "prospect@example.com"
+    assert sent["Subject"] == "hi" and sent["X-Tag"] == "outreach-engine"
+    assert sent["Message-Id"] == r["message_id"]
+    assert sent.get_content().strip() == "a pitch"
+
+
+def test_gmail_smtp_send_reports_failure_never_raises(monkeypatch):
+    class _FailingSMTP:
+        def __init__(self, host, port, timeout=None):
+            pass
+
+        def __enter__(self):
+            raise ConnectionRefusedError("no network in this sandbox")
+
+        def __exit__(self, *a):
+            return False
+
+    import smtplib
+    monkeypatch.setattr(smtplib, "SMTP", _FailingSMTP)
+    conn = C.GmailSMTPConnector("alex@joinredevops.com", "app-pw-1234")
+    r = conn.send(to="prospect@example.com", subject="hi", body="a pitch")
+    assert r["error_code"] == 1 and r["message_id"] is None and "ConnectionRefusedError" in r["error"]
+
+
 def test_hubspot_upsert_creates_then_patches(monkeypatch):
     state = {"exists": False}
 

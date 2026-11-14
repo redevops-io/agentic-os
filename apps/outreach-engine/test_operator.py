@@ -76,6 +76,9 @@ def _fake_twenty(monkeypatch):
     core._LIVE_CACHE.update(ts=0.0, rows=[])            # no cached live signals
     monkeypatch.setattr(core, "TWENTY_API_KEY", "test-key")
     monkeypatch.setattr(core.urllib.request, "urlopen", _fake_urlopen)
+    # hermetic against this machine's real ~/.zshrc exports: no test may attempt a real SMTP connection
+    monkeypatch.setattr(core, "GMAIL_SMTP_USER", "")
+    monkeypatch.setattr(core, "GMAIL_SMTP_APP_PASSWORD", "")
     yield
 
 

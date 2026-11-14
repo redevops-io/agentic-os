@@ -34,6 +34,12 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 # synced opportunity into the real CRM over https. Falls back to the internal URL.
 TWENTY_PUBLIC_URL = os.environ.get("TWENTY_PUBLIC_URL", "https://crm.redevops.io").rstrip("/")
 
+# ── the real sender for send_all: a Gmail mailbox's App Password (smtp.gmail.com, STARTTLS). No
+# Postmark/SES wiring here on purpose -- outreach-engine is a generic, OUTREACH_TENANT-configurable
+# app, and the simplest honest sender for an arbitrary already-owned mailbox is SMTP + an app password.
+GMAIL_SMTP_USER = os.environ.get("GMAIL_SMTP_USER", "")
+GMAIL_SMTP_APP_PASSWORD = os.environ.get("GMAIL_SMTP_APP_PASSWORD", "")
+
 # ── tenant / product framing — configurable so the CRM agent works for ANY workspace. Defaults to
 # Meridian Wealth Management (the demo company used across the agentic apps).
 TENANT = os.environ.get("OUTREACH_TENANT", "Meridian Wealth Management")
@@ -426,18 +432,49 @@ def approve(body: dict | None = None) -> dict:
     return {"ok": True, "action": "approve", "account": acct, "twenty_synced": synced}
 
 
+def _sender():
+    """The configured real sender (Gmail SMTP app-password), or None when it isn't wired."""
+    if GMAIL_SMTP_USER and GMAIL_SMTP_APP_PASSWORD:
+        from agentic_os.world.connectors import GmailSMTPConnector
+        return GmailSMTPConnector(GMAIL_SMTP_USER, GMAIL_SMTP_APP_PASSWORD)
+    return None
+
+
 def send_all(body: dict | None = None) -> dict:
     """Dispatch every approved outreach sequence to its prospect (the human-gated send).
 
-    HONEST no-op: no live sender (SMTP/provider) is wired in the demo, so nothing actually reaches a
-    prospect. This reports the approved sequences as STAGED and the send as UNEXECUTED — it never claims to
-    have sent what it didn't. `sequences_sent: False` is set explicitly so the operator SDK's output-marker
-    merge can't read this back as a successful send (N4). Wire a real sender to set it True."""
+    Sends ONLY to an approved account that `enrich` already resolved a VERIFIED contact_email for; an
+    approved account with no verified email is reported as skipped, never guessed at. With no sender
+    (GMAIL_SMTP_USER/GMAIL_SMTP_APP_PASSWORD) configured, this is an honest no-op exactly as before:
+    `sequences_sent: False` is set explicitly so the operator SDK's output-marker merge can't read this
+    back as a successful send (N4) when nothing actually reached a prospect."""
     if not (body or {}).get("_approval"):
         return pending_approval("outreach.send_all", staged=sorted(_STATE["approved"]), sequences_sent=False)
     approved = sorted(_STATE["approved"])
-    return {"ok": False, "action": "send_all", "status": "not_configured", "executed": False,
-            "sequences_sent": False, "dispatched": 0, "staged": approved, "sender_configured": False,
-            "reason": "no sender (SMTP/provider) is wired into this deployment",
-            "note": "no live sender configured — approved sequences are staged, not sent. "
-                    "Wire a sender (SMTP/provider) to actually dispatch."}
+    sender = _sender()
+    if sender is None:
+        return {"ok": False, "action": "send_all", "status": "not_configured", "executed": False,
+                "sequences_sent": False, "dispatched": 0, "staged": approved, "sender_configured": False,
+                "reason": "no sender (SMTP/provider) is wired into this deployment",
+                "note": "no live sender configured — approved sequences are staged, not sent. "
+                        "Wire a sender (SMTP/provider) to actually dispatch."}
+    results = []
+    sent = 0
+    for acct in approved:
+        row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
+        to = (row or {}).get("contact_email")
+        if not row or not to or not row.get("email_verified"):
+            results.append({"account": acct, "sent": False,
+                            "reason": "no verified contact email — run `enrich` for this account first"})
+            continue
+        draft = row.get("draft") or teardown(row)
+        r = sender.send(to=to, subject=draft["subject"], body=draft["body"], tag="outreach-engine")
+        ok = r.get("error_code", 1) == 0
+        entry = {"account": acct, "sent": ok, "to": to, "message_id": r.get("message_id")}
+        if not ok:
+            entry["reason"] = r.get("error", "send failed")
+        results.append(entry)
+        sent += int(ok)
+    return {"ok": True, "action": "send_all", "status": "dispatched" if sent else "no_eligible_recipients",
+            "executed": True, "sequences_sent": sent > 0, "dispatched": sent, "staged": approved,
+            "sender_configured": True, "results": results}

@@ -1,4 +1,4 @@
-"""Real GTM connectors — HubSpot, Salesforce, Postmark — as governed Capability Fabric providers.
+"""Real GTM connectors — HubSpot, Salesforce, Postmark, Gmail SMTP — as governed Capability Fabric providers.
 
 These turn the GTM world's simulated reconcile/draft into real capabilities: CRM lookup/upsert across HubSpot
 and Salesforce, and email send via Postmark. They are **read-first and approval-gated by construction**:
@@ -268,3 +268,35 @@ class PostmarkConnector:
                   headers={"X-Postmark-Server-Token": self._token, "Content-Type": "application/json",
                            "Accept": "application/json"}, data=json.dumps(payload).encode())
         return {"message_id": r.get("MessageID"), "to": r.get("To"), "error_code": r.get("ErrorCode", 0)}
+
+
+class GmailSMTPConnector:
+    """Email send via a Gmail mailbox's App Password (smtp.gmail.com:587, STARTTLS) — the simplest real
+    sender when no Postmark/SES is configured for this mailbox. An App Password needs 2FA enabled on the
+    Google account and nothing else (no OAuth app, no domain-wide delegation); Gmail requires ``from_addr``
+    to be the authenticated mailbox itself or one of its verified aliases, so it defaults to ``user``."""
+
+    def __init__(self, user: str, app_password: str, *, from_addr: str = "") -> None:
+        self._user = user
+        self._password = app_password
+        self._from = from_addr or user
+
+    def send(self, *, to: str, subject: str, body: str, tag: str = "gtm") -> Dict[str, Any]:
+        import smtplib  # noqa: PLC0415
+        from email.message import EmailMessage  # noqa: PLC0415
+        from email.utils import make_msgid  # noqa: PLC0415
+
+        msg = EmailMessage()
+        msg["From"], msg["To"], msg["Subject"] = self._from, to, subject
+        msg["X-Tag"] = tag
+        msg_id = make_msgid(domain=(self._user.split("@", 1)[-1] or None))
+        msg["Message-Id"] = msg_id
+        msg.set_content(body)
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as s:
+                s.starttls()
+                s.login(self._user, self._password)
+                s.send_message(msg)
+            return {"message_id": msg_id, "to": to, "error_code": 0}
+        except Exception as e:  # noqa: BLE001 — never raise into a send-all loop; report the failure instead
+            return {"message_id": None, "to": to, "error_code": 1, "error": f"{type(e).__name__}: {e}"}
