@@ -1,0 +1,14 @@
+schema: aos.products/v1
+allow_private_http: [edge-sentinel]
+products:
+  - id: edge-sentinel
+    display_name: Edge Sentinel
+    kind: security
+    api_base: http://edge-sentinel:8203
+    ui_url: http://127.0.0.1:18203
+    health: {path: /readyz, interval_s: 5, timeout_s: 3}
+    contract: {api: /api/v1, info: /api/v1/info, min_version: "1"}
+    auth:
+      scheme: control_token
+      service_token_file: /run/products/edge-sentinel.service_token
+      approval_secret_file: /run/products/approval_secret

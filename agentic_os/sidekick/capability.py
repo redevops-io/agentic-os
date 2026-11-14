@@ -27,6 +27,9 @@ class CapabilityDomain(str, Enum):
     COMMERCIAL = "commercial"
     OPERATIONS = "operations"
     FINANCE = "finance"
+    # Standalone products integrated through agentic_os.products (tools bound to each product's own HTTP API).
+    SECURITY = "security"
+    QUALITY = "quality"
 
 
 class Maturity(str, Enum):
