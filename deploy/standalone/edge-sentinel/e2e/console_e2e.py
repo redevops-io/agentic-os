@@ -10,6 +10,10 @@ token is refused, every page at 1440 and 390 px has no horizontal overflow, only
 clean. Needs `playwright` (and its Chromium) in the Python that runs it; set --cscli / --restart for non-Compose deployments.
 """
 import argparse, json, re, subprocess, sys, time
+try:                                                        # optional: the axe-core rules (pip install axe-playwright-python), test-time only
+    from axe_playwright_python.sync_playwright import Axe
+except ImportError:
+    Axe = None
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright, expect
 
@@ -214,6 +218,13 @@ with sync_playwright() as pw:
             check(f"{name} at {tag}px has no horizontal overflow", overflow <= 0, f"{overflow}px")
             if tag == "390" or name in ("cases", "case", "events", "about"):
                 shot(page, f"10-{name}-{tag}")
+            if Axe is not None:
+                for scheme in ("light", "dark"):
+                    page.emulate_media(color_scheme=scheme)
+                    found = Axe().run(page).response["violations"]
+                    check(f"axe-core: {name} at {tag}px, {scheme} scheme, has no accessibility violations", not found,
+                          "; ".join(f"{v['id']} ({v['impact']}): {v['nodes'][0]['target']}" for v in found[:3]))
+                page.emulate_media(color_scheme="light")
     foreign = [u for u in requests if urlparse(u).netloc and urlparse(u).netloc != urlparse(BASE).netloc]
     check("only same-origin requests were made", not foreign, str(foreign[:3]))
     # the 401/403 resource lines are the deliberate wrong-password, ended-session and missing-CSRF steps above

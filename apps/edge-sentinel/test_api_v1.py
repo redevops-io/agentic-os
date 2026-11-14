@@ -641,3 +641,14 @@ def test_concurrent_requests_never_see_another_threads_cursor(env):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == []
+
+
+def test_manual_and_agent_event_cases_have_their_own_replay_proof_and_source(env):
+    s = session(ADMIN)
+    r = s.post("/api/v1/cases", json={"type": "manual_block", "ip": "8.8.4.4", "reason": "x"}).json()
+    got = s.get(f"/api/v1/cases/{r['case_id']}").json()
+    assert got["replay"]["deterministic"] is True
+    assert [h["via"] for h in got["history"] if h["type"] == "case.opened"] == ["manual"]
+    ev = s.post("/api/v1/agent-events", json={"kind": "k", "severity": "high"}).json()
+    got = s.get(f"/api/v1/cases/{ev['case_id']}").json()
+    assert got["replay"]["deterministic"] is True and [h["via"] for h in got["history"] if h["type"] == "case.opened"] == ["agent-runtime"]

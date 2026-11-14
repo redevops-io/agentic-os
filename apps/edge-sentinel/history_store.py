@@ -185,7 +185,9 @@ class HistoryStore:
                 if row is None:
                     self.run("INSERT INTO cases(case_id, first_seen, last_seen, severity, status, case_type, title, created_at, bundle_json, bundle_hash) VALUES(?,?,?,?,?,?,?,?,?,?)",
                              (case_id, ts, ts, d["severity"], d["status"], d["case_type"], d["title"], d.get("created_at", ""), text, h))
-                    self.append("case.opened", case_id=case_id, actor_user="system", via="crowdsec", detail={"severity": d["severity"], "title": d["title"]})
+                    first = st.evidence.get(case.evidence_refs[0]) if case.evidence_refs else None
+                    via = {"crowdsec_alert": "crowdsec", "manual_request": "manual", "agent_event": "agent-runtime"}.get(first.kind if first else "", "sentinel")
+                    self.append("case.opened", case_id=case_id, actor_user="system", via=via, detail={"severity": d["severity"], "title": d["title"]})
                     new_cases.append(case_id)
                 else:
                     self.run("UPDATE cases SET last_seen=?, severity=?, status=?, bundle_json=?, bundle_hash=? WHERE case_id=?", (ts, d["severity"], d["status"], text, h, case_id))

@@ -73,3 +73,4 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 
 .status{padding:0 16px;min-height:1.5em}
 caption{position:absolute;left:-9999px}
+h2[tabindex="-1"]:focus{outline:none}

@@ -229,18 +229,22 @@ def _replay_proof(st: CaseStore, case) -> dict:
     confirm the content-addressed case id is identical. The narrative can change; the evidence-derived id can't."""
     for eid in case.evidence_refs:
         ev = st.evidence.get(eid)
-        if ev is None or ev.kind != "crowdsec_alert":
+        if ev is None or ev.kind not in ("crowdsec_alert", "manual_request", "agent_event"):
             continue
         raw = st.get_raw(ev)
         if raw is None:
             continue
         try:
-            alert = json.loads(raw)
+            doc = json.loads(raw)
         except Exception:  # noqa: BLE001
             return {"deterministic": False, "detail": "raw evidence is not replayable JSON"}
-        proof = replay_case(st, alert)
-        return {"deterministic": proof["case_id"] == case.case_id, "case_id": proof["case_id"]}
-    return {"deterministic": False, "detail": "no replayable crowdsec_alert evidence on this case"}
+        if ev.kind == "crowdsec_alert":
+            proof = replay_case(st, doc)
+            return {"deterministic": proof["case_id"] == case.case_id, "case_id": proof["case_id"]}
+        fresh = CaseStore()
+        again = (manual_cases.ingest(fresh, doc) if ev.kind == "manual_request" else _agent_events.ingest_agent_event(fresh, doc, min_severity="info"))
+        return {"deterministic": again is not None and again.case_id == case.case_id, "case_id": again.case_id if again else ""}
+    return {"deterministic": False, "detail": "no replayable evidence on this case"}
 
 
 def case_detail(case_id: str, st: CaseStore | None = None) -> dict | None:
