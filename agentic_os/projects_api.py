@@ -2123,7 +2123,9 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     def _ui_config(request: Request) -> dict:
         """Where this server's data comes from (aos.ui-config/v1). The UI takes its Sample chip and every sample-versus-recorded
         decision from this, never from a build flag."""
-        return dd.report(request, prov) if dd is not None else sample_report(prov)
+        report = dd.report(request, prov) if dd is not None else sample_report(prov)
+        from agentic_os.products import ui_config_extra as _ui_extra
+        return {**report, **_ui_extra(prov)}          # additive `products` section when a products registry is configured
 
     # Governed Agent Gateway — let an EXTERNAL agent (Claude/ChatGPT/Cursor) reach a read-only,
     # governed slice of this deployment over MCP + REST. Opt-in: mounted only when
