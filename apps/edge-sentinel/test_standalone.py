@@ -333,6 +333,8 @@ ADDED_ROUTES = {
     ("GET", "/api/v1/changes"), ("GET", "/api/v1/history"), ("POST", "/api/v1/session"), ("GET", "/api/v1/session"), ("DELETE", "/api/v1/session"),
     ("POST", "/api/v1/session/password"), ("GET", "/api/v1/users"), ("POST", "/api/v1/users"), ("PATCH", "/api/v1/users/{name}"),
     ("POST", "/api/v1/users/{name}/password"), ("GET", "/api/v1/actor-links"), ("POST", "/api/v1/actor-links"), ("DELETE", "/api/v1/actor-links/{external_actor}"),
+    ("POST", "/api/v1/hunt/validate"), ("GET", "/api/v1/attack/map"), ("POST", "/api/v1/ioc/normalize"), ("POST", "/api/v1/detections/validate"),
+    ("POST", "/api/v1/agent-events"), ("GET", "/api/v1/soc2/controls"),
 }
 
 

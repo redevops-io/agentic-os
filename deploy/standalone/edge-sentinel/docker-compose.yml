@@ -46,6 +46,10 @@ services:
       CROWDSEC_BOUNCER_KEY_FILE: /run/secrets/crowdsec_bouncer_key
       CROWDSEC_MACHINE_ID: edge-sentinel
       CROWDSEC_MACHINE_PASSWORD_FILE: /run/secrets/crowdsec_machine_password
+      # for Projects/Sidekick and the Mission Runtime (see docs/standalone/edge-sentinel.md): the service credential and the secret that
+      # verifies the per-click approval tokens. bootstrap.sh generates both; share the values with Projects to use them.
+      AGENTIC_OS_CONTROL_TOKEN_FILE: /run/secrets/control_token
+      AGENTIC_OS_APPROVAL_SECRET_FILE: /run/secrets/approval_secret
       # an approved ban is a dry run until this is "1"
       SENTINEL_BLOCK_ENABLED: "${SENTINEL_BLOCK_ENABLED:-}"
       SENTINEL_PROTECTED_IPS: "${SENTINEL_PROTECTED_IPS:-}"
@@ -57,6 +61,8 @@ services:
       - operator_password
       - crowdsec_bouncer_key
       - crowdsec_machine_password
+      - control_token
+      - approval_secret
     volumes:
       - edge-sentinel-data:/data
     read_only: true
@@ -72,6 +78,10 @@ secrets:
     file: ./secrets/crowdsec_bouncer_key
   crowdsec_machine_password:
     file: ./secrets/crowdsec_machine_password
+  control_token:
+    file: ./secrets/control_token
+  approval_secret:
+    file: ./secrets/approval_secret
 
 volumes:
   edge-sentinel-data:

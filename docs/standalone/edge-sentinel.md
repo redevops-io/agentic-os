@@ -17,10 +17,12 @@ The image is `ghcr.io/redevops-io/edge-sentinel`, for `linux/amd64` and `linux/a
 | Probes | `GET /health` (liveness) and `GET /readyz` (readiness: the state directory is usable and, in the production profile, an authority store is configured). Both are public and carry no case data. |
 | Dashboard | `GET /`: status banner, KPI tiles, alert feed by severity, scenario meter, active decisions, the case panel with approve/reject/execute buttons, and the assistant. |
 
+The analysis modules that are safe to expose are routed under `/api/v1`, each with validated, bounded input and no side effect: `POST /hunt/validate` (is this query read-only and well formed; nothing is executed), `GET /attack/map?scenario=` (ATT&CK techniques for a CrowdSec scenario, deterministic, with the matched token as the basis), `POST /ioc/normalize` (canonical STIX observable and indicator), `POST /detections/validate` (Sigma or YARA structure; never published), `POST /agent-events` (one agent-runtime event becomes an investigating case: a signal that proposes no action; operator role or the service credential) and `GET /soc2/controls` (the control catalogue). `GET /api/v1/info` lists everything that is not routed, each with its reason.
+
 What the standalone image does not do, so nothing is promised that is not there:
 
 * The detection engine is CrowdSec. Edge Sentinel does not read logs itself; point CrowdSec at your logs (see [CrowdSec log sources](#crowdsec-log-sources)).
-* The repository's hunting, AI-security, agent-event, STIX/ATT&CK and SOC 2 evidence modules are libraries with their own tests. They are not wired to any route of this app in this release, so there is no API to ingest an agent event or a log batch into Edge Sentinel.
+* DFIR timelines, enrichment providers, the evaluation harness, the risk handoff, AI-security assessment of runtime events, the CTI graph, detection publishing and the SOC 2 evidence collectors are library code without a safe client input path or a consumer in this deployment: they are not routed, and `/api/v1/info` says so. A log batch cannot be ingested into Edge Sentinel; CrowdSec reads the logs.
 * The network-access (NetBird), backup (Portabase), runtime scan (deploy-scan), Wazuh and ClamAV panels need those services (`NETBIRD_API_URL`/`NETBIRD_API_TOKEN`, `PORTABASE_API_URL`/`PORTABASE_API_TOKEN`, `DEPLOY_SCAN_MCP_URL`, `WAZUH_API_URL`, `CLAMAV_HOST`). Without them the panels show labelled sample data or report themselves unavailable. They were not exercised against live services for this release.
 * The supply-chain console tools (`supply_chain_scan`, `sbom`, `list_vulnerabilities`) need Trivy and Syft, which are not in the default image. Build with `--build-arg WITH_SCANNERS=1` to include both (pinned versions, sha256-verified for each architecture) and they run against the container's own filesystem. Scanning other containers needs Docker access, which the standalone image does not use.
 * No docker CLI and no Docker socket: alerts and bans go over the CrowdSec Local API with a watcher login.
@@ -135,7 +137,8 @@ Set these in `.env` (Compose) or the Deployment environment (Kubernetes). A name
 | `SENTINEL_REQUIRE_AUTH` | `1` | Standalone profile: sign-in on every route but the probes. |
 | `AGENTIC_OS_PROFILE` | `production` | `production` or `development`. |
 | `AGENTIC_OS_AUTHORITY_DB`, `AGENTIC_OS_REPLAY_DB` | `/data/authority.db`, `/data/replay.db` | Durable authority ledger and replay guard for the operator surface. |
-| `AGENTIC_OS_CONTROL_TOKEN` (`_FILE`) | none | Credential for `/invoke`. Unset disables `/invoke`. |
+| `AGENTIC_OS_CONTROL_TOKEN` (`_FILE`) | none (the Compose and Kubernetes files generate one) | The service credential (`X-Control-Token`): `/invoke`, and reads and staging from Projects/Sidekick. Unset disables both. |
+| `AGENTIC_OS_APPROVAL_SECRET` (`_FILE`) | none (generated likewise) | Verifies the per-click approval tokens Projects mints; the same value must be given to Projects. Unset: such tokens are refused and Projects can read and stage but not decide. |
 | `CROWDSEC_LAPI_URL` | `http://localhost:8086` (the manifests set `http://crowdsec:8080`) | CrowdSec Local API. |
 | `CROWDSEC_BOUNCER_KEY` (`_FILE`) | none | Reads decisions and verifies bans. |
 | `CROWDSEC_MACHINE_ID`, `CROWDSEC_MACHINE_PASSWORD` (`_FILE`) | none | Watcher login: reads alerts and writes and lifts bans over the LAPI. Without it alerts need `cscli` through Docker, which this image lacks. |
@@ -186,6 +189,10 @@ Upgrade by changing the image tag or digest and running `docker compose pull && 
 ## Operating limits
 
 One replica per deployment; CrowdSec reads are cached for 10 seconds; the alert feed shows the most recent 50 alerts from the LAPI; the POST routes are rate limited per client address; approved executions retry at most five times with backoff; case state does not follow an alert that CrowdSec has expired. Sizing beyond a single host's worth of alerts has not been measured.
+
+## Using it from Projects and Sidekick
+
+`bootstrap.sh` (Compose) and `k8s/bootstrap.sh` generate a service credential (`secrets/control_token`) and an approval secret (`secrets/approval_secret`; Kubernetes keys `control-token`, `approval-secret`). To connect Projects, give it the product URL, the control token and the same approval secret, then, as an admin, link each Projects principal that may approve to an Edge Sentinel user with the `operator` role (Users, Projects links, or `POST /api/v1/actor-links`). Projects can then read the queue and stage proposals with the service credential; an approval clicked in Projects is accepted only as a single-use token bound to that action's digest and to the linked user, and is recorded as that user with `via: projects`. The product pages Projects links to are `/ui/cases/<case-id>` and `/ui/actions/<act-id>`. The same records are what the browser console shows.
 
 ## Compatibility with the rAIlsApps distribution
 

@@ -39,6 +39,9 @@ spec:
             - {name: CROWDSEC_BOUNCER_KEY_FILE, value: /run/secrets/crowdsec-bouncer-key}
             - {name: CROWDSEC_MACHINE_ID, value: edge-sentinel}
             - {name: CROWDSEC_MACHINE_PASSWORD_FILE, value: /run/secrets/crowdsec-machine-password}
+            # for Projects/Sidekick and the Mission Runtime: the service credential and the secret that verifies per-click approval tokens
+            - {name: AGENTIC_OS_CONTROL_TOKEN_FILE, value: /run/secrets/control-token}
+            - {name: AGENTIC_OS_APPROVAL_SECRET_FILE, value: /run/secrets/approval-secret}
             # an approved ban is a dry run until this is "1"
             - {name: SENTINEL_BLOCK_ENABLED, value: ""}
             # behind an ingress controller the client address is the right-most X-Forwarded-For entry:

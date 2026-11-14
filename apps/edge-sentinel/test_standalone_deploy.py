@@ -85,7 +85,7 @@ def test_compose_publishes_on_loopback_by_default_and_hardens_the_app():
     assert "ports" not in c["services"]["crowdsec"], "the CrowdSec API is not published"
     env = app["environment"]
     assert env["SENTINEL_BASIC_AUTH_PASS_FILE"].startswith("/run/secrets/") and "SENTINEL_BASIC_AUTH_PASS" not in env
-    assert set(c["secrets"]) == {"operator_password", "crowdsec_bouncer_key", "crowdsec_machine_password"}
+    assert set(c["secrets"]) == {"operator_password", "crowdsec_bouncer_key", "crowdsec_machine_password", "control_token", "approval_secret"}
     assert re.search(r"@sha256:[0-9a-f]{64}$", c["services"]["crowdsec"]["image"])
 
 
@@ -142,7 +142,7 @@ def test_images_are_pinned_never_latest():
 
 def test_the_secret_example_carries_keys_and_no_values_and_is_not_applied_by_the_kustomization():
     s = _docs(DEPLOY / "k8s" / "secret.example.yaml")[0]
-    assert set(s["stringData"]) == {"operator-password", "crowdsec-bouncer-key", "crowdsec-machine-password"}
+    assert set(s["stringData"]) == {"operator-password", "crowdsec-bouncer-key", "crowdsec-machine-password", "control-token", "approval-secret"}
     assert all(v == "" for v in s["stringData"].values())
     k = yaml.safe_load((DEPLOY / "k8s" / "kustomization.yaml").read_text())
     assert "secret.example.yaml" not in k["resources"] and "ingress.example.yaml" not in k["resources"]
@@ -180,3 +180,15 @@ def test_every_crowdsec_bouncer_variable_is_a_valid_shell_identifier():
     assert all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", n) for n in names), names
     compose = yaml.safe_load((DEPLOY / "docker-compose.yml").read_text())["services"]["crowdsec"]
     assert not any(k.startswith("BOUNCER_KEY_") for k in compose["environment"]), "compose registers the key with cscli in bootstrap.sh"
+
+
+def test_the_image_carries_the_soc2_catalogue_the_catalogue_route_reads():
+    assert "soc2/*.py" in DOCKERFILE and "_testkit.py" in DOCKERFILE
+
+
+def test_the_image_carries_the_console_and_turns_it_on():
+    assert "SENTINEL_UI=1" in DOCKERFILE and "cp ui/index.html" in DOCKERFILE
+    served = {"index.html", "app.js", "api.js", "dom.js", "app.css", "icon.svg"}
+    assert served == {p.name for p in (HERE / "ui").iterdir()}, "every console file must be both served (ui_routes.FILES) and copied by the Dockerfile"
+    for name in served:
+        assert name in DOCKERFILE, name

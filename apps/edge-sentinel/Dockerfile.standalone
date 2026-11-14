@@ -44,6 +44,9 @@ RUN pip check && pip uninstall -y hatchling packaging pathspec pluggy tomlkit tr
 COPY apps/edge-sentinel /tmp/app-src
 RUN mkdir -p /opt/app/edge_sentinel && cd /tmp/app-src \
  && for f in *.py; do case "$f" in test_*) ;; *) cp "$f" /opt/app/edge_sentinel/ ;; esac; done \
+ && mkdir -p /opt/app/edge_sentinel/ui /opt/app/edge_sentinel/soc2 \
+ && cp ui/index.html ui/app.js ui/api.js ui/dom.js ui/app.css ui/icon.svg /opt/app/edge_sentinel/ui/ \
+ && for f in soc2/*.py; do case "$f" in */_testkit.py|*/test_*) ;; *) cp "$f" /opt/app/edge_sentinel/soc2/ ;; esac; done \
  && touch /opt/app/edge_sentinel/__init__.py
 
 # ---------------------------------------------------------------- tools: optional scanners, pinned and verified
@@ -94,10 +97,11 @@ RUN python -m pip uninstall -y pip setuptools wheel \
 #   AGENTIC_OS_PROFILE=production durable authority store required, no permissive fallback for side effects; a
 #                                 development run is an explicit choice: -e AGENTIC_OS_PROFILE=development
 #   AGENTIC_OS_PERMISSIONS=off    the kernel's per-app permission plane is not used; access is the operator credential
+#   SENTINEL_UI=1                 `/` redirects to the browser console at /ui/ (static files, strict CSP); unset keeps the legacy page
 #   SENTINEL_BLOCK_ENABLED unset  an approved ban is a dry run until the operator turns real execution on
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    PORT=8203 SENTINEL_BIND_HOST=0.0.0.0 SENTINEL_ALLOW_EXPOSURE=1 SENTINEL_REQUIRE_AUTH=1 \
+    PORT=8203 SENTINEL_BIND_HOST=0.0.0.0 SENTINEL_ALLOW_EXPOSURE=1 SENTINEL_REQUIRE_AUTH=1 SENTINEL_UI=1 \
     AGENTIC_OS_PROFILE=production AGENTIC_OS_PERMISSIONS=off \
     SENTINEL_STATE_DIR=/data/state AGENTIC_OS_AUTHORITY_DB=/data/authority.db AGENTIC_OS_REPLAY_DB=/data/replay.db \
     XDG_CACHE_HOME=/data/cache TRIVY_CACHE_DIR=/data/cache/trivy HOME=/data/home TMPDIR=/tmp

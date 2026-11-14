@@ -113,7 +113,9 @@ _V1_ROUTES = [("GET", "/api/v1/info"), ("GET", "/api/v1/posture"), ("GET", "/api
               ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/decision"), ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/execute"),
               ("GET", "/api/v1/changes"), ("GET", "/api/v1/history"), ("POST", "/api/v1/session"), ("GET", "/api/v1/session"), ("DELETE", "/api/v1/session"),
               ("POST", "/api/v1/session/password"), ("GET", "/api/v1/users"), ("POST", "/api/v1/users"), ("PATCH", "/api/v1/users/{name}"),
-              ("POST", "/api/v1/users/{name}/password"), ("GET", "/api/v1/actor-links"), ("POST", "/api/v1/actor-links"), ("DELETE", "/api/v1/actor-links/{external_actor}")]
+              ("POST", "/api/v1/users/{name}/password"), ("GET", "/api/v1/actor-links"), ("POST", "/api/v1/actor-links"), ("DELETE", "/api/v1/actor-links/{external_actor}"),
+              ("POST", "/api/v1/hunt/validate"), ("GET", "/api/v1/attack/map"), ("POST", "/api/v1/ioc/normalize"), ("POST", "/api/v1/detections/validate"),
+              ("POST", "/api/v1/agent-events"), ("GET", "/api/v1/soc2/controls")]
 OPERATOR_AUTH_ROUTES["edge-sentinel"] = {r: _V1 for r in _V1_ROUTES}
 FRAMEWORK_ROUTES = {("GET", "/_security"), ("GET", "/openapi.json"), ("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("GET", "/redoc"), ("HEAD", "/openapi.json"), ("HEAD", "/docs"),
                     ("HEAD", "/docs/oauth2-redirect"), ("HEAD", "/redoc"), ("HEAD", "/health"), ("HEAD", "/"), ("HEAD", "/api/activity")}

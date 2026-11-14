@@ -30,6 +30,7 @@ from . import history_store
 from . import statefile
 from .case_store import CaseStore
 from .evidence import ActionReceipt, ActionRequest, ActionState, CaseStatus, SecurityDecision
+from . import agent_events as _agent_events
 from . import manual_cases
 from .incident import ingest_crowdsec_alert, replay_case
 
@@ -102,12 +103,51 @@ def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict
 
 
 def _rehydrate_manual(st: CaseStore) -> None:
-    """Manual cases have no CrowdSec alert to be derived from: rebuild them from their stored request evidence (idempotent)."""
+    """Manual and agent-event cases have no CrowdSec alert to be derived from: rebuild them from their stored evidence (idempotent)."""
     try:
-        for row in history_store.get().rows("SELECT content FROM evidence WHERE kind = 'manual_request'"):
+        hs = history_store.get()
+        for row in hs.rows("SELECT content FROM evidence WHERE kind = 'manual_request'"):
             manual_cases.ingest(st, json.loads(row["content"]))
+        for row in hs.rows("SELECT content FROM evidence WHERE kind = 'agent_event'"):
+            _agent_events.ingest_agent_event(st, json.loads(row["content"]), min_severity="info")
     except (history_store.StoreUnavailable, ValueError, KeyError):
         pass
+
+
+AGENT_EVENT_FIELDS = {"kind": 80, "severity": 12, "subject": 200, "source": 120, "detail": 500, "tenant": 80}
+
+
+def ingest_agent_event(event: dict, *, actor: str, via: str, min_severity: str = "medium", st: CaseStore | None = None) -> dict:
+    """One agent-runtime event (the sentinel feed shape) becomes an INVESTIGATING case with the raw event as immutable evidence. A SIGNAL:
+    no action is proposed and nothing is blocked. Events below `min_severity` open nothing. Validated: known fields only, bounded lengths."""
+    st = st or store()
+    clean: dict = {}
+    for k, v in (event or {}).items():
+        if k == "ts":
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 < v < 4102444800):
+                raise ValueError("ts must be a unix timestamp in seconds")
+            clean[k] = float(v)
+        elif k in AGENT_EVENT_FIELDS:
+            if not isinstance(v, str) or len(v) > AGENT_EVENT_FIELDS[k]:
+                raise ValueError(f"{k} must be a string of at most {AGENT_EVENT_FIELDS[k]} characters")
+            clean[k] = v
+        else:
+            raise ValueError(f"unknown field '{k}'")
+    if not clean.get("kind") or clean.get("severity") not in ("info", "low", "medium", "high", "critical"):
+        raise ValueError("kind and a severity of info, low, medium, high or critical are required")
+    with _LOCK:
+        _check_state_ok()
+        case = _agent_events.ingest_agent_event(st, clean, min_severity=min_severity)
+        if case is None:
+            return {"case_id": None, "reason": "below_min_severity", "min_severity": min_severity}
+        try:
+            hs = history_store.get()
+            with hs.transaction():
+                hs.sync_store(st, attempts=_ATTEMPTS)
+                hs.append("case.agent_event", case_id=case.case_id, actor_user=actor, via=via, detail={"kind": clean["kind"], "severity": clean["severity"]})
+        except history_store.StoreUnavailable as e:
+            raise ExecutionError(f"event not recorded: the history store could not be written ({e})") from None
+        return {"case_id": case.case_id, "status": case.status.value, "severity": case.severity.value, "title": case.title}
 
 
 def stage_manual(kind: str, ip: str, *, reason: str, duration: str, actor: str, via: str, st: CaseStore | None = None) -> dict:
