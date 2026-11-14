@@ -61,15 +61,12 @@ class SentinelAdapter:
 
     # ── staging (service token; creates a proposal, which does nothing) ─────────────────────────────
     def propose(self, *, capability: str, ip: str, reason: str, duration_hours: Optional[int] = None,
-                case_id: str = "", actor: str = "", source: str = "sidekick") -> Dict[str, Any]:
-        body: Dict[str, Any] = {"ip": ip, "reason": reason}
-        if duration_hours is not None:
-            body["duration_hours"] = duration_hours
-        if case_id:
-            body["capability"] = capability
-            return self.client.post(f"{self.p}/cases/{case_id}/actions", body, actor=actor, source=source)
-        body["type"] = "manual_block" if capability == CAP_BAN else "manual_unblock"
-        body["capability"] = capability
+                actor: str = "", source: str = "sidekick") -> Dict[str, Any]:
+        """Stage a manual block/unblock as its own case (``POST /api/v1/cases``): a proposal that does nothing."""
+        body: Dict[str, Any] = {"type": "manual_block" if capability == CAP_BAN else "manual_unblock", "ip": ip,
+                                "reason": reason}
+        if duration_hours is not None and capability == CAP_BAN:
+            body["duration"] = f"{int(duration_hours)}h"
         return self.client.post(f"{self.p}/cases", body, actor=actor, source=source)
 
     # ── human decisions (decision token + signed approval token; see approvals.py) ───────────────────
@@ -102,8 +99,13 @@ def is_unban(a: Mapping[str, Any]) -> bool:
 
 
 def dry_run(a: Mapping[str, Any]) -> bool:
+    """True when the product reports this deployment executes as a dry run (``Action.mode``, which Projects fills from
+    ``/info`` when a list row does not carry it) or the persisted verification says so."""
     mode = a.get("mode")
-    return bool(mode.get("dry_run")) if isinstance(mode, Mapping) else False
+    if isinstance(mode, Mapping) and mode.get("dry_run"):
+        return True
+    v = a.get("verification")
+    return isinstance(v, Mapping) and v.get("state") == "dry_run"
 
 
 def action_title(a: Mapping[str, Any]) -> str:
@@ -135,7 +137,7 @@ def verification_line(a: Mapping[str, Any]) -> str:
     if state == "verified":
         return f"Verified: the {'lift' if is_unban(a) else 'ban'} is confirmed at the edge" + \
             (f" (read back {v.get('at')})" if v.get("at") else "")
-    if state == "unverified":
+    if state in ("unverified", "failed"):
         return "Unverified: the request was accepted but the read-back did not observe it"
     if state == "dry_run":
         return "Dry run: nothing was blocked"
@@ -158,7 +160,7 @@ def mission_state(a: Mapping[str, Any]) -> Tuple[str, str]:
             return "completed", "Verified"
         if vstate == "dry_run":
             return "completed", "Dry run"
-        if vstate == "unverified":
+        if vstate in ("unverified", "failed"):
             return "failed", "Read-back did not confirm"
         return "running", "3/4 read-back pending"
     if st == "FAILED":
@@ -201,7 +203,7 @@ def mission_steps(a: Mapping[str, Any]) -> List[Dict[str, Any]]:
          "why": (f"receipt {rec.get('receipt_id') or rec.get('id')}" if isinstance(rec, Mapping) and
                  (rec.get("receipt_id") or rec.get("id")) else "runs only after the approval, as a separate human step")},
         {"n": 5, "capability": "sentinel.read_back", "provider": "crowdsec", "tier": 0,
-         "status": "done" if v.get("state") in ("verified", "dry_run") else "failed" if v.get("state") == "unverified" else "todo",
+         "status": "done" if v.get("state") in ("verified", "dry_run") else "failed" if v.get("state") in ("unverified", "failed") else "todo",
          "why": verification_line(a) or "the product re-reads the edge after execution and persists the result"},
     ]
     return steps
@@ -224,7 +226,7 @@ def attention_item(spec: ProductSpec, a: Mapping[str, Any]) -> Optional[Dict[str
                 "reason": "Approved; execution is a separate human step", "consequence": action_consequence(a),
                 "available_actions": ["Review", "Execute"], "priority": 85, "source_runtime": "security",
                 "source_refs": refs}
-    if st == "EXECUTED" and vstate == "unverified":
+    if st == "EXECUTED" and vstate in ("unverified", "failed"):
         return {"id": f"{spec.id}:{rid}:verify", "kind": "approval", "title": f"Check {action_ip(a) or 'the'} ban: read-back failed",
                 "reason": verification_line(a), "consequence": "The edge may not be blocking this address.",
                 "available_actions": ["Review"], "priority": 95, "source_runtime": "security", "source_refs": refs}

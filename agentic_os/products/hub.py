@@ -143,6 +143,13 @@ class ProductHub:
         base["tools_available"] = True
         return base
 
+    def with_mode(self, product_id: str, rec: Any) -> Any:
+        """An action record carrying ``mode`` (the product's info.mode) when the product's list rows do not."""
+        if not isinstance(rec, dict) or "mode" in rec:
+            return rec
+        mode = (self._status.get(product_id) or {}).get("info", {}).get("mode")
+        return {**rec, "mode": mode} if isinstance(mode, dict) else rec
+
     def ready(self, product_id: str) -> bool:
         try:
             return bool(self.status(product_id)["ready"])

@@ -156,7 +156,7 @@ class ProductClient:
         if status >= 400:
             d = data if isinstance(data, dict) else {}
             code = d.get("error") if isinstance(d.get("error"), str) else None
-            detail = d.get("detail") if isinstance(d.get("detail"), str) else ""
+            detail = next((d[k] for k in ("detail", "message") if isinstance(d.get(k), str)), "")
             if code is None:
                 code = {401: "unauthenticated", 403: "forbidden", 404: "not_found", 409: "conflict", 422: "invalid",
                         429: "rate_limited", 503: "unavailable"}.get(status, "unavailable" if status >= 500 else "error")

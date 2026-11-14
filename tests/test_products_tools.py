@@ -69,7 +69,7 @@ def test_read_tools_return_real_numbers_and_the_products_ids(env):
     fake, hub, reg, _ = env
     o = SidekickOrchestrator(registry=reg)
     r = o.invoke("security.sentinel_posture")
-    assert "2 active ban decision" in r.answer and "dry run" in r.answer and r.data["posture"]["alerts_24h"] == 7
+    assert "2 active ban decision" in r.answer and "dry run" in r.answer and r.data["posture"]["alerts_total"] == 7
     r = o.invoke("security.sentinel_list_cases", status="open")
     assert CASE in r.answer and r.evidence == (CASE,) and r.artifacts[0].resource_id == CASE
     assert r.artifacts[0].native_url.endswith(f"/ui/cases/{CASE}")
@@ -166,7 +166,7 @@ def test_sidekick_proposes_a_ban_only_with_an_ip_and_a_reason_and_asks_otherwise
     r = ask(client, "propose a ban for 203.0.113.99 for 6 hours because port scanning")
     assert r["tool"] == "security.sentinel_propose_ban" and r["data"]["executed"] is False
     rid = r["data"]["request_id"]
-    assert fake.actions[rid]["params"] == {"ip": "203.0.113.99", "duration_hours": 6} and fake.actions[rid]["state"] == "AWAITING_APPROVAL"
+    assert fake.actions[rid]["params"] == {"ip": "203.0.113.99", "duration_hours": 6} and fake.cases[fake.actions[rid]["case_id"]]["case_type"] == "manual_block" and fake.actions[rid]["state"] == "AWAITING_APPROVAL"
     assert r["actions"][0]["kind"] == "navigate" and r["actions"][0]["ref"] == "attention"
     assert any(a["kind"] == "open" and f"/ui/actions/{rid}" in a["ref"] for a in r["actions"])
 
