@@ -551,3 +551,26 @@ def test_a_runtime_call_for_a_protected_address_is_refused_before_anything_is_re
     op = importlib.import_module("edge-sentinel.operator").build_edge_sentinel_operator()
     res = op.invoke("sentinel.block_ip", {"ip": "10.0.0.1", "_approval": {"approved": True, "by": "x"}})
     assert res["status"] == "error" and res["ip_blocked"] is False and env["bans"] == set()
+
+
+def test_concurrent_requests_never_see_another_threads_cursor(env):
+    """Found by the browser run: a cursor read outside the store's lock saw a neighbouring statement (a session row with a NULL expiry)."""
+    import threading
+    s = session(ADMIN)
+    cookie = s.cookies.get("sentinel_session")
+    errors: list = []
+
+    def hammer():
+        c = client()
+        c.cookies.set("sentinel_session", cookie)
+        for _ in range(40):
+            try:
+                assert c.get("/api/v1/session").status_code == 200
+                assert c.get("/api/v1/users").status_code == 200
+                assert c.get("/api/v1/changes").status_code == 200
+            except Exception as e:  # noqa: BLE001
+                errors.append(repr(e))
+    threads = [threading.Thread(target=hammer) for _ in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []

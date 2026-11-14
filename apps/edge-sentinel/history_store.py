@@ -112,28 +112,31 @@ class HistoryStore:
             raise StoreUnavailable(f"history store unavailable ({type(e).__name__}: {e})") from None
 
     # ── plumbing ────────────────────────────────────────────────────────────────────────────────────────────
-    def run(self, sql: str, args: tuple = ()):
+    def run(self, sql: str, args: tuple = ()) -> "_Result":
+        """Execute and return what callers may need (rowcount, lastrowid, fetched rows), all read INSIDE the lock: the connection is shared
+        by the request threads, and a cursor read after the lock is released can see another thread's statement."""
         with self.lock:
             try:
-                return self.db.execute(sql, args)
+                cur = self.db.execute(sql, args)
+                return _Result(cur.rowcount, cur.lastrowid, cur.fetchall() if cur.description else [])
             except sqlite3.IntegrityError:
                 raise
             except sqlite3.Error as e:
                 raise StoreUnavailable(f"history store error ({type(e).__name__})") from None
 
     def rows(self, sql: str, args: tuple = ()) -> list:
-        return [dict(r) for r in self.run(sql, args).fetchall()]
+        return [dict(r) for r in self.run(sql, args).fetched]
 
     def one(self, sql: str, args: tuple = ()) -> Optional[dict]:
-        r = self.run(sql, args).fetchone()
-        return dict(r) if r else None
+        got = self.run(sql, args).fetched
+        return dict(got[0]) if got else None
 
     def transaction(self):
         return _Tx(self)
 
     def health(self) -> dict:
         try:
-            self.run("SELECT 1").fetchone()
+            self.run("SELECT 1")
             return {"ok": True, "persistent": self.persistent}
         except StoreUnavailable as e:
             return {"ok": False, "persistent": self.persistent, "error": str(e)}
@@ -305,6 +308,13 @@ class HistoryStore:
                          ((state,) if state else ()) + (limit + 1, off))
         more = len(rows) > limit
         return {"items": [self.get_action(r["request_id"]) for r in rows[:limit]], "next_cursor": encode_cursor(off + limit) if more else None}
+
+
+class _Result:
+    __slots__ = ("rowcount", "lastrowid", "fetched")
+
+    def __init__(self, rowcount, lastrowid, fetched):
+        self.rowcount, self.lastrowid, self.fetched = rowcount, lastrowid, fetched
 
 
 class _Tx:
