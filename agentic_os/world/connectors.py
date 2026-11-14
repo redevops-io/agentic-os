@@ -281,7 +281,8 @@ class GmailSMTPConnector:
         self._password = app_password
         self._from = from_addr or user
 
-    def send(self, *, to: str, subject: str, body: str, tag: str = "gtm") -> Dict[str, Any]:
+    def send(self, *, to: str, subject: str, body: str, tag: str = "gtm",
+             html: Optional[str] = None) -> Dict[str, Any]:
         import smtplib  # noqa: PLC0415
         from email.message import EmailMessage  # noqa: PLC0415
         from email.utils import make_msgid  # noqa: PLC0415
@@ -292,6 +293,8 @@ class GmailSMTPConnector:
         msg_id = make_msgid(domain=(self._user.split("@", 1)[-1] or None))
         msg["Message-Id"] = msg_id
         msg.set_content(body)
+        if html:
+            msg.add_alternative(html, subtype="html")
         try:
             with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as s:
                 s.starttls()

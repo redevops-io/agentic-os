@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import html
 import json
 import os
 import re
@@ -194,6 +195,49 @@ def teardown(s: dict) -> dict:
         body = ("Hi — I came across " + a + " and wanted to reach out from " + TENANT + ". If it's relevant, I'd be "
                 "glad to share more and answer any questions.\n\nWould a short call this week be useful?")
     return {"subject": a + ": a quick note from " + TENANT, "body": body, "icp": icp}
+
+
+def pitch_visual_html(row: dict) -> str:
+    """A small, honestly-labelled visualization of the REAL evidence that produced this outreach — not a
+    vanity chart. Every bar is a number already on the row (signal/source weight, and real GitHub stars
+    when present); nothing here is invented for the prospect. Every style is inlined (no external CSS,
+    no <style> block) because that's what actually survives into an email client's DOM.
+    """
+    bars = [("Signal strength", SIGNAL_PRIORITY.get(row.get("signal"), 0.15)),
+            ("Source confidence", SOURCE_WEIGHT.get(row.get("source"), 0.5))]
+    if row.get("stars"):
+        bars.append(("Project traction (★)", min(1.0, row["stars"] / 5000.0)))
+    rows = ""
+    for label, frac in bars:
+        pct = max(4, round(frac * 100))
+        rows += (
+            "<tr>"
+            "<td style=\"padding:4px 10px 4px 0;font:13px -apple-system,Segoe UI,sans-serif;color:#333;"
+            "white-space:nowrap\">" + html.escape(label) + "</td>"
+            "<td style=\"width:220px\"><div style=\"background:#e7e9ee;border-radius:4px;height:10px;"
+            "width:220px\"><div style=\"background:#1f5eff;border-radius:4px;height:10px;width:" +
+            str(pct) + "%\"></div></div></td>"
+            "<td style=\"padding:4px 0 4px 10px;font:12px -apple-system,Segoe UI,sans-serif;color:#667\">" +
+            str(round(frac * 100)) + "%</td></tr>"
+        )
+    return (
+        "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:14px 0;"
+        "border-collapse:collapse\">"
+        "<tr><td colspan=\"3\" style=\"font:600 12px -apple-system,Segoe UI,sans-serif;color:#667;"
+        "padding-bottom:6px\">WHY WE REACHED OUT &mdash; the actual evidence, not a guess</td></tr>" +
+        rows + "</table>"
+    )
+
+
+def render_pitch_html(subject: str, text_body: str, row: dict) -> str:
+    """The HTML alternative for an outreach email: the drafted text, the evidence visualization, and the
+    lead's own real link (its GitHub repo/source, when the row has one) — never a fabricated one."""
+    paras = "".join(f"<p style=\"margin:0 0 12px;font:14px -apple-system,Segoe UI,sans-serif;color:#1a1a1a;"
+                    f"line-height:1.5\">{html.escape(p)}</p>" for p in text_body.strip().split("\n\n") if p.strip())
+    link = row.get("url") or row.get("artifact")
+    link_html = (f"<p style=\"margin:12px 0 0\"><a href=\"{html.escape(link)}\" "
+                f"style=\"color:#1f5eff;text-decoration:none\">{html.escape(link)}</a></p>") if link else ""
+    return (f"<div style=\"max-width:560px\">{paras}{pitch_visual_html(row)}{link_html}</div>")
 
 
 _LIVE_CACHE = {"ts": 0.0, "rows": []}
@@ -468,7 +512,9 @@ def send_all(body: dict | None = None) -> dict:
                             "reason": "no verified contact email — run `enrich` for this account first"})
             continue
         draft = row.get("draft") or teardown(row)
-        r = sender.send(to=to, subject=draft["subject"], body=draft["body"], tag="outreach-engine")
+        html_body = draft.get("html") or render_pitch_html(draft["subject"], draft["body"], row)
+        r = sender.send(to=to, subject=draft["subject"], body=draft["body"], tag="outreach-engine",
+                        html=html_body)
         ok = r.get("error_code", 1) == 0
         entry = {"account": acct, "sent": ok, "to": to, "message_id": r.get("message_id")}
         if not ok:

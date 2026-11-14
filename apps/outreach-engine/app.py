@@ -8,7 +8,7 @@ demo tenant used across the agentic apps. Sends are approval-gated.
   GET  /health        -> {"status","core":"twenty","connected": <Twenty /healthz>}
   GET  /api/pipeline  -> ranked accounts + picked play + drafted opener + approval state
   GET  /              -> MD3 dashboard (source, rank, draft, approve — the GUI)
-  POST /agent/run     -> {"action":"refresh"|"enrich"|"approve"|"send_all", "account": "..."}
+  POST /agent/run     -> {"action":"refresh"|"enrich"|"draft_pitch"|"approve"|"send_all", "account": "..."}
 
 Config (env): TWENTY_URL · TWENTY_API_KEY · REDEVOPS_LLM_BASE_URL (in-boundary model; none => deterministic) ·
 OPERATOR_BASIC_AUTH / OUTREACH_BASIC_AUTH (`user:pass`; approve / send_all execute only for the operator) ·
@@ -432,6 +432,40 @@ def draft_followup(opp: dict) -> str:
     if out:
         return out.strip()
     return core.neutral_followup()
+
+
+def draft_pitch(body: dict | None = None) -> dict:
+    """LLM-draft a personalized first-touch pitch for one ranked account, with the real evidence
+    visualization and the lead's own link, and attach it as that account's draft — `send_all` uses this
+    override instead of the deterministic `teardown()` template once it's set.
+
+    Read-only w.r.t. Twenty/CRM and the outside world: it only writes the in-memory pipeline row, the same
+    consequence level as `enrich`. Falls back to the deterministic template when the governed LLM returns
+    nothing (no in-boundary endpoint configured, or a refusal) — never leaves the row without a draft."""
+    body = body or {}
+    acct = body.get("account", "")
+    row = next((r for r in core._STATE["accounts"] if r["account"] == acct), None)
+    if row is None:
+        return {"ok": False, "action": "draft_pitch", "account": acct,
+                "reason": "unknown account — refresh the pipeline first"}
+    tmpl = core.teardown(row)
+    evidence = row.get("evidence") or row.get("reason") or ""
+    out = _llm("Write a SHORT, friendly cold-outreach email (under 110 words; plain prose; no markdown; no "
+               "subject line; 1-2 short paragraphs separated by a blank line) from " + TENANT + " (" + PITCH +
+               ") to " + acct + ". Audience: " + (tmpl.get("icp") or "unknown") + ". The real reason for "
+               "reaching out: " + evidence + ". End with one short, specific call to action (a short call "
+               "this week). Output only the email body.", 220)
+    text = out.strip() if out else tmpl["body"]
+    draft = {"subject": tmpl["subject"], "body": text, "draft_source": "llm" if out else "template"}
+    draft["html"] = core.render_pitch_html(draft["subject"], draft["body"], row)
+    row["draft"] = draft
+    return {"ok": True, "action": "draft_pitch", "account": acct, **draft}
+
+
+# registered here (not in the _ACTIONS/_TOOL_OF literal above) because draft_pitch is defined after it —
+# it lives in app.py, not core.py, since it needs the governed LLM, which core.py deliberately never touches.
+_ACTIONS["draft_pitch"] = draft_pitch
+_TOOL_OF["draft_pitch"] = "outreach.draft_pitch"
 
 
 def pipeline_summary() -> dict:

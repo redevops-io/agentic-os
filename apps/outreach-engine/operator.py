@@ -5,10 +5,11 @@ Mission Runtime can drive outreach as a capability operator — the same core Tw
 actions the console exposes at `/agent/run`, now discoverable + idempotent on the wire.
 
 Capabilities (syscalls):
-  outreach.refresh    — rebuild the ranked pipeline from live GitHub/HN signals (no CRM write)
-  outreach.enrich     — resolve a verified business email via the configured provider (Hunter by default)
-  outreach.approve    — human sign-off that syncs a real pilot to Twenty (Company+Person+Opportunity)  [approval gate]
-  outreach.send_all   — dispatch the approved outreach sequences to prospects  [approval gate: send_sequence]
+  outreach.refresh      — rebuild the ranked pipeline from live GitHub/HN signals (no CRM write)
+  outreach.enrich       — resolve a verified business email via the configured provider (Hunter by default)
+  outreach.draft_pitch  — LLM-draft a personalized pitch (+ evidence visualization + the lead's link)
+  outreach.approve      — human sign-off that syncs a real pilot to Twenty (Company+Person+Opportunity)  [approval gate]
+  outreach.send_all     — dispatch the approved outreach sequences to prospects  [approval gate: send_sequence]
 
 Per control-plane modules.yaml the gate is `approval_required: [send_sequence]` — nothing reaches a
 prospect without a human sign-off — so `outreach.send_all` carries approval_required=True and the
@@ -19,6 +20,15 @@ from __future__ import annotations
 from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
+
+
+def _draft_pitch(inp):
+    # deferred import: app.py needs the governed LLM, which core.py deliberately never touches, so the
+    # draft_pitch logic lives there; app.py already defers ITS import of this module (the router mount
+    # happens inside a function, near the bottom of the file), so neither module needs the other at
+    # module-load time regardless of which one a caller imports first.
+    from . import app as _app
+    return _app.draft_pitch(inp)
 
 
 def build_outreach_operator() -> Operator:
@@ -39,6 +49,15 @@ def build_outreach_operator() -> Operator:
                                        "provider (Hunter by default)"},
             estimated_value="medium", deterministic=False, latency_ms=900,
             concurrency_mode="read_only",   # resolves + attaches an email, no CRM write, no send
+        ),
+        capability(
+            "outreach.draft_pitch",
+            lambda inp: _draft_pitch(inp),
+            provides=["pitch_drafted"],
+            outputs={"pitch_drafted": "LLM-personalized pitch (evidence visualization + the lead's real "
+                                       "link) attached to the account's draft"},
+            estimated_value="medium", deterministic=False, latency_ms=1500,
+            concurrency_mode="read_only",   # only writes the in-memory pipeline row, no CRM write, no send
         ),
         capability(
             "outreach.approve",
