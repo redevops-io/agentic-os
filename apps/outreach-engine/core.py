@@ -214,15 +214,16 @@ def pitch_visual_html(row: dict) -> str:
             "<tr>"
             "<td style=\"padding:4px 10px 4px 0;font:13px -apple-system,Segoe UI,sans-serif;color:#333;"
             "white-space:nowrap\">" + html.escape(label) + "</td>"
-            "<td style=\"width:220px\"><div style=\"background:#e7e9ee;border-radius:4px;height:10px;"
-            "width:220px\"><div style=\"background:#1f5eff;border-radius:4px;height:10px;width:" +
+            "<td style=\"width:100%\"><div style=\"background:#e7e9ee;border-radius:4px;height:10px;"
+            "width:100%;max-width:220px\"><div style=\"background:#1f5eff;border-radius:4px;height:10px;width:" +
             str(pct) + "%\"></div></div></td>"
-            "<td style=\"padding:4px 0 4px 10px;font:12px -apple-system,Segoe UI,sans-serif;color:#667\">" +
+            "<td style=\"padding:4px 0 4px 10px;font:12px -apple-system,Segoe UI,sans-serif;color:#667;"
+            "white-space:nowrap\">" +
             str(round(frac * 100)) + "%</td></tr>"
         )
     return (
         "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:14px 0;"
-        "border-collapse:collapse\">"
+        "border-collapse:collapse;width:100%;max-width:400px\">"
         "<tr><td colspan=\"3\" style=\"font:600 12px -apple-system,Segoe UI,sans-serif;color:#667;"
         "padding-bottom:6px\">WHY WE REACHED OUT &mdash; the actual evidence, not a guess</td></tr>" +
         rows + "</table>"
