@@ -26,6 +26,7 @@ BODIES = {
     "draft_pitch": {"action": "draft_pitch", "account": ACCT},
     "approve": {"action": "approve", "account": ACCT},
     "send_all": {"action": "send_all"},
+    "check_replies": {"action": "check_replies"},
 }
 GATED = ("approve", "send_all")
 PATHS = ("/api/run", "/agent/run")
@@ -172,6 +173,15 @@ def test_enrich_is_ungated_read(client):
     r = client.post("/api/run", json=BODIES["enrich"])
     j = r.json()
     assert j["ok"] is True and j["action"] == "enrich" and j["email"] is None and _Twenty.writes == []
+
+
+def test_check_replies_is_ungated_read_and_honest_without_a_reader(client):
+    # the autouse fixture forces GMAIL_SMTP_USER/APP_PASSWORD off, so this is the honest "not configured"
+    # path -- no approval marker needed either way, and it never touches Twenty.
+    r = client.post("/api/run", json=BODIES["check_replies"])
+    j = r.json()
+    assert j["ok"] is False and j["action"] == "check_replies" and "no reader" in j["reason"]
+    assert _Twenty.writes == []
 
 
 def test_unknown_action(client):
