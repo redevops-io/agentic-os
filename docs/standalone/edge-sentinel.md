@@ -76,6 +76,10 @@ The script creates the Secret `edge-sentinel` with random values (piped to kubec
 
 The pod runs as uid 10001 with a read-only root filesystem, no capabilities and the `RuntimeDefault` seccomp profile; state is on the PVC at `/data`. The NetworkPolicies deny everything by default, let Edge Sentinel talk to CrowdSec and DNS only, and let CrowdSec talk to DNS and HTTPS. Edit the ingress namespace label in `networkpolicy.yaml` to match your ingress controller. Put TLS on the Ingress: the credential is HTTP Basic.
 
+### Verify the Kubernetes install on a real k3s
+
+`deploy/standalone/edge-sentinel/verify-k3s.sh [IMAGE]` starts a throwaway k3s (the pinned `rancher/k3s` image, privileged, in Docker, under unique names), installs Edge Sentinel with `k8s/bootstrap.sh`, runs `routewalk.py` and `smoke.sh` (alert, case, approval, execution, read-back of the ban, pod restart, state kept), prints the pod security context and removes everything. It uses its own kubeconfig and never reads or changes yours. With no argument it tests the published 0.6.2 digest; a local image tag is loaded into the k3s. It needs docker, kubectl, python3 and curl, and runs in about three minutes; a CI job can call it as is.
+
 ## First run
 
 1. Open the dashboard and sign in as `operator`.

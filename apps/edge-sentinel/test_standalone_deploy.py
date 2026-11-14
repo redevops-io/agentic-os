@@ -169,3 +169,14 @@ def test_the_bootstrap_scripts_never_let_cscli_print_the_credentials_it_register
         text = path.read_text()
         line = next(l for l in text.splitlines() if "machines add" in l and not l.lstrip().startswith("#"))
         assert ">/dev/null 2>&1" in line, f"{path.name}: {line}"
+
+
+def test_every_crowdsec_bouncer_variable_is_a_valid_shell_identifier():
+    """CrowdSec's entrypoint registers `BOUNCER_KEY_<name>` variables from a shell script: a hyphen in the name makes it skip the
+    variable silently (found on a real k3s: the key was never registered, so decisions could not be read or a ban verified)."""
+    names = [e["name"] for _f, d in _workloads() if d["kind"] == "Deployment"
+             for e in d["spec"]["template"]["spec"]["containers"][0].get("env", []) if e["name"].startswith("BOUNCER_KEY_")]
+    assert names, "the manifest registers no bouncer key"
+    assert all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", n) for n in names), names
+    compose = yaml.safe_load((DEPLOY / "docker-compose.yml").read_text())["services"]["crowdsec"]
+    assert not any(k.startswith("BOUNCER_KEY_") for k in compose["environment"]), "compose registers the key with cscli in bootstrap.sh"

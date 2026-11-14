@@ -24,7 +24,13 @@ stringData: {operator-password: "$OP", crowdsec-bouncer-key: "$BK", crowdsec-mac
 YAML
   echo "created Secret edge-sentinel"
 fi
-kubectl apply -k .
+# EDGE_SENTINEL_IMAGE=<registry/name@sha256:digest or :tag> installs that image instead of the one in kustomization.yaml
+# (verify-k3s.sh uses it to test a published digest); the manifests in this directory are not edited.
+if [ -n "${EDGE_SENTINEL_IMAGE:-}" ]; then
+  kubectl kustomize . | sed "s|image: ghcr.io/redevops-io/edge-sentinel:[^[:space:]]*|image: ${EDGE_SENTINEL_IMAGE}|" | kubectl apply -f -
+else
+  kubectl apply -k .
+fi
 kubectl -n "$NS" rollout status deploy/crowdsec --timeout=300s
 MACHINE_PW="$(kubectl -n "$NS" get secret edge-sentinel -o jsonpath='{.data.crowdsec-machine-password}' | base64 -d)"
 # cscli echoes the credentials it registers on stderr; neither stream may reach a terminal or a CI log

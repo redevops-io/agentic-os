@@ -34,7 +34,7 @@ spec:
           image: crowdsecurity/crowdsec:v1.7.8@sha256:2f527c9bb8b367120eb08b82890aa912ce96bfa1ada93dda0721700e4b4e0dde
           env:
             - {name: DISABLE_ONLINE_API, value: "true"}     # "false" joins the CrowdSec community feed
-            - name: BOUNCER_KEY_edge-sentinel               # registers the bouncer key Sentinel reads decisions with
+            - name: BOUNCER_KEY_edgesentinel                # registers the bouncer key Sentinel reads decisions with (no hyphen: CrowdSec's entrypoint is a shell script and silently skips an invalid variable name)
               valueFrom: {secretKeyRef: {name: edge-sentinel, key: crowdsec-bouncer-key}}
           ports:
             - {name: lapi, containerPort: 8080}
