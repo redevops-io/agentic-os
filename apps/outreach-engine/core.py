@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 
 from agentic_os.mission.operator_sdk import pending_approval
+from agentic_os.world import enrichment as _enrichment
 
 # ── config (env) ─────────────────────────────────────────────────────────────
 TWENTY_URL = os.environ.get("TWENTY_URL", "http://twenty:3000").rstrip("/")
@@ -314,6 +315,40 @@ def twenty_sync(row: dict) -> bool:
         return False
 
 
+def _domain_of(owner: dict) -> str:
+    """A bare company domain (no scheme, no leading ``www.``) from a GitHub profile's ``blog`` field,
+    or '' if the profile has none / it doesn't parse as a host."""
+    blog = (owner.get("blog") or "").strip()
+    if not blog:
+        return ""
+    url = blog if "://" in blog else "https://" + blog
+    try:
+        host = urllib.parse.urlparse(url).netloc
+    except Exception:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def enrich_contact(row: dict, *, provider=None) -> dict:
+    """Resolve a verified business email for this lead's point of contact via the configured enrichment
+    provider (Hunter by default; ``HUNTER_API_KEY``). Spends the provider's credits — call per-account on
+    demand, never on every pipeline refresh. Needs a real company domain, taken from the lead's public
+    GitHub profile; leads with no discoverable domain (e.g. the offline DEMO set, which has no GitHub
+    presence) stay at email=None — this never fabricates an address."""
+    acct = row.get("account", "")
+    full = row.get("full_name") or ""
+    owner = _gh_profile(acct) if row.get("source") == "github" else {}
+    poc = _gh_top_contributor(full) if full else {}
+    domain = _domain_of(owner)
+    if not domain:
+        return {"email": None, "verified": False, "provider": None,
+                "reason": "no company domain available for this lead"}
+    name = poc.get("name") or owner.get("name") or acct
+    parts = str(name).split(" ", 1)
+    first, last = parts[0], (parts[1] if len(parts) > 1 else "")
+    return _enrichment.resolve_verified_email(domain=domain, first_name=first, last_name=last, provider=provider)
+
+
 def twenty_opportunities(limit: int = 20) -> list[dict]:
     """Read back the opportunities the agent created in Twenty (the API-sourced pilots).
 
@@ -358,6 +393,25 @@ def refresh(body: dict | None = None) -> dict:
     body = body or {}
     build_pipeline(live=bool(body.get("live", True)))
     return {"ok": True, "action": "refresh", "n": len(_STATE["accounts"])}
+
+
+def enrich(body: dict | None = None) -> dict:
+    """Resolve + attach a verified business email for one ranked account (read-only; no CRM write, no
+    approval gate — it spends the enrichment provider's credits, not the prospect's trust). Call this
+    before ``approve``/``send_all`` so the sequence has a real address to land on."""
+    body = body or {}
+    acct = body.get("account", "")
+    row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
+    if row is None:
+        return {"ok": False, "action": "enrich", "account": acct,
+                "reason": "unknown account — refresh the pipeline first"}
+    result = enrich_contact(row)
+    row["contact_email"] = result.get("email")
+    row["email_verified"] = bool(result.get("verified"))
+    row["email_provider"] = result.get("provider")
+    if result.get("reason"):
+        row["email_reason"] = result["reason"]
+    return {"ok": True, "action": "enrich", "account": acct, **result}
 
 
 def approve(body: dict | None = None) -> dict:

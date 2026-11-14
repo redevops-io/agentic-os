@@ -22,6 +22,7 @@ CRED = "operator:s3cret-operator-pass"
 ACCT = core.DEMO[0]["account"]
 BODIES = {
     "refresh": {"action": "refresh", "live": False},
+    "enrich": {"action": "enrich", "account": ACCT},
     "approve": {"action": "approve", "account": ACCT},
     "send_all": {"action": "send_all"},
 }
@@ -148,6 +149,14 @@ def test_operator_send_all_executes_through_core_honestly(client):
 def test_refresh_is_ungated_read(client):
     r = client.post("/api/run", json=BODIES["refresh"])
     assert r.json()["action"] == "refresh" and _Twenty.writes == []
+
+
+def test_enrich_is_ungated_read(client):
+    # DEMO leads are "manual" source (no GitHub profile) -> no domain -> honest degrade, but it never
+    # needs an approval marker to run, and it never touches Twenty.
+    r = client.post("/api/run", json=BODIES["enrich"])
+    j = r.json()
+    assert j["ok"] is True and j["action"] == "enrich" and j["email"] is None and _Twenty.writes == []
 
 
 def test_unknown_action(client):

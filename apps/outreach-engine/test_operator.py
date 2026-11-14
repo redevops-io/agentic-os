@@ -114,16 +114,19 @@ def test_capabilities_manifest(client):
     m = client.get("/capabilities").json()
     assert m["operator"] == "outreach-engine"
     caps = {c["name"]: c for c in m["capabilities"]}
-    assert set(caps) == {"outreach.refresh", "outreach.approve", "outreach.send_all"}
+    assert set(caps) == {"outreach.refresh", "outreach.enrich", "outreach.approve", "outreach.send_all"}
     # the gate is modules.yaml `approval_required: [send_sequence]` — only the send is gated
     assert caps["outreach.send_all"]["approval_required"] is True
     assert caps["outreach.refresh"]["approval_required"] is False
+    assert caps["outreach.enrich"]["approval_required"] is False      # spends provider credits, not trust
     assert caps["outreach.approve"]["approval_required"] is True      # syncs a lead to Twenty -> gated
-    # side_effecting = writes/sends: refresh only reads, approve + send_all mutate the world
+    # side_effecting = writes/sends: refresh/enrich only read, approve + send_all mutate the world
     assert caps["outreach.refresh"]["side_effecting"] is False
+    assert caps["outreach.enrich"]["side_effecting"] is False
     assert caps["outreach.approve"]["side_effecting"] is True
     assert caps["outreach.send_all"]["side_effecting"] is True
     assert "outreach_pipeline" in caps["outreach.refresh"]["provides"]
+    assert "contact_email" in caps["outreach.enrich"]["provides"]
     assert "lead_synced" in caps["outreach.approve"]["provides"]
     assert "sequences_sent" in caps["outreach.send_all"]["provides"]
     assert "outreach:write" in caps["outreach.approve"]["permissions"]

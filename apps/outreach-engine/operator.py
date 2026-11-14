@@ -6,6 +6,7 @@ actions the console exposes at `/agent/run`, now discoverable + idempotent on th
 
 Capabilities (syscalls):
   outreach.refresh    — rebuild the ranked pipeline from live GitHub/HN signals (no CRM write)
+  outreach.enrich     — resolve a verified business email via the configured provider (Hunter by default)
   outreach.approve    — human sign-off that syncs a real pilot to Twenty (Company+Person+Opportunity)  [approval gate]
   outreach.send_all   — dispatch the approved outreach sequences to prospects  [approval gate: send_sequence]
 
@@ -29,6 +30,15 @@ def build_outreach_operator() -> Operator:
             outputs={"outreach_pipeline": "ranked accounts + drafted openers rebuilt from live signals"},
             estimated_value="low", deterministic=False, latency_ms=1200,
             concurrency_mode="read_only",   # rebuilds pipeline, no CRM write
+        ),
+        capability(
+            "outreach.enrich",
+            lambda inp: core.enrich(inp),
+            provides=["contact_email"],
+            outputs={"contact_email": "verified business email resolved via the configured enrichment "
+                                       "provider (Hunter by default)"},
+            estimated_value="medium", deterministic=False, latency_ms=900,
+            concurrency_mode="read_only",   # resolves + attaches an email, no CRM write, no send
         ),
         capability(
             "outreach.approve",
