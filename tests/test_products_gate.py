@@ -33,13 +33,15 @@ def qa(monkeypatch, tmp_path):
     fake.close()
 
 
-def test_the_gate_is_a_closed_code_constant_that_no_configuration_can_open():
-    assert gates.QA_EXTERNAL_TARGET_ACCEPTANCE_MET is False
+def test_the_gate_is_a_code_constant_that_no_configuration_can_open():
+    # redevops-qa's P2-1 AC-1..AC-12 are green in CI (run 43551629834, main @ 9e495bdf,
+    # covering runner tests/test_p21_external_target_acceptance.py and
+    # qa-egress tests/test_eg_p21_acceptance.py) per the owner's decision of 2026-11-11.
+    assert gates.QA_EXTERNAL_TARGET_ACCEPTANCE_MET is True
     src = (ROOT / "agentic_os" / "products" / "gates.py").read_text()
     assert "import os" not in src and "os.environ" not in src and "getenv" not in src                       # not an env switch, not a registry key
     assert gates.gate_for("security") == {"open": True}
-    g = gates.gate_for("quality")
-    assert g["open"] is False and g["reason"] == "external-target acceptance not met"
+    assert gates.gate_for("quality") == {"open": True}
 
 
 def test_catalog_entry_follows_the_gate():
@@ -48,8 +50,9 @@ def test_catalog_entry_follows_the_gate():
     assert "edge-sentinel" in names
 
 
-def test_closed_gate_every_surface_says_unavailable_and_the_product_is_never_called(qa):
+def test_closed_gate_every_surface_says_unavailable_and_the_product_is_never_called(qa, monkeypatch):
     fake, reg = qa
+    monkeypatch.setattr(gates, "QA_EXTERNAL_TARGET_ACCEPTANCE_MET", False)
     c = TestClient(create_app(SampleProjectionProvider()))
     row = next(a for a in c.get(f"/api/projects/{PID}/apps").json() if a["provider"] == "redevops-qa")
     assert row["state"] == "NOT_CONNECTED" and row["capabilities"] == [] and "external-target acceptance not met" in " ".join(row["manual_steps"])

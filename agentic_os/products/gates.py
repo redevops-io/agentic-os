@@ -11,9 +11,13 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-#: Flip to True only in a change that cites the green redevops-qa CI run covering AC-1..AC-12 on the loopback
-#: Edge Sentinel fixture target (see docs/products/README.md, "Gates").
-QA_EXTERNAL_TARGET_ACCEPTANCE_MET = False
+#: Flipped by this change, citing the green redevops-qa CI run covering AC-1..AC-12 on the loopback
+#: Edge Sentinel fixture target (see docs/products/README.md, "Gates"): the "tests" workflow run
+#: https://github.com/redevops-io/redevops-qa/actions/runs/43551629834 on main @ 9e495bdf (merge of
+#: redevops-qa#67), whose "runner (Python 3.12; ...)" job ran
+#: packages/qa-runner/tests/test_p21_external_target_acceptance.py (AC-1..AC-5, AC-9..AC-12) and
+#: whose egress lane ran packages/qa-egress/tests/test_eg_p21_acceptance.py (AC-6..AC-8), all green.
+QA_EXTERNAL_TARGET_ACCEPTANCE_MET = True
 
 QA_GATE_CODE = "external-target-acceptance-not-met"
 QA_GATE_REASON = "external-target acceptance not met"
