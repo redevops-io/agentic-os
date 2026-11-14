@@ -118,6 +118,7 @@ TOOL_ACTIONS: dict[str, dict[str, str]] = {
     },
     "outreach-engine": {
         "outreach.refresh": "read", "outreach.pipeline_summary": "read", "outreach.draft_followup": "read", "outreach.synced": "read",
+        "outreach.enrich": "read",
         "outreach.discover": "write", "outreach.approve": "write", "outreach.send_all": "write",
     },
     "social-autopilot": {
