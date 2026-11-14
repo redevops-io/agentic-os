@@ -74,7 +74,10 @@ def sentinel_decision(hub: ProductHub, product_id: str, request_id: str, *, appr
 def sentinel_execute(hub: ProductHub, product_id: str, request_id: str, *, digest: str, principal: str) -> Dict[str, Any]:
     _require_ready(hub, product_id)
     ad = hub.sentinel(product_id)
-    a = ad.action(request_id, actor=f"projects:{principal}")
+    a = hub.with_mode(product_id, ad.action(request_id, actor=f"projects:{principal}"))
+    if sentinel.settled_dry_run(a):
+        raise ProductError("conflict", "the action already ran as a dry run; nothing was blocked. Enable blocking in the "
+                                       "product to execute it for real", status=409)
     if str(a.get("state")) != "APPROVED":
         raise ProductError("conflict", f"the action is {a.get('state')}, not approved for execution", status=409)
     if not digest or digest != str(a.get("digest") or ""):

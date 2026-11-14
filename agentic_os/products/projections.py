@@ -240,6 +240,8 @@ def product_mission_detail(hub: ProductHub, mission_id: str) -> Optional[Dict[st
 
 # ── Today integration ─────────────────────────────────────────────────────────────────────────────
 def _phase(a: Mapping[str, Any]) -> str:
+    if sn.settled_dry_run(a):
+        return ""
     return {"AWAITING_APPROVAL": "decide", "APPROVED": "execute"}.get(str(a.get("state")), "")
 
 
@@ -257,6 +259,8 @@ def _today_state(a: Mapping[str, Any]) -> Tuple[str, str]:
     vs = str(v.get("state") or "")
     if st == "AWAITING_APPROVAL":
         return "needs_action", "Awaiting your approval. Nothing has been blocked."
+    if sn.settled_dry_run(a):
+        return "verified", "Dry run: nothing was blocked. Enable blocking in the product to execute for real."
     if st == "APPROVED":
         d = a.get("decision") if isinstance(a.get("decision"), Mapping) else {}
         return "needs_action", (f"Approved by {d.get('actor') or d.get('actor_user') or 'a named user'}; click again to execute. "
@@ -286,7 +290,7 @@ def today_case(spec: ProductSpec, a: Mapping[str, Any], pid: str, att_id: str, n
                source_refs=[f"{spec.id}:{rid}"] + ([f"{spec.id}:{a['case_id']}"] if a.get("case_id") else []),
                confidence=None, now=now, kind="case", domain="security", channel="CrowdSec", resurfaced=False,
                lifecycle={"suggested": True, "approved": st in ("APPROVED", "EXECUTED"),
-                          "sent": st == "EXECUTED", "delivery_verified": state == "verified",
+                          "sent": st == "EXECUTED" or sn.settled_dry_run(a), "delivery_verified": state == "verified",
                           "outcome_observed": False},
                simulated=False, status_line=line, evidence_refs=[f"{spec.id}:{rid}"],
                approval_ref=(str(dec.get("decision_id") or "") or None) if dec else None,

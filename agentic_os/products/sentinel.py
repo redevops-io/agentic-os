@@ -90,6 +90,16 @@ def _params(a: Mapping[str, Any]) -> Mapping[str, Any]:
     return p if isinstance(p, Mapping) else {}
 
 
+def settled_dry_run(a: Mapping[str, Any]) -> bool:
+    """The product keeps a dry-run action ``APPROVED`` (it can still be executed for real once blocking is enabled) and
+    records a DRY_RUN receipt and a ``dry_run`` verification: nothing is pending and nothing was blocked."""
+    mode = a.get("mode")
+    if isinstance(mode, Mapping) and mode.get("dry_run") is False:
+        return False                      # blocking has since been enabled: the action can be executed for real
+    v = a.get("verification")
+    return str(a.get("state")) == "APPROVED" and isinstance(v, Mapping) and v.get("state") == "dry_run"
+
+
 def action_ip(a: Mapping[str, Any]) -> str:
     return str(_params(a).get("ip") or _params(a).get("target") or "")
 
@@ -153,6 +163,8 @@ def mission_state(a: Mapping[str, Any]) -> Tuple[str, str]:
     vstate = str(v.get("state") or "") if isinstance(v, Mapping) else ""
     if st == "AWAITING_APPROVAL":
         return "needs", "1/4 awaiting approval"
+    if settled_dry_run(a):
+        return "completed", "Dry run"
     if st == "APPROVED":
         return "needs", "2/4 approved, awaiting execution"
     if st == "EXECUTED":
@@ -186,7 +198,7 @@ def mission_steps(a: Mapping[str, Any]) -> List[Dict[str, Any]]:
     v = a.get("verification") if isinstance(a.get("verification"), Mapping) else {}
     decided = isinstance(dec, Mapping) and dec.get("approved") is True
     rejected = isinstance(dec, Mapping) and dec.get("approved") is False
-    executed = st in ("EXECUTED", "FAILED")
+    executed = st in ("EXECUTED", "FAILED") or settled_dry_run(a)
     steps = [
         {"n": 1, "capability": "sentinel.observe", "provider": "crowdsec", "tier": 0, "status": "done",
          "why": f"case {a.get('case_id', '')} opened from CrowdSec alerts or a manual request"},
@@ -216,6 +228,8 @@ def attention_item(spec: ProductSpec, a: Mapping[str, Any]) -> Optional[Dict[str
     refs = [f"{spec.id}:{rid}"] + ([f"{spec.id}:{cid}"] if cid else [])
     v = a.get("verification")
     vstate = str(v.get("state") or "") if isinstance(v, Mapping) else ""
+    if settled_dry_run(a):
+        return None
     if st == "AWAITING_APPROVAL":
         return {"id": f"{spec.id}:{rid}", "kind": "approval", "title": action_title(a),
                 "reason": f"Edge Sentinel case {cid}" if cid else "Edge Sentinel proposal",
