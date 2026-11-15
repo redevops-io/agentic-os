@@ -1439,13 +1439,13 @@ def _build_sentinel_console(console_cls, _crtool):
             _crtool("sbom", "list the components (a software bill of materials) of the sentinel's own filesystem with Syft or Trivy", _sc_sbom, side_effecting=True),
             _crtool("scanner_status", "which scanners (trivy, syft, cosign, clamscan) are installed in this container and the last scan result", _sc_status),
             # runtime-DAST (post-deploy) tools — scan a LIVE deployment via the deploy-scan service
-            _crtool("scan_deployment", "Not available from this chat (planned): a deployment scan would send probe traffic, so it would be staged for human approval; it never runs here.", deploy_scan.scan, side_effecting=True,
+            _crtool("scan_deployment", "Start a runtime-exposure scan (nmap, or Kubernetes RBAC/NetworkPolicy/pod-exposure/identity checks) of a live deployment this operator's own credentials reach. It sends probe traffic, so it is staged for human approval and never runs unless DEPLOY_SCAN_MCP_URL points at a configured deploy-scan service with the target in its SCAN_ALLOWLIST; unavailable or refused otherwise, and never available from the public demo chat.", deploy_scan.scan, side_effecting=True,
                     parameters={"type": "object", "properties": {
-                        "target": {"type": "string", "description": "host or URL to scan (must be in the deploy-scan allowlist)"},
-                        "profile": {"type": "string", "description": "recon | web-baseline | web-active | full (default web-baseline)"}}}),
-            _crtool("scan_status", "read the status of a deployment scan job by its job id (no scan can be started from this chat)", deploy_scan.status,
+                        "target": {"type": "string", "description": "host[:ports] for web-baseline, or kubecontext[/namespace] for a k8s-* profile; must be in the deploy-scan allowlist"},
+                        "profile": {"type": "string", "description": "web-baseline | k8s-rbac | k8s-netpol | k8s-exposure | k8s-identity (default web-baseline)"}}}),
+            _crtool("scan_status", "read the status of a deployment scan job by its job id", deploy_scan.status,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
-            _crtool("scan_results", "read the findings of a finished deployment scan job by its job id (no scan can be started from this chat)", deploy_scan.results,
+            _crtool("scan_results", "read the findings of a finished deployment scan job by its job id", deploy_scan.results,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
             # runtime data plane
             _crtool("malware_scan", "scan files visible to the ClamAV service with ClamAV (only where a ClamAV service is configured)", _t_malware_scan,
