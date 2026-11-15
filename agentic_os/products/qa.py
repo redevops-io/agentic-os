@@ -61,6 +61,11 @@ class QaAdapter:
     def verify(self, run_id: str, actor: str = "", source: str = "projects") -> Dict[str, Any]:
         return self.client.get(f"{self.p}/runs/{run_id}/verify", actor=actor, source=source)
 
+    def plan_generate(self, body: Mapping[str, Any], actor: str = "", source: str = "sidekick") -> Dict[str, Any]:
+        """Ask the service to compose a frozen plan from its own allow-listed builders. The body carries ids and one
+        closed enum only — a plan body is never accepted from a caller (design SKILLS_DESIGN.md §3)."""
+        return self.client.post(f"{self.p}/plans", dict(body), actor=actor, source=source)
+
     def approve(self, run_id: str, *, approved: bool, estimate_digest: str, rationale: str, approval_token: str,
                 actor: str) -> Dict[str, Any]:
         body = {"approved": approved, "estimate_digest": estimate_digest}

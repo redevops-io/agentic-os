@@ -34,7 +34,9 @@ def test_the_domains_exist_and_decide_execute_are_not_tools(env):
     fake, hub, reg, _ = env
     assert {"security", "quality"} <= {d.value for d in CapabilityDomain}
     ids = {c.capability_id for c in reg.all()}
-    assert ids and all(i.startswith("security.") for i in ids)                      # only registered kinds get tools
+    # only registered kinds get tools; `findings.` is the cross-product read-only fold (SKILLS_DESIGN.md §5) and
+    # registers only when a security or quality product does (test_products_skills.py pins the absence case).
+    assert ids and all(i.startswith(("security.", "findings.")) for i in ids)
     assert not ids & schemas.FORBIDDEN_TOOLS
     assert not any(w in i for i in ids for w in ("decide_", "execute", "approve", "apply", "delete", "register"))
     assert all(c.bound for c in reg.all())

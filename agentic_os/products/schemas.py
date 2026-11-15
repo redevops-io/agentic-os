@@ -110,6 +110,8 @@ def _s(pattern: str = "", **kw: Any) -> Dict[str, Any]:
 
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 50}
 _IP = {"type": "string", "minLength": 2, "maxLength": 45, "pattern": r"^[0-9A-Fa-f:.]{2,45}$"}
+_PRODUCT_ID = _s(r"^[a-z0-9][a-z0-9-]{0,63}$", maxLength=64)
+_SEVERITY = ["note", "minor", "major", "blocker"]
 
 # class: read | stage | present | bounded_write   (decide and execute are NEVER tools)
 INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
@@ -141,6 +143,19 @@ INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "quality.qa_cancel_run": _obj({"run_id": _s(RUN_ID)}, ("run_id",)),
     "quality.qa_get_evidence": _obj({"run_id": _s(RUN_ID)}, ("run_id",)),
     "quality.qa_verify": _obj({"run_id": _s(RUN_ID)}, ("run_id",)),
+    # ── PR-D2 composition skills (design: docs/products/SKILLS_DESIGN.md). Closed like every other schema: ids and
+    # enums only. No path, URL, command, plan body or credential can ride any of them.
+    "quality.ui_audit": _obj({"target_id": _s(TARGET_ID), "profile_id": _s(PROFILE_ID)}, ("target_id",)),
+    "quality.plan_generate": _obj({
+        "target_id": _s(TARGET_ID),
+        "scope": {"type": "string", "enum": ["audit_followup", "smoke", "regression_suite"]},
+        "source_run_id": _s(RUN_ID)}, ("target_id", "scope")),
+    "security.deployment_scan": _obj({"product_id": _PRODUCT_ID}, ("product_id",)),
+    "findings.consolidate": _obj({
+        "product_ids": {"type": "array", "items": _PRODUCT_ID, "maxItems": 2},
+        "run_ids": {"type": "array", "items": _s(RUN_ID), "maxItems": 20},
+        "case_ids": {"type": "array", "items": _s(CASE_ID), "maxItems": 20},
+        "severity_min": {"type": "string", "enum": _SEVERITY}}),
 }
 
 # Documented result shapes (informational; the product's own record is the authority). Every consequential tool
@@ -170,6 +185,11 @@ TOOL_CLASS: Dict[str, str] = {
     "quality.qa_estimate": "read", "quality.qa_start_run": "bounded_write", "quality.qa_get_run": "read",
     "quality.qa_run_events": "read", "quality.qa_cancel_run": "bounded_write", "quality.qa_get_evidence": "read",
     "quality.qa_verify": "read",
+    # ui_audit starts a run through the same gated, approval-bearing path as qa_start_run; plan_generate asks the
+    # service to compose a plan (a bounded write with no body from the caller); deployment_scan and consolidate are
+    # pure reads of records the products already expose.
+    "quality.ui_audit": "bounded_write", "quality.plan_generate": "bounded_write",
+    "security.deployment_scan": "read", "findings.consolidate": "read",
 }
 
 #: capability ids that must never exist as tools, whatever a registry file declares
@@ -180,4 +200,8 @@ FORBIDDEN_TOOLS = frozenset({
     "quality.qa_execute"})
 
 __all__ = ["INPUT_SCHEMAS", "OUTPUT_SCHEMAS", "TOOL_CLASS", "FORBIDDEN_TOOLS", "SchemaError", "validate",
-           "CASE_ID", "ACTION_ID", "RUN_ID", "TARGET_ID", "DIGEST"]
+           "CASE_ID", "ACTION_ID", "RUN_ID", "TARGET_ID", "DIGEST", "SEVERITY_ORDER"]
+
+#: The single severity vocabulary of the consolidated report (design §2/§5). Products keep their own vocabularies;
+#: every mapping into this one is a table in tools.py, pinned by a test, never an inference.
+SEVERITY_ORDER: List[str] = list(_SEVERITY)
