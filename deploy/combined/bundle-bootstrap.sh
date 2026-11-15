@@ -44,9 +44,11 @@ NAMED="$(get SENTINEL_NAMED_USER)"; NAMED="${NAMED:-alex}"
 [ -n "$(get APPROVAL_SECRET)" ] || set_in_env APPROVAL_SECRET "$(gen)"   # shared by Projects, QA and Sentinel
 ok "credentials present in .env.bundle"
 
-# 2. pull the bundle and bring every service up.
+# 2. pull the bundle and bring every service up. -y: an oci:// stack's `up` otherwise prompts to confirm every
+#    interpolated ${VAR} before proceeding, which hangs forever (reads EOF, "operation cancelled by user") with
+#    no stdin attached — observed 2026-11-15 publishing ghcr.io/redevops-io/redevops-ts:0.1.0.
 echo "== pulling and starting ${BUNDLE_REF}"
-$COMPOSE up -d --wait --wait-timeout 60 crowdsec >/dev/null || bad "crowdsec did not become healthy ($COMPOSE logs crowdsec)"
+$COMPOSE up -d -y --wait --wait-timeout 60 crowdsec >/dev/null || bad "crowdsec did not become healthy ($COMPOSE logs crowdsec)"
 
 # 3. register CrowdSec's bouncer key and watcher login — same two commands and the same stdin-closing fix as
 #    deploy/standalone/edge-sentinel/bootstrap.sh (an open stdin here hangs forever: observed 2026-11-14).
@@ -57,7 +59,7 @@ $COMPOSE exec -T crowdsec cscli machines add edge-sentinel --password "$(get CRO
   || bad "registering the watcher login failed ($COMPOSE logs crowdsec)"
 ok "CrowdSec credentials registered"
 
-$COMPOSE up -d --wait --wait-timeout 180 >/dev/null || bad "compose up --wait failed ($COMPOSE ps)"
+$COMPOSE up -d -y --wait --wait-timeout 180 >/dev/null || bad "compose up --wait failed ($COMPOSE ps)"
 ok "Edge Sentinel http://127.0.0.1:${SPORT}/ , redevops-qa http://127.0.0.1:${QPORT}/ui/ , Projects http://127.0.0.1:${PPORT}/"
 
 # 4. identity: link a named Sentinel user to the Projects principal (approvals are bound to a person, not a service call).
