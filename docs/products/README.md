@@ -18,6 +18,8 @@ With `AGENTIC_OS_PRODUCTS` unset nothing in the Projects server changes.
 2. Copy [`products.example.yaml`](products.example.yaml), edit it, and start the Projects server with `AGENTIC_OS_PRODUCTS=/path/to/products.yaml`.
 3. Check `GET /api/products`: each product shows its live health (from the product's public readiness probe), version, features and the reasons anything is unavailable.
 
+Running all of this on one Docker host — Projects plus Edge Sentinel plus redevops-qa, credentials generated, actor link seeded, health asserted — is the [`deploy/combined`](../../deploy/combined/README.md) install (`./bootstrap.sh && ./smoke.sh`); it is the documented combined-install path and has its own CI gate.
+
 The registry is operator configuration. A URL in it is never a request value; the client refuses redirects, caps responses at 2 MiB, requires https (plain http only to loopback or a name listed in `allow_private_http`), and never forwards the browser's credentials. A bad entry is skipped and logged; it never half-configures a product.
 
 Where a product is not configured, not reachable, or gated, Projects shows an explicit unavailable row (Apps, Missions, Attention, Activity) with the reason and the remedy, never a fabricated mission.
