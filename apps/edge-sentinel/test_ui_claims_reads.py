@@ -222,14 +222,21 @@ def test_all_23_tools_are_registered_and_none_claims_what_the_demo_cannot_do(con
     for name, t in console.tools.items():
         for bad in CLAIMS_THE_DEMO_CANNOT_BACK:
             assert bad.lower() not in t["description"].lower(), f"{name}: {bad!r}"
-    for name in ("scan_app", "scan_apps", "list_scannable_apps", "scan_deployment"):
+    for name in ("scan_app", "scan_apps", "list_scannable_apps"):
         assert console.tools[name]["description"].startswith("Not available"), name
     assert "Scanning other apps' images needs docker access" in console.tools["supply_chain_scan"]["description"]
     for name in ("network_access_review", "network_posture", "backup_status", "propose_network_policy"):
         assert "sample data" in console.tools[name]["description"].lower(), name
     ban = console.tools["ban_ip"]["description"]
     assert console.tools["ban_ip"]["side_effecting"] and "dry run" in ban and "never runs from this chat" in ban
-    assert console.tools["scan_deployment"]["side_effecting"] and "never runs here" in console.tools["scan_deployment"]["description"]
+    # scan_deployment is conditionally real (a configured DEPLOY_SCAN_MCP_URL + SCAN_ALLOWLIST entry runs it
+    # for a real operator) — unlike scan_app/scan_apps/list_scannable_apps, which are unavailable everywhere
+    # pending Docker access, so it must not claim "Not available" unconditionally, but must still say the
+    # public demo specifically can never start one.
+    scan_dep = console.tools["scan_deployment"]["description"]
+    assert console.tools["scan_deployment"]["side_effecting"]
+    assert not scan_dep.startswith("Not available")
+    assert "public demo chat" in scan_dep and "DEPLOY_SCAN_MCP_URL" in scan_dep
     assert console.allow == []                                              # no side-effecting tool may run from chat
 
 

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deploy-scan"
+version = "0.1.0"
+description = "Runtime-exposure scanning engine behind edge-sentinel's deploy_scan.py client: network baseline (nmap) and Kubernetes RBAC/NetworkPolicy/exposure/identity checks, scoped to an operator-supplied SCAN_ALLOWLIST."
+readme = "README.md"
+requires-python = ">=3.11"
+# Deliberately zero third-party Python dependencies: the stdlib JSON-RPC server, and the two external
+# binaries it shells out to (nmap, kubectl) are the operator's own, already-trusted tooling — nothing
+# here needs its own supply chain beyond the Python standard library.
+dependencies = []
+
+[project.scripts]
+deploy-scan = "deploy_scan.server:main"
+
+# Same flat-app-directory-to-importable-package mapping as every other apps/<name>/ package (see
+# apps/edge-sentinel/pyproject.toml) — one home for the modules, the monorepo keeps its layout.
+[tool.setuptools]
+packages = ["deploy_scan", "deploy_scan.scanners"]
+
+[tool.setuptools.package-dir]
+deploy_scan = "."
