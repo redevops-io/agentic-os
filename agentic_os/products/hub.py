@@ -106,7 +106,7 @@ class ProductHub:
         if not cl.configured:
             unavailable.append({"feature": "*", "code": "not_configured",
                                 "reason": "no service token is configured for this product",
-                                "remedy": f"set auth.service_token_file for {spec.id} in the products registry"})
+                                "remedy": f"set auth.service_token_file or auth.service_token_env for {spec.id} in the products registry"})
             base["health"] = {"state": "unknown", "checked_at": time.time(), "detail": "not configured"}
             return base
         probe = cl.probe()
@@ -137,7 +137,7 @@ class ProductHub:
         if not base["approval_secret"]:
             unavailable.append({"feature": "approvals", "code": "no_approval_secret",
                                 "reason": "no approval secret is configured, so a decision cannot be made from Projects",
-                                "remedy": f"set auth.approval_secret_file for {spec.id}; decide in {spec.display_name} meanwhile"})
+                                "remedy": f"set auth.approval_secret_file or auth.approval_secret_env for {spec.id}; decide in {spec.display_name} meanwhile"})
         base["health"] = {"state": "ok", "checked_at": time.time(), "detail": "ready"}
         base["ready"] = True
         base["tools_available"] = True

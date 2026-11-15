@@ -62,6 +62,22 @@ def test_secrets_are_file_references_never_inline_and_capabilities_stay_in_their
     assert parse_registry(_doc(auth={"service_token": "inline-secret"})).errors
 
 
+def test_a_credential_can_be_sourced_from_an_env_var_name_instead_of_a_file():
+    reg = parse_registry(_doc(auth={"service_token_env": "QA_SERVICE_TOKEN", "approval_secret_env": "QA_APPROVAL_SECRET"}))
+    assert not reg.errors
+    spec = reg.get("edge-sentinel")
+    assert (spec.service_token_env, spec.service_token_file) == ("QA_SERVICE_TOKEN", "")
+    assert (spec.approval_secret_env, spec.approval_secret_file) == ("QA_APPROVAL_SECRET", "")
+
+
+def test_env_var_names_are_validated_and_never_a_secret_value_or_both_sources_at_once():
+    assert parse_registry(_doc(auth={"service_token_env": "not-a-valid-name"})).errors
+    assert parse_registry(_doc(auth={"service_token_env": "actual-secret-value-x1y2z3"})).errors   # lowercase: rejected as a value, not a NAME
+    assert parse_registry(_doc(auth={"service_token_env": "A" * 64 + "X"})).errors                 # too long
+    assert parse_registry(_doc(auth={"service_token_file": "/run/secrets/a", "service_token_env": "A"})).errors  # mutually exclusive
+    assert not parse_registry(_doc(auth={"service_token_env": "_PRIVATE_TOKEN"})).errors
+
+
 def test_load_registry_handles_yaml_json_missing_and_garbage(tmp_path):
     y = tmp_path / "p.yaml"
     y.write_text("schema: aos.products/v1\nproducts:\n  - {id: a, kind: security, api_base: 'http://127.0.0.1:1', ui_url: 'http://127.0.0.1:1'}\n")

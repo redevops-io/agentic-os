@@ -4,10 +4,10 @@ Rules enforced here, not left to callers:
 
 * the base URL is operator configuration (``registry.validate_url``), never a request value; no redirect is ever
   followed; a response is read at most ``MAX_BYTES`` (2 MiB) and must be JSON;
-* the credential is a dedicated per-product service token (``X-Control-Token``), read from a file at call time and
-  never logged, never put in a URL, never forwarded from the browser; a decision/execute call may use the second
-  token of the pair (``decision_token_file``) so a token that can only read and stage is distinct from one that can
-  carry a human decision;
+* the credential is a dedicated per-product service token (``X-Control-Token``), read from a file or a named
+  environment variable at call time (never logged, never put in a URL, never forwarded from the browser); a
+  decision/execute call may use the second token of the pair (``decision_token_file``/``decision_token_env``) so a
+  token that can only read and stage is distinct from one that can carry a human decision;
 * the end user's own Projects credential is never sent to a product (``Authorization`` carries only the product's own
   service token, and only for a product registered with ``auth.scheme: bearer``); who is acting
   travels as the informational ``X-Acting-User`` / ``X-Acting-Source`` headers, and a human decision additionally
@@ -58,14 +58,16 @@ class ProductError(Exception):
         return out
 
 
-def _read_secret(path: str) -> str:
-    if not path:
-        return ""
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            return fh.read().strip()
-    except OSError:
-        return ""
+def _read_secret(path: str, env: str = "") -> str:
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.read().strip()
+        except OSError:
+            return ""
+    if env:
+        return os.environ.get(env, "").strip()
+    return ""
 
 
 def _clean_actor(actor: str) -> str:
@@ -82,13 +84,13 @@ class ProductClient:
 
     # ── credentials ──────────────────────────────────────────────────────────────────────────────
     def service_token(self) -> str:
-        return _read_secret(self.spec.service_token_file)
+        return _read_secret(self.spec.service_token_file, self.spec.service_token_env)
 
     def decision_token(self) -> str:
-        return _read_secret(self.spec.decision_token_file) or self.service_token()
+        return _read_secret(self.spec.decision_token_file, self.spec.decision_token_env) or self.service_token()
 
     def approval_secret(self) -> str:
-        return _read_secret(self.spec.approval_secret_file)
+        return _read_secret(self.spec.approval_secret_file, self.spec.approval_secret_env)
 
     @property
     def configured(self) -> bool:
@@ -107,7 +109,7 @@ class ProductClient:
             if not tok:
                 raise ProductError("no_token", f"no {auth} token configured for {self.spec.id}",
                                    reason="the product service token file is empty or unreadable",
-                                   remedy="set auth.service_token_file in the products registry")
+                                   remedy="set auth.service_token_file or auth.service_token_env in the products registry")
             if self.spec.auth_scheme == "bearer":
                 hdrs["Authorization"] = f"Bearer {tok}"          # the PRODUCT's service token, never the Projects user's credential
             else:

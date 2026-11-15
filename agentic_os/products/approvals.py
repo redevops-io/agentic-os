@@ -37,7 +37,7 @@ def _mint(hub: ProductHub, product_id: str, *, operator: str, capability: str, i
     if not secret:
         raise ProductError("no_approval_secret", "no approval secret is configured for this product",
                            reason="a decision from Projects needs the shared approval secret",
-                           remedy=f"set auth.approval_secret_file for {product_id}, or decide in the product UI")
+                           remedy=f"set auth.approval_secret_file or auth.approval_secret_env for {product_id}, or decide in the product UI")
     tok = mint_approval_token(secret, operator=operator, capability=capability, mission_id=None, node_id=None,
                               inputs=dict(inputs), marker=_marker(principal, approved), ttl_s=TOKEN_TTL_S)
     if not tok:
