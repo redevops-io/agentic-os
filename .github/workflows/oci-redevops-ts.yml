@@ -153,7 +153,7 @@ jobs:
             echo "### redevops-ts ${TAG}"
             echo "- Projects image digest: \`${{ steps.build.outputs.digest }}\`"
             echo "- source: \`${{ steps.vars.outputs.commit }}\`"
-            echo "- pull: \`docker compose -f oci://ghcr.io/redevops-io/redevops-ts:${TAG} --project-directory . --env-file .env.bundle up -d\`"
+            echo "- pull: \`docker compose -f oci://ghcr.io/redevops-io/redevops-ts:${TAG} --project-directory . --env-file .env.bundle up -d -y\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
