@@ -60,6 +60,13 @@ set_in_env() { # key value
 set_in_env QA_SERVICE_TOKEN "$QA_TOKEN"
 set_in_env QA_APPROVAL_SECRET "$APPROVAL_SECRET"
 set_in_env QA_BOOTSTRAP_ADMIN_PASSWORD "$(cat secrets/qa_admin_password)"
+
+# Compose mounts `file:` secrets as plain bind mounts, and the product containers run as unprivileged uids
+# (edge-sentinel runs as 10001): on a real Linux host a 0600 file owned by the creating user is unreadable
+# inside the container and Sentinel crash-loops (macOS virtiofs masks this). World-readable is exactly the
+# mode Compose itself gives secrets on Swarm — this install assumes a single-tenant host, like the loopback
+# topology it documents.
+chmod 0444 "$SD"/secrets/* secrets/* 2>/dev/null || true
 ok "shared credentials staged (approval secret identical in Projects, QA and Sentinel)"
 
 # 3. the registry: the supported activation of the product layer. Copy once, then validate it INSIDE the projects

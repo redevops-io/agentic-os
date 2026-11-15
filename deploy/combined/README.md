@@ -66,8 +66,11 @@ rm -rf secrets .env products.yaml      # forget the install (secrets never leave
 - **Actor identity**: the browser operator (`projects:<user>`) is linked to a **named** Sentinel user, so a
   ban approved "in Projects" is auditable as a person in Sentinel's own records. Approvals remain gated:
   bans are dry-run until `SENTINEL_BLOCK_ENABLED=1` is set upstream in the standalone stack.
-- **Service credentials** are files under `./secrets/` (0600), mounted read-only; QA's service token lives in
-  `.env` per its published compose contract.
+- **Service credentials** are files under `./secrets/`, mounted read-only (bootstrap `chmod 0444`s them after
+  generation — Compose bind-mounts `file:` secrets and the product containers run as unprivileged uids, so on
+  Linux anything stricter crash-loops the containers; the same mode Compose's own secret store uses). QA's
+  service token lives in `.env` per its published compose contract. **Single-tenant host assumed**: local
+  users of the host can read these files, same as the loopback topology already assumes.
 
 ## Limitations (stated, not smoothed over)
 
