@@ -20,8 +20,14 @@ services:
       - "${PROJECTS_BIND:-127.0.0.1}:${PROJECTS_PORT:-8787}:8787"
     environment:
       # the supported activation: a registry file, mounted read-only; the app registers only what this file lists
-      AGENTIC_OS_PRODUCTS: /etc/products/products.yaml
-      PROJECTS_PROVIDER: registered
+      - AGENTIC_OS_PRODUCTS=/etc/products/products.yaml
+      - PROJECTS_PROVIDER=registered
+      # what fronts this service (docs/SECURITY_MODEL.md, same declaration as deploy/projects-sidekick):
+      # the port is published, so the bind inside the container is routable and every peer address is
+      # enforced; BEHIND_PROXY=0 states that as shipped nothing forwards to it. The host-side publish stays
+      # loopback (PROJECTS_BIND), which limits who can connect — it does not soften the route posture.
+      - AGENTIC_OS_BIND_HOST=${AGENTIC_OS_BIND_HOST:-0.0.0.0}
+      - AGENTIC_OS_BEHIND_PROXY=${AGENTIC_OS_BEHIND_PROXY:-0}
     # the browser credential this install asks for, read from a file at start (never pasted into a shell history)
     command: ["sh", "-c", "OPERATOR_BASIC_AUTH=\"$$(cat /run/products/operator_basic)\" exec agentic-os-projects"]
     healthcheck:
