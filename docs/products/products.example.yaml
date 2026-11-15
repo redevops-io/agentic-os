@@ -1,7 +1,9 @@
 # Products registry for Projects and Sidekick (docs/products/README.md). Point AGENTIC_OS_PRODUCTS at a copy of this file.
 # Secrets are FILE references only; never put a token in this file.
+# ui_url is the product's ORIGIN: both adapters append their own deep-link path (`/ui/...`) to it, so a ui_url that
+# already ends in /ui opens `/ui/ui/...` (verified live 2026-11-14 against the shipped 0.6.3 image and this line).
 schema: aos.products/v1
-allow_private_http: [edge-sentinel]      # plain-http service names on a private network; loopback is always allowed
+allow_private_http: [edge-sentinel, qa]  # plain-http service names on a private network; loopback is always allowed
 keep_sample_rows: false                  # product rows replace the sample demo rows in Missions, Attention and Activity
 principal:
   single_owner: local-owner              # ONLY for a Projects that exactly one person can reach (desktop, loopback Compose)
@@ -10,7 +12,7 @@ products:
     display_name: Edge Sentinel
     kind: security                       # security | quality (the Sidekick domain)
     api_base: http://edge-sentinel:8203  # server to server
-    ui_url: http://127.0.0.1:8203/ui     # what the browser opens (path-based deep links are appended)
+    ui_url: http://127.0.0.1:8203        # what the browser opens (the adapters append /ui/... deep links to it)
     health: {path: /readyz, interval_s: 15, timeout_s: 3}
     contract: {api: /api/v1, info: /api/v1/info, min_version: "1"}
     auth:
@@ -19,12 +21,15 @@ products:
       decision_token_file: /run/secrets/products/edge-sentinel.decision_token   # carries a person's decision/execute click
       approval_secret_file: /run/secrets/products/approval_secret               # AGENTIC_OS_APPROVAL_SECRET shared with the product
     approvals: {mode: human_click, attribute_to: product_user}
-  # redevops-qa is gated (see README, "Gates"): listing it shows an explicit "unavailable: external-target acceptance not met".
-  # - id: redevops-qa
-  #   display_name: redevops-qa
-  #   kind: quality
-  #   api_base: http://127.0.0.1:8080
-  #   ui_url: http://127.0.0.1:8080/ui
-  #   contract: {api: /v1, info: /v1/info, min_version: "1"}
-  #   auth: {scheme: bearer, service_token_file: /run/secrets/products/qa.service_token,
-  #          approval_secret_file: /run/secrets/products/approval_secret}
+  - id: redevops-qa
+    display_name: redevops-qa
+    kind: quality
+    api_base: http://qa:8080             # the QA service on this network (compose project name `qa`, or `host.docker.internal` per deployment)
+    ui_url: http://127.0.0.1:8080        # origin only; the adapter appends /ui/runs/<id> deep links
+    health: {path: /readyz, interval_s: 15, timeout_s: 3}
+    contract: {api: /v1, info: /v1/info, min_version: "1"}
+    auth:
+      scheme: bearer                     # Authorization: Bearer <QA_SERVICE_TOKEN there>
+      service_token_file: /run/secrets/products/qa.service_token
+      approval_secret_file: /run/secrets/products/approval_secret                # QA_SERVICE_APPROVAL_SECRET shared with the QA service
+    approvals: {mode: human_click, attribute_to: product_user}
