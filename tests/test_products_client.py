@@ -130,6 +130,16 @@ def test_redirects_oversize_non_json_and_5xx_are_refused_or_typed(tmp_path):
         srv.server_close()
 
 
+def test_the_service_token_can_be_read_from_an_env_var_instead_of_a_file(fake, tmp_path, monkeypatch):
+    f, base = fake
+    monkeypatch.setenv("PF_SERVICE_TOKEN", SERVICE_TOKEN)
+    monkeypatch.setenv("PF_DECISION_TOKEN", DECISION_TOKEN)
+    c = ProductClient(load_registry(write_registry(tmp_path, base, via_env=True)).get("edge-sentinel"))
+    assert c.configured and c.service_token() == SERVICE_TOKEN and c.decision_token() == DECISION_TOKEN
+    out = c.get("/api/v1/posture")
+    assert out["decisions_active"] == 2 and f.calls[-1]["headers"]["X-Control-Token"] == SERVICE_TOKEN
+
+
 def test_errors_never_contain_the_token(fake, tmp_path):
     f, base = fake
     c = _client(tmp_path, base)

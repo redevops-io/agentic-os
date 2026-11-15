@@ -230,13 +230,21 @@ class FakeSentinel:
 
 
 def write_registry(tmp_path, base: str, *, kind: str = "security", pid: str = "edge-sentinel", with_tokens: bool = True,
-                   single_owner: str = "local-owner", extra_products: str = "") -> str:
-    """A registry file + token files under ``tmp_path``; returns the registry path."""
+                   single_owner: str = "local-owner", extra_products: str = "", via_env: bool = False) -> str:
+    """A registry file + token files under ``tmp_path``; returns the registry path. ``via_env=True`` sources the
+    credentials from env var NAMES instead of files (the caller is responsible for setting those env vars)."""
     d = tmp_path / "secrets"
     d.mkdir(exist_ok=True)
     (d / "service").write_text(SERVICE_TOKEN if with_tokens else "")
     (d / "decision").write_text(DECISION_TOKEN)
     (d / "secret").write_text(SECRET)
+    auth = ("""
+      service_token_env: PF_SERVICE_TOKEN
+      decision_token_env: PF_DECISION_TOKEN
+      approval_secret_env: PF_APPROVAL_SECRET""" if via_env else f"""
+      service_token_file: {d / 'service'}
+      decision_token_file: {d / 'decision'}
+      approval_secret_file: {d / 'secret'}""")
     reg = tmp_path / "products.yaml"
     reg.write_text(f"""
 schema: aos.products/v1
@@ -249,10 +257,7 @@ products:
     ui_url: {base}/ui
     health: {{path: /readyz, interval_s: 1, timeout_s: 2}}
     contract: {{api: {'/api/v1' if kind == 'security' else '/v1'}, info: {'/api/v1/info' if kind == 'security' else '/v1/info'}, min_version: "1"}}
-    auth:
-      service_token_file: {d / 'service'}
-      decision_token_file: {d / 'decision'}
-      approval_secret_file: {d / 'secret'}
+    auth:{auth}
       scheme: {'control_token' if kind == 'security' else 'bearer'}
 {extra_products}""")
     return str(reg)

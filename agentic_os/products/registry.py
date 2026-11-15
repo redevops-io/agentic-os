@@ -24,6 +24,13 @@ is and WHICH credentials the server-to-server hop uses. It is an operator file n
           scheme: control_token                                                       # control_token (X-Control-Token) | bearer (Authorization: Bearer)
         approvals: {mode: human_click, attribute_to: product_user}
 
+Each of the three credentials (``service_token``, ``decision_token``, ``approval_secret``) is read from exactly one
+place: a file (``*_file``, an absolute container path) or a named environment variable (``*_env``, e.g.
+``service_token_env: QA_SERVICE_TOKEN``) — never both, and never inline. ``*_file`` suits a deployment that mounts
+Compose/Kubernetes secrets as files; ``*_env`` suits one that cannot rely on a host file being present at a known
+path (for example a Compose project published as a single OCI artifact, where secret *values* never travel in the
+artifact and only the env var *names* appear in this file).
+
 Fail closed: an entry that does not validate is skipped and listed in :attr:`ProductRegistry.errors` (visible to the
 operator through the log and ``GET /api/products`` only as a count, never the reason, to the browser). The closed key
 sets below reject unknown keys, so a typo cannot silently widen anything.
@@ -48,7 +55,9 @@ _PRODUCT_KEYS = {"id", "display_name", "kind", "api_base", "ui_url", "health", "
                  "approvals"}
 _HEALTH_KEYS = {"path", "interval_s", "timeout_s"}
 _CONTRACT_KEYS = {"api", "info", "min_version"}
-_AUTH_KEYS = {"service_token_file", "decision_token_file", "approval_secret_file", "scheme"}
+_AUTH_KEYS = {"service_token_file", "decision_token_file", "approval_secret_file",
+              "service_token_env", "decision_token_env", "approval_secret_env", "scheme"}
+_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
 SCHEMES = ("control_token", "bearer")
 _APPROVAL_KEYS = {"mode", "attribute_to"}
 
@@ -73,6 +82,9 @@ class ProductSpec:
     service_token_file: str = ""
     decision_token_file: str = ""
     approval_secret_file: str = ""
+    service_token_env: str = ""
+    decision_token_env: str = ""
+    approval_secret_env: str = ""
     auth_scheme: str = "control_token"        # how the product expects the service credential: X-Control-Token | Authorization: Bearer
     capabilities: Tuple[str, ...] = ()
     approval_mode: str = "human_click"
@@ -187,6 +199,23 @@ def _file_ref(v: Any, what: str) -> str:
     return v
 
 
+def _env_ref(v: Any, what: str) -> str:
+    if v in (None, ""):
+        return ""
+    if not isinstance(v, str) or not _ENV_NAME.match(v):
+        raise RegistryError(f"{what}: must be an environment variable NAME like SERVICE_TOKEN (secrets are never inline)")
+    return v
+
+
+def _credential(auth: Mapping[str, Any], name: str, pid: str) -> Tuple[str, str]:
+    """One credential's file ref and env-var name, from ``auth[f"{name}_file"]``/``auth[f"{name}_env"]`` — at most one set."""
+    file_v = _file_ref(auth.get(f"{name}_file"), f"product {pid}: auth.{name}_file")
+    env_v = _env_ref(auth.get(f"{name}_env"), f"product {pid}: auth.{name}_env")
+    if file_v and env_v:
+        raise RegistryError(f"product {pid}: auth.{name}_file and auth.{name}_env are mutually exclusive")
+    return file_v, env_v
+
+
 def parse_product(raw: Mapping[str, Any], *, allow_private_http: Tuple[str, ...]) -> ProductSpec:
     if not isinstance(raw, Mapping):
         raise RegistryError("product entry is not a mapping")
@@ -226,6 +255,9 @@ def parse_product(raw: Mapping[str, Any], *, allow_private_http: Tuple[str, ...]
     api = _rel_path(contract.get("api", "/api/v1"), f"product {pid}: contract.api") if kind == "security" \
         else _rel_path(contract.get("api", "/v1"), f"product {pid}: contract.api")
     info_default = api + "/info"
+    service_token_file, service_token_env = _credential(auth, "service_token", pid)
+    decision_token_file, decision_token_env = _credential(auth, "decision_token", pid)
+    approval_secret_file, approval_secret_env = _credential(auth, "approval_secret", pid)
     return ProductSpec(
         id=pid, display_name=name.strip(), kind=kind, api_base=api_base, ui_url=ui_url,
         health_path=_rel_path(health.get("path", "/readyz" if kind == "security" else "/readyz"),
@@ -234,9 +266,9 @@ def parse_product(raw: Mapping[str, Any], *, allow_private_http: Tuple[str, ...]
         health_timeout_s=_num(health.get("timeout_s"), f"product {pid}: health.timeout_s", 0.2, 30, 3.0),
         api_prefix=api, info_path=_rel_path(contract.get("info", info_default), f"product {pid}: contract.info"),
         min_version=str(contract.get("min_version", "1")),
-        service_token_file=_file_ref(auth.get("service_token_file"), f"product {pid}: auth.service_token_file"),
-        decision_token_file=_file_ref(auth.get("decision_token_file"), f"product {pid}: auth.decision_token_file"),
-        approval_secret_file=_file_ref(auth.get("approval_secret_file"), f"product {pid}: auth.approval_secret_file"),
+        service_token_file=service_token_file, decision_token_file=decision_token_file,
+        approval_secret_file=approval_secret_file, service_token_env=service_token_env,
+        decision_token_env=decision_token_env, approval_secret_env=approval_secret_env,
         auth_scheme=scheme, capabilities=tuple(caps), approval_mode=mode)
 
 

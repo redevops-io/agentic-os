@@ -18,7 +18,34 @@ the two consumers and the identity wiring between them.
 └───────────────────────┘
 ```
 
-## Install
+## Two ways to install
+
+**A single pull (`compose.bundle.yml` / `ghcr.io/redevops-io/redevops-ts`).** All four services (Projects,
+redevops-qa, Edge Sentinel, CrowdSec) as one OCI artifact — no file-based secret or config, every credential a
+plain environment variable (see `compose.bundle.yml`'s header for why). Still needs this one script (or its
+logic reproduced by hand) for the one-time CrowdSec credential registration and the Projects↔Sentinel actor
+link, which no compose file can express:
+
+```sh
+git clone https://github.com/redevops-io/agentic-os.git && cd agentic-os/deploy/combined
+./bundle-bootstrap.sh      # generates every credential into .env.bundle, pulls the bundle, wires and verifies it
+```
+
+redevops-qa and Edge Sentinel are the **same published images** as their own standalone installs
+(`ghcr.io/redevops-io/redevops-qa`, `ghcr.io/redevops-io/edge-sentinel`) — this bundle only adds Projects/Sidekick
+and the wiring between all three; it does not rebuild or replace either. Projects ships under its own
+independent `bundle-*` tag (`ghcr.io/redevops-io/redevops-projects:bundle-<version>`), versioned separately from
+both agentic-os's `vX.Y.Z` release line and from redevops-qa's/Edge Sentinel's own release lines — publishing a
+new bundle version never requires cutting a release of any of them.
+
+**The file-secrets install below (`compose.yml`).** Builds Projects from a checkout instead of pulling a
+published image, and uses Compose `secrets: file:` for every credential. Use this when you want to build
+Projects from source, or need the full combined-install release gate's exact path (`combined-install-e2e.yml`
+below exercises this one, not the bundle).
+
+---
+
+## Install (file-secrets, built from a checkout)
 
 Prerequisites: Docker with Compose v2 (Docker Desktop on macOS works, incl. Apple Silicon — see
 Limitations), `curl`, `python3` on the host, and ~4 GB free RAM. From a checkout of this repository:
