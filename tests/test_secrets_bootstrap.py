@@ -339,6 +339,125 @@ def test_shell_bootstrap_script_idempotent(tmp_path):
     assert stat.S_IMODE(f.stat().st_mode) == 0o600
 
 
+# ── Stage C: shell bootstrap delegates to the real broker (file + Vault backends) ───────────────────────
+
+def _shell_script_path():
+    return os.path.join(os.path.dirname(__file__), "..", "deploy", "apps", "bootstrap-secrets.sh")
+
+
+def _run_shell_bootstrap(env, check=True):
+    import shutil
+    import subprocess
+    sh = shutil.which("sh")
+    if not sh or sys.platform.startswith("win"):
+        pytest.skip("no sh")
+    full_env = {"PATH": os.environ["PATH"]}
+    full_env.update(env)
+    return subprocess.run([sh, _shell_script_path()], env=full_env, check=check,
+                          capture_output=True, text=True)
+
+
+def test_shell_bootstrap_explicit_file_backend_delegates_to_broker_and_never_prints_values(tmp_path):
+    env = {"HOME": str(tmp_path), "REDEVOPS_SECRETS_BACKEND": "file",
+           "REDEVOPS_SECRETS_NO_SHELL_PROFILE": "1"}
+    r = _run_shell_bootstrap(env)
+    assert "backend: file" in r.stdout            # proves the python broker ran, not the sh-only fallback
+    f = tmp_path / ".config/redevops/secrets.env"
+    vals = bs.parse_dotenv(f.read_text())
+    assert all(MANAGED[n].validate(vals[n])[0] for n in NAMES)
+    assert stat.S_IMODE(f.stat().st_mode) == 0o600
+    assert not any(v in r.stdout for v in vals.values())   # no secret value ever printed
+
+
+def test_shell_bootstrap_vault_backend_writes_to_vault_not_local_file(tmp_path):
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    store = {"data": {}, "version": 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if store["version"] == 0:
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps({"data": {"data": store["data"],
+                                        "metadata": {"version": store["version"]}}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            store["data"] = payload["data"]
+            store["version"] += 1
+            self.send_response(200)
+            self.end_headers()
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        addr = f"http://127.0.0.1:{server.server_port}"
+        env = {"HOME": str(tmp_path), "REDEVOPS_SECRETS_BACKEND": "vault",
+               "REDEVOPS_SECRETS_NO_SHELL_PROFILE": "1",
+               "VAULT_ADDR": addr, "VAULT_TOKEN": "test-token"}
+        r = _run_shell_bootstrap(env)
+        assert "backend: vault" in r.stdout
+        assert set(store["data"]) == set(NAMES)
+        assert all(MANAGED[n].validate(store["data"][n])[0] for n in NAMES)
+        assert not any(v in r.stdout for v in store["data"].values())   # no secret value printed
+        f = tmp_path / ".config/redevops/secrets.env"
+        assert not f.exists()   # vault backend never touches the local file
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_shell_bootstrap_vault_explicit_unreachable_fails_closed_no_local_write(tmp_path):
+    env = {"HOME": str(tmp_path), "REDEVOPS_SECRETS_BACKEND": "vault",
+           "REDEVOPS_SECRETS_NO_SHELL_PROFILE": "1",
+           "VAULT_ADDR": "http://127.0.0.1:1", "VAULT_TOKEN": "test-token"}
+    r = _run_shell_bootstrap(env, check=False)
+    assert r.returncode != 0
+    f = tmp_path / ".config/redevops/secrets.env"
+    assert not f.exists()   # explicit vault request never silently falls back to the local file
+
+
+def test_interrupted_file_write_never_corrupts_the_existing_secrets_file(tmp_path, monkeypatch):
+    b = mk(tmp_path)
+    b.init()                               # populate a real, valid file
+    original = bs.read_secrets_file(b.file)
+    original_text = b.file.read_text()
+
+    def boom(*a, **kw):
+        raise OSError("simulated crash between write and rename")
+
+    monkeypatch.setattr(bs.os, "replace", boom)
+    with pytest.raises(OSError):
+        b.rotate(TWENTY)        # rotate() -> _write_file_values() -> os.replace() raises mid-write
+    assert b.file.read_text() == original_text   # the original file is untouched, not half-written
+    assert bs.read_secrets_file(b.file) == original
+
+
+def test_rotation_after_shell_bootstrap_propagates_to_resolve(tmp_path):
+    env = {"HOME": str(tmp_path), "REDEVOPS_SECRETS_BACKEND": "file",
+           "REDEVOPS_SECRETS_NO_SHELL_PROFILE": "1"}
+    _run_shell_bootstrap(env)
+    b = mk(tmp_path, keyring=None)
+    before, _ = b.resolve(TWENTY)
+    new_val = b.rotate(TWENTY)
+    after, srcs = b.resolve(TWENTY)
+    assert after == new_val and after != before
+    assert srcs[0] == "file"
+
+
 # ── defaults + push ───────────────────────────────────────────────────────────────────────────────────
 
 def test_default_vault_location_is_live_bundle(tmp_path):
