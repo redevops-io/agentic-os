@@ -19,7 +19,7 @@ The owner decided on 2026-11-11 to remove the image whose distribution rights ca
 
 ## 2. The launcher icons
 
-Generator: `scripts/make_neutral_icons.py` (SHA-256 `63e082925d886c227b42898ee42e242cf6ad306ed3cc330ff8a4f26829280875`), Python standard library only; a rounded square with a slate gradient, one pale diamond and one round cut-out; no letters, no fonts, no model output.
+Generator: `scripts/make_neutral_icons.py` (SHA-256 `6af27fb99b61f7fba91d9a804ec98ac189da8e8e0f7ff17395f6d5836caf820f`), Python standard library only; a rounded square with a slate gradient, one pale diamond and one round cut-out; no letters, no fonts, no model output.
 Enforcement: `tests/test_launcher_icons.py` (files equal the generator output; the previous artwork is nowhere in the repository).
 
 | File | `deploy/launcher/src-tauri/icons` | `deploy/desktop-shell-main/src-tauri/icons` |
@@ -29,7 +29,7 @@ Enforcement: `tests/test_launcher_icons.py` (files equal the generator output; t
 | `128x128@2x.png` | `fdbd4720f98f69e0799dff887f16b85515a110042b1b89604d4780eb9fdd833a` | `fdbd4720f98f69e0799dff887f16b85515a110042b1b89604d4780eb9fdd833a` |
 | `icon.png` | `8e1e5c16bb0e1763ea7518d6f2153b7ec13571e263ca3f286cba78afc8a1f099` | `8e1e5c16bb0e1763ea7518d6f2153b7ec13571e263ca3f286cba78afc8a1f099` |
 | `icon.icns` | `f074813c07221cd2a9f6a3cdcaa52d0c9dcdfa2c380b55fc50a6a303b84f7ba9` | `f074813c07221cd2a9f6a3cdcaa52d0c9dcdfa2c380b55fc50a6a303b84f7ba9` |
-| `icon.ico` | `aa1457cf00d9e0801e7d2c47cdcec2596514f12a2ed73161c56ae344df5803c0` | `aa1457cf00d9e0801e7d2c47cdcec2596514f12a2ed73161c56ae344df5803c0` |
+| `icon.ico` | `d8898a80e7374c792345b3d8166bb1132d9d5e75794b7d8ac59d3ac1651cb3ee` | `aa1457cf00d9e0801e7d2c47cdcec2596514f12a2ed73161c56ae344df5803c0` |
 
 ## 3. Image files with NO provenance record in this repository (not covered by any statement here)
 

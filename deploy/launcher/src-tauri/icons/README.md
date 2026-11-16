@@ -15,11 +15,13 @@ stand-in, not a brand decision, and nothing here is a statement about rights or 
 | `128x128@2x.png` | `fdbd4720f98f69e0799dff887f16b85515a110042b1b89604d4780eb9fdd833a` |
 | `icon.png` | `8e1e5c16bb0e1763ea7518d6f2153b7ec13571e263ca3f286cba78afc8a1f099` |
 | `icon.icns` | `f074813c07221cd2a9f6a3cdcaa52d0c9dcdfa2c380b55fc50a6a303b84f7ba9` |
-| `icon.ico` | `aa1457cf00d9e0801e7d2c47cdcec2596514f12a2ed73161c56ae344df5803c0` |
+| `icon.ico` | `d8898a80e7374c792345b3d8166bb1132d9d5e75794b7d8ac59d3ac1651cb3ee` |
 
-Formats: PNG 8-bit RGBA (32, 128, 256 for the `@2x` file, 512); `icon.ico` holds 16, 24, 32, 48, 64, 128 and 256
-(every image a PNG); `icon.icns` holds the standard iconset sizes 16 to 1024 (including the `@2x` variants) as PNG.
-The files carry no metadata (no timestamps, no text chunks, no software name).
+Formats: PNG 8-bit RGBA (32, 128, 256 for the `@2x` file, 512); `icon.ico` holds 32, 16, 24, 48, 64, 128 and 256,
+32 listed first (every image a PNG; tauri-codegen's Windows `default_window_icon()` reads the first directory
+entry, so 32x32 must be first for the compiled default icon to match `32x32.png` on Windows too); `icon.icns`
+holds the standard iconset sizes 16 to 1024 (including the `@2x` variants) as PNG. The files carry no metadata
+(no timestamps, no text chunks, no software name).
 
 Regenerate with `python scripts/make_neutral_icons.py`; `tests/test_launcher_icons.py` checks that the files equal
 the generator output, that the previous artwork is nowhere in the repository, and that this table is current.

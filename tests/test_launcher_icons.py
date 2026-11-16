@@ -37,7 +37,7 @@ THIS_FILE = Path(__file__).resolve()
 
 SIX = ["32x32.png", "128x128.png", "128x128@2x.png", "icon.png", "icon.icns", "icon.ico"]
 PNG_SIZES = {"32x32.png": 32, "128x128.png": 128, "128x128@2x.png": 256, "icon.png": 512}
-ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+ICO_SIZES = [32, 16, 24, 48, 64, 128, 256]  # 32 first: tauri-codegen's Windows default_window_icon() reads entries()[0]
 ICNS_TYPES = {"icp4": 16, "icp5": 32, "ic11": 32, "ic12": 64, "ic07": 128, "ic13": 256, "ic08": 256,
               "ic14": 512, "ic09": 512, "ic10": 1024}
 
