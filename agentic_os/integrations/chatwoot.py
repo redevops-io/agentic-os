@@ -16,6 +16,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
+from agentic_os.revenue.contact_intake import ContactUpsertProposal, propose_contact_from_classification
 from agentic_os.revenue.intent import classify_intent
 from agentic_os.revenue.leakage import RevenueLeakage, unanswered_quote_intent
 
@@ -29,10 +30,14 @@ def _first_inbound_text(conv: dict) -> str:
     return (last.get("content") or "").strip()
 
 
+def _sender(conv: dict) -> dict:
+    meta = conv.get("meta") or {}
+    return meta.get("sender") or {}
+
+
 def _subject(conv: dict) -> str:
     """A stable subject for the leakage: the contact's name/email, else the conversation id."""
-    meta = conv.get("meta") or {}
-    sender = meta.get("sender") or {}
+    sender = _sender(conv)
     return str(sender.get("name") or sender.get("email") or f"conversation:{conv.get('id', '')}")
 
 
@@ -104,6 +109,30 @@ def scan_unanswered_quotes(client: ChatwootClient, *, now_ms: int,
             observation_refs=(f"chatwoot:conversation:{conv.get('id', '')}",))
         if leak is not None:
             out.append(leak)
+    return out
+
+
+def scan_inbound_contacts(client: ChatwootClient, *, now_ms: int, status: str = "open",
+                          min_confidence: float = 0.6) -> List[ContactUpsertProposal]:
+    """Read open conversations and propose a Contact upsert for each sender with a real email and an
+    actionable commercial-intent opening message (Stage E's `Inbound event -> intent classification ->
+    validated Contact upsert` hop, 2026-11-16). Still read-only: this only proposes — the caller hands
+    proposals to the approval-gated `integrations.twenty_operator`, which is the only thing that writes.
+    """
+    out: List[ContactUpsertProposal] = []
+    for conv in client.conversations(status=status):
+        text = _first_inbound_text(conv)
+        sender = _sender(conv)
+        email = str(sender.get("email") or "").strip()
+        name = str(sender.get("name") or "").strip()
+        if not text or not email:
+            continue
+        ic = classify_intent(text, source="chatwoot", source_ref=str(conv.get("id", "")), observed_at_ms=now_ms)
+        if ic.confidence < min_confidence:
+            continue
+        proposal = propose_contact_from_classification(ic, name=name, email=email)
+        if proposal is not None:
+            out.append(proposal)
     return out
 
 
