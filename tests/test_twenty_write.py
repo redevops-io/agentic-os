@@ -82,6 +82,33 @@ def test_live_upsert_person_http_error_is_reported_not_raised(monkeypatch):
     assert res["created"] is False and "error" in res
 
 
+def test_sequential_upsert_person_same_email_creates_at_most_once(monkeypatch):
+    """Governance review (Stage E architecture decision, 2026-11-16): the direct approval-gate path
+    relies on this find-or-create property, not a Dagster/Mission idempotency key, to guarantee a
+    second approved upsert for the same email never creates a duplicate Person. Exercise it as two
+    real sequential calls, the second seeing the first's created record, rather than inferring it from
+    two separately-framed tests."""
+    store: dict = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        existing = [store["person"]] if "person" in store else []
+        return _Resp(200, {"data": {"people": existing}})
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        person = {"id": "p1", **json}
+        store["person"] = person
+        return _Resp(200, {"data": {"createPerson": person}})
+
+    monkeypatch.setattr(tw, "httpx", __import__("types").SimpleNamespace(get=fake_get, post=fake_post))
+    client = tw.TwentyWriteClient(base_url="http://twenty.example", api_key="k", shadow=False)
+
+    first = client.upsert_person(name="Dana Rivera", email="dana@example.com")
+    second = client.upsert_person(name="Dana Rivera", email="dana@example.com")
+
+    assert first["created"] is True
+    assert second["created"] is False and second["person"]["id"] == "p1"
+
+
 def test_twenty_write_from_env_requires_both_vars(monkeypatch):
     monkeypatch.delenv("TWENTY_BASE_URL", raising=False)
     monkeypatch.delenv("TWENTY_API_KEY", raising=False)
