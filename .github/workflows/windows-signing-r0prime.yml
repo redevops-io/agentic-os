@@ -193,7 +193,7 @@ jobs:
 
   sign-inner:
     needs: collect
-    runs-on: macos-14
+    runs-on: macos-15
     environment: windows-signing
     permissions:
       id-token: write
@@ -504,7 +504,7 @@ jobs:
 
   sign-container:
     needs: apply-and-rebuild
-    runs-on: macos-14
+    runs-on: macos-15
     environment: windows-signing
     permissions:
       id-token: write
