@@ -247,7 +247,7 @@ jobs:
         run: |
           set -euo pipefail
           /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
-          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.13.1"
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
           "$RUNNER_TEMP/venv-v/bin/python" -I -c "import signify; print(signify.__version__)"
 
       - name: Build the scope file for stage inner (every value computed live on this runner)
@@ -543,7 +543,7 @@ jobs:
           GOT="$(shasum -a 256 "$TOOLS/jsign/jsign-7.6.jar" | awk '{print $1}')"
           [ "$GOT" = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5" ] || { echo "::error::jsign hash mismatch"; exit 1; }
           /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
-          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.13.1"
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
 
       - name: Build the scope file for stage container
         id: scope
