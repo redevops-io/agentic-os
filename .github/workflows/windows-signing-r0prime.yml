@@ -365,6 +365,11 @@ jobs:
           R0P_AZ_ACCOUNT: redevops
           R0P_AZ_PROFILE: redevops-public
           R0P_AZ_EXPECTED_CN: "CN=ReDevOps.io LLC"
+          # r0p_fix_path (signing-common.sh) reads this environment variable, not the --tools-dir
+          # CLI flag below (that only feeds the script's own direct path construction for jdk/jsign).
+          # Without this, PATH is fixed to /usr/bin:/bin:/usr/sbin:/sbin only and `command -v az`
+          # can never find the az symlink provisioned into this same directory.
+          R0P_TOOLS_DIR: ${{ steps.scope.outputs.tools_dir }}
         run: |
           set -euo pipefail
           INPUT_ARGS=(); while IFS= read -r line; do [ -n "$line" ] && INPUT_ARGS+=("$line"); done <<< "${{ steps.scope.outputs.input_args }}"
@@ -637,6 +642,9 @@ jobs:
           R0P_AZ_ACCOUNT: redevops
           R0P_AZ_PROFILE: redevops-public
           R0P_AZ_EXPECTED_CN: "CN=ReDevOps.io LLC"
+          # see the matching comment on sign-inner's own "REAL signing" step: r0p_fix_path
+          # (signing-common.sh) reads this environment variable, not the --tools-dir CLI flag.
+          R0P_TOOLS_DIR: ${{ steps.scope.outputs.tools_dir }}
         run: |
           set -euo pipefail
           ./packaging/signing/sign_windows_r0prime_v3.sh --stage container ${{ steps.scope.outputs.input_args }} \
