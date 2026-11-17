@@ -365,12 +365,15 @@ jobs:
             --tools-dir "${{ steps.scope.outputs.tools_dir }}" --python "${{ steps.scope.outputs.py }}"
 
       - name: Show evidence (no secrets - scrubbed by the script itself)
-        if: always()
+        if: always() && steps.scope.outputs.outdir != ''
         run: |
           cat "${{ steps.scope.outputs.outdir }}/EVIDENCE.txt" 2>/dev/null || cat "${{ steps.scope.outputs.outdir }}/FAILED" 2>/dev/null || true
 
       - name: Upload signed-inner output
-        if: always()
+        # steps.scope.outputs.outdir is empty if the scope step itself never ran (e.g. the Azure
+        # login step before it failed); without this guard the path below becomes the bare glob
+        # "/**", which walks the entire runner filesystem instead of being skipped.
+        if: always() && steps.scope.outputs.outdir != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: signed-inner
@@ -631,13 +634,14 @@ jobs:
             --licenses-dir round2-dl/deploy/launcher/src-tauri/licenses
 
       - name: Show evidence
-        if: always()
+        if: always() && steps.scope.outputs.outdir != ''
         run: |
           cat "${{ steps.scope.outputs.outdir }}/EVIDENCE.txt" 2>/dev/null || cat "${{ steps.scope.outputs.outdir }}/FAILED" 2>/dev/null || true
           cat "${{ steps.scope.outputs.outdir }}/SHA256SUMS" 2>/dev/null || true
 
       - name: Upload final signed installers + evidence
-        if: always()
+        # see the matching comment on sign-inner's "Upload signed-inner output" step
+        if: always() && steps.scope.outputs.outdir != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: signed-containers-final
