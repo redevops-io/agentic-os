@@ -17,11 +17,24 @@ from pathlib import Path
 
 
 def _default_path() -> Path:
+    """The trusted-sources file: ``$AGENTIC_OS_TRUST_FILE`` if set.
+
+    Otherwise ``$AGENTIC_OS_HOME`` or ``~/.agentic-os/trusted-sources`` on macOS/Linux; on Windows,
+    ``%LOCALAPPDATA%\\ReDevOps\\trusted-sources`` (Microsoft Store policy 10.2.7 — see
+    :mod:`agentic_os.mission.windows_state_migration`, which this mirrors), migrating any existing
+    ``%USERPROFILE%``-rooted file there once, additively.
+    """
     env = os.environ.get("AGENTIC_OS_TRUST_FILE")
     if env:
         return Path(env)
     home = os.environ.get("AGENTIC_OS_HOME") or os.path.expanduser("~")
-    return Path(home) / ".agentic-os" / "trusted-sources"
+    legacy = Path(home) / ".agentic-os" / "trusted-sources"
+    from agentic_os.mission import windows_state_migration as _wsm  # noqa: PLC0415
+    if _wsm.is_windows() and not os.environ.get("AGENTIC_OS_HOME"):
+        new_file = _wsm.windows_app_data_root() / "trusted-sources"
+        _wsm.migrate_file_if_needed(legacy, new_file)
+        return new_file
+    return legacy
 
 
 class TrustStore:

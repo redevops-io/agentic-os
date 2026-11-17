@@ -19,7 +19,7 @@ second run; tests/test_launcher_icons.py regenerates the files and compares them
 
 Outputs (names and sizes are what tauri.conf.json `bundle.icon` and the Tauri bundler expect):
     32x32.png (32), 128x128.png (128), 128x128@2x.png (256), icon.png (512): PNG, 8-bit RGBA
-    icon.ico: 16, 24, 32, 48, 64, 128, 256 (every image a PNG)
+    icon.ico: 32, 16, 24, 48, 64, 128, 256 (every image a PNG; 32 listed first, see ICO_SIZES below)
     icon.icns: icp4 16, icp5 32, ic11 32 (16@2x), ic12 64 (32@2x), ic07 128, ic13 256 (128@2x), ic08 256,
                ic14 512 (256@2x), ic09 512, ic10 1024 (512@2x)
 """
@@ -105,7 +105,12 @@ def png(n: int, rgba: bytes) -> bytes:
 
 
 def ico(images: list[tuple[int, bytes]]) -> bytes:
-    """ICO container with PNG-encoded images (Windows Vista and later). Width/height byte 0 means 256."""
+    """ICO container with PNG-encoded images (Windows Vista and later). Width/height byte 0 means 256.
+
+    Entry order matters beyond Windows' own icon picking: tauri-codegen's Windows `default_window_icon()`
+    reads this file's FIRST directory entry, unconditionally (see tauri-codegen's context.rs, CachedIcon::new_ico,
+    `icon_dir.entries()[0]`). The 32x32 image must be first so the compiled default window icon is the same
+    32x32 artwork on every platform, matching icons/32x32.png byte for byte (see ICO_SIZES below)."""
     head = struct.pack("<HHH", 0, 1, len(images))
     offset = 6 + 16 * len(images)
     entries, blobs = b"", b""
@@ -126,7 +131,7 @@ def icns(pngs: dict[int, bytes]) -> bytes:
 
 
 SIZES = (16, 24, 32, 48, 64, 128, 256, 512, 1024)
-ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+ICO_SIZES = (32, 16, 24, 48, 64, 128, 256)
 
 
 def build() -> dict[str, bytes]:

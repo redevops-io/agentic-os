@@ -39,9 +39,13 @@
     "longDescription": "ReDevOps runs your business apps as one governed agentic system: connect apps, run missions across them, approve the consequential steps. One suite installer, native, bring your own model (hosted or local). No Docker required.",
     "externalBin": ["binaries/redevops-sidecar"],
     "copyright": "Copyright (c) 2025-2026 RedevOps.",
+    "publisher": "ReDevOps.io LLC",
     "resources": {"licenses/": "Licenses/"},
     "macOS": {"minimumSystemVersion": "11.0", "bundleVersion": "0.1.1"},
-    "windows": {"wix": {"upgradeCode": "f13fc625-f77d-5c30-b308-a3c3ec1045fc"}},
+    "windows": {
+      "wix": {"upgradeCode": "f13fc625-f77d-5c30-b308-a3c3ec1045fc"},
+      "webviewInstallMode": {"type": "offlineInstaller"}
+    },
     "linux": {
       "deb": {
         "depends": ["xdg-utils"]

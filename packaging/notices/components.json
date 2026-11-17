@@ -99,6 +99,11 @@
    "not_third_party": "system component of macOS (WKWebView / WebKit): linked as an operating-system library, not redistributed in the artifact.",
    "decision": ""
   },
+  "key:platform:webview2-standalone": {
+   "note": "Microsoft Edge WebView2 Runtime Evergreen Standalone Installer, embedded in the Windows NSIS/MSI installers via tauri.conf.json bundle.windows.webviewInstallMode=offlineInstaller (previously downloadBootstrapper, which did not redistribute it and needed no notice here). Microsoft's WebView2 Runtime license terms, section 9(a): if Microsoft Defender SmartScreen is not disabled, the distributing application must give end users notice that the software includes Microsoft Defender SmartScreen. This application does not disable SmartScreen. Verified against Microsoft's current WebView2 distribution documentation (learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution, fetched 2026-11-16) and the ms-edge-webview2 license text (ScanCode LicenseDB mirror, section 9(a)); the primary Microsoft license text itself was not re-hosted here, only cited.",
+   "decision": "",
+   "unverified": "The exact section numbering (9(a)) is as mirrored by a third-party license database (ScanCode LicenseDB), not re-verified against Microsoft's own primary EULA text file as shipped inside the Standalone Installer binary itself; the substantive SmartScreen-notice obligation is well-documented across multiple independent sources and is included here regardless of exact section numbering."
+  },
   "key:licenses-folder": {
    "not_third_party": "first-party: the Licenses folder itself (product licence files and these notices), embedded in the sidecar by the second freeze pass",
    "decision": ""

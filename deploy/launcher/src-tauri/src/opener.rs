@@ -65,6 +65,106 @@ pub fn opener_command(path: &Path) -> (&'static str, Vec<OsString>) {
     }
 }
 
+/// Windows only: on a brand-new machine, `cmd /C start "" <file>` resolves to Microsoft Edge, and this
+/// is the first time Edge has ever run — its First Run Experience ("Make Microsoft Edge your own") takes
+/// over the whole window instead of ever showing the handed-off page (found and reproduced with a real
+/// screenshot during Microsoft Store S-A readiness testing; see PR history). `--no-first-run` is the
+/// documented Chromium switch that skips ONLY that onboarding UI — no security feature (SmartScreen,
+/// sandboxing, update checks) is affected, and it only ever applies to this one process we spawn, not to
+/// any registry policy or other launch of the browser. We resolve the user's actual default handler via
+/// the same mechanism Windows itself uses (HKCU UserChoice -> ProgId -> HKCR shell\open\command) rather
+/// than assuming Edge, so a user who has already chosen a different Chromium browser (or a non-Chromium
+/// one) is handled correctly too. The argv still carries only the file path and non-secret flags, same
+/// security property as `opener_command` above (SR-01).
+#[cfg(windows)]
+pub mod windows_chromium {
+    use std::ffi::{OsStr, OsString};
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
+    use std::ptr::null_mut;
+
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER,
+        KEY_READ, REG_EXPAND_SZ, REG_SZ,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// Read a REG_SZ/REG_EXPAND_SZ string value from `hkey\subkey\value_name` (empty name = default value).
+    fn read_string_value(hkey: HKEY, subkey: &str, value_name: &str) -> Option<String> {
+        unsafe {
+            let mut opened: HKEY = null_mut();
+            if RegOpenKeyExW(hkey, wide(subkey).as_ptr(), 0, KEY_READ, &mut opened) != 0 {
+                return None;
+            }
+            let value_w = wide(value_name);
+            let value_ptr = if value_name.is_empty() { null_mut() } else { value_w.as_ptr() as *mut u16 };
+            let mut kind: u32 = 0;
+            let mut size: u32 = 0;
+            let probe = RegQueryValueExW(opened, value_ptr, null_mut(), &mut kind, null_mut(), &mut size);
+            if probe != 0 || (kind != REG_SZ && kind != REG_EXPAND_SZ) || size == 0 {
+                RegCloseKey(opened);
+                return None;
+            }
+            let mut buf: Vec<u16> = vec![0u16; size as usize / 2 + 1];
+            let mut size2 = size;
+            let status =
+                RegQueryValueExW(opened, value_ptr, null_mut(), null_mut(), buf.as_mut_ptr() as *mut u8, &mut size2);
+            RegCloseKey(opened);
+            if status != 0 {
+                return None;
+            }
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            Some(OsString::from_wide(&buf[..len]).to_string_lossy().into_owned())
+        }
+    }
+
+    fn default_http_command() -> Option<String> {
+        let prog_id = read_string_value(
+            HKEY_CURRENT_USER,
+            r"SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice",
+            "ProgId",
+        )?;
+        read_string_value(HKEY_CLASSES_ROOT, &format!(r"{prog_id}\shell\open\command"), "")
+    }
+
+    /// Extract the executable path from a shell `shell\open\command` string (`"C:\...\x.exe" %1` or
+    /// `C:\...\x.exe %1` unquoted).
+    fn extract_exe_path(command: &str) -> Option<String> {
+        let command = command.trim();
+        if let Some(rest) = command.strip_prefix('"') {
+            rest.find('"').map(|end| rest[..end].to_string())
+        } else {
+            command.split_whitespace().next().map(str::to_string)
+        }
+    }
+
+    const CHROMIUM_EXES: &[&str] =
+        &["msedge.exe", "chrome.exe", "brave.exe", "vivaldi.exe", "opera.exe", "chromium.exe"];
+
+    /// The user's default browser's executable, only if it's a known Chromium-based one; `None` for any
+    /// other browser or on any resolution failure (the caller then falls back to `opener_command`'s
+    /// normal `cmd /C start`, unchanged).
+    pub fn default_browser_exe_if_chromium() -> Option<PathBuf> {
+        let command = default_http_command()?;
+        let exe = extract_exe_path(&command)?;
+        let path = PathBuf::from(&exe);
+        let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+        CHROMIUM_EXES.contains(&name.as_str()).then_some(path)
+    }
+
+    /// `(exe, args)` to spawn directly instead of going through `cmd /C start`, or `None` to fall back.
+    pub fn override_command(path: &Path) -> Option<(PathBuf, Vec<OsString>)> {
+        let exe = default_browser_exe_if_chromium()?;
+        Some((
+            exe,
+            vec!["--no-first-run".into(), "--no-default-browser-check".into(), path.as_os_str().to_owned()],
+        ))
+    }
+}
+
 /// Create (or tighten) the private directory. Unix: mode 0700, must be a real directory (not a
 /// symlink) owned by the current user. Windows: the per-user directory under %LOCALAPPDATA% inherits
 /// the default user-only ACL.
