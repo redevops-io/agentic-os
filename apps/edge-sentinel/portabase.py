@@ -18,6 +18,8 @@ from pathlib import Path
 
 import httpx
 
+from . import fixture_mode     # demo-mode boundary: no external read, and no side effect at all
+
 # Idempotent .env load (mirrors core.py) so the module is self-sufficient when imported standalone.
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
 if _ENV_FILE.exists():
@@ -33,6 +35,8 @@ PORTABASE_FRONT_URL = os.environ.get("PORTABASE_FRONT_URL", PORTABASE_API_URL).r
 
 
 def _pb_get(path: str):
+    if fixture_mode.read_refusal("Portabase backup coverage"):     # demo mode reads nothing outside the process
+        return None
     if not PORTABASE_API_TOKEN:
         return None
     try:
@@ -88,7 +92,7 @@ def backup_status(_a: dict) -> dict:
     never = [d for d in dbs if d.get("status") in ("never", "unknown") or not d.get("last_backup")]
     no_offsite = [d for d in dbs if d.get("last_backup") and not offsite(d)]
     unenc = [d for d in dbs if d.get("last_backup") and not d.get("encrypted", True)]
-    tag = "" if snap["live"] else " (SAMPLE — set PORTABASE_API_TOKEN for live data)"
+    tag = "" if snap["live"] else " (SAMPLE DATA, not read from Portabase — set PORTABASE_API_TOKEN to read it)"
     gaps = []
     if never:
         gaps.append(f"{len(never)} with NO backup ({', '.join(d['name'] for d in never)})")
@@ -98,7 +102,7 @@ def backup_status(_a: dict) -> dict:
         gaps.append(f"{len(unenc)} unencrypted")
     txt = f"Backup coverage{tag}: {len(ok)}/{len(dbs)} databases have a recent successful backup. "
     txt += ("Gaps — " + "; ".join(gaps) + "." if gaps else "All databases are backed up, offsite and encrypted.")
-    return {"text": txt, "data": {"live": snap["live"], "total": len(dbs), "ok": len(ok),
+    return {"text": txt, "data": {"live": snap["live"], "data_status": "live" if snap["live"] else "sample", "total": len(dbs), "ok": len(ok),
             "never": [d["name"] for d in never], "no_offsite": [d["name"] for d in no_offsite],
             "unencrypted": [d["name"] for d in unenc]}}
 
@@ -120,8 +124,9 @@ def panel() -> str:
                      "<span style='color:#4fd1c5'>yes</span>" if d.get("encrypted") else "<span style='color:#ff6b6b'>no</span>",
                      "<span style='color:#4fd1c5'>offsite (S3)</span>" if off else ("<span style='color:#e0b000'>local only</span>" if d.get("destinations") else "<span style='color:#ff6b6b'>none</span>")])
     body = (_app._card(f"Database backups &nbsp; {_app._live_badge(snap['live'], 'set PORTABASE_API_TOKEN')}",
-                       _app._tbl(["Database", "Engine", "Last backup", "Status", "Size", "Encrypted", "Destination"], rows))
-            + _app._card("Continuity posture",
+                       _app._tbl(["Database", "Engine", "Last backup", "Status", "Size", "Encrypted", "Destination"], rows,
+                                 label="Portabase backup coverage: database, engine, last backup, status, size, encryption and destination"))
+            + _app._card(f"Continuity posture &nbsp; {_app._live_badge(snap['live'], 'set PORTABASE_API_TOKEN')}",
                          "<p style='color:#9b99a1;font-size:13px;margin:0'>In real deployments every core's dump is encrypted and fanned out to an <b>S3-compatible offsite</b> destination (AWS S3 / MinIO), so a lost host is recoverable. "
                          "Ask the agent for <b>backup coverage</b> to list the gaps — databases with no backup, no offsite copy, or no encryption.</p>"))
-    return _app._panel_shell("Backups &amp; Continuity", "Backup coverage over Portabase — which databases have a recent, encrypted, offsite (S3) backup.", body)
+    return _app._panel_shell("Backups &amp; Continuity", "Backup coverage over Portabase — which databases have a recent, encrypted, offsite (S3) backup." + ("" if snap["live"] else " SAMPLE DATA: nothing on this page was read from a Portabase."), body)

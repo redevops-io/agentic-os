@@ -8,7 +8,7 @@ demo tenant used across the agentic apps. Sends are approval-gated.
   GET  /health        -> {"status","core":"twenty","connected": <Twenty /healthz>}
   GET  /api/pipeline  -> ranked accounts + picked play + drafted opener + approval state
   GET  /              -> MD3 dashboard (source, rank, draft, approve — the GUI)
-  POST /agent/run     -> {"action":"refresh"|"approve"|"send_all", "account": "..."}
+  POST /agent/run     -> {"action":"refresh"|"enrich"|"draft_pitch"|"approve"|"send_all"|"check_replies"|"follow_up", "account": "..."}
 
 Config (env): TWENTY_URL · TWENTY_API_KEY · REDEVOPS_LLM_BASE_URL (in-boundary model; none => deterministic) ·
 OPERATOR_BASIC_AUTH / OUTREACH_BASIC_AUTH (`user:pass`; approve / send_all execute only for the operator) ·
@@ -89,10 +89,14 @@ def api_pipeline(live: int = 1):
     return JSONResponse({"accounts": build_pipeline(bool(live)), "connected": twenty_connected()})
 
 
-_TOOL_OF = {"refresh": "outreach.refresh", "approve": "outreach.approve", "send_all": "outreach.send_all"}
+_TOOL_OF = {"refresh": "outreach.refresh", "enrich": "outreach.enrich",
+            "approve": "outreach.approve", "send_all": "outreach.send_all",
+            "check_replies": "outreach.check_replies"}
 _ACTIONS = {"refresh": core.refresh,
+            "enrich": core.enrich,          # read-only: resolves + attaches a verified email, no approval needed
             "approve": core.approve,        # gated INSIDE core: staged unless `_approval` (human sign-off → Twenty sync)
-            "send_all": core.send_all}      # gated INSIDE core
+            "send_all": core.send_all,      # gated INSIDE core
+            "check_replies": core.check_replies}  # read-only: reads the sender's own inbox, no approval needed
 
 
 def _run_action(action: str, body: dict, authorization: "str | None") -> "dict | None":
@@ -432,6 +436,79 @@ def draft_followup(opp: dict) -> str:
     return core.neutral_followup()
 
 
+def draft_pitch(body: dict | None = None) -> dict:
+    """LLM-draft a personalized first-touch pitch for one ranked account, with the real evidence
+    visualization and the lead's own link, and attach it as that account's draft — `send_all` uses this
+    override instead of the deterministic `teardown()` template once it's set.
+
+    Read-only w.r.t. Twenty/CRM and the outside world: it only writes the in-memory pipeline row, the same
+    consequence level as `enrich`. Falls back to the deterministic template when the governed LLM returns
+    nothing (no in-boundary endpoint configured, or a refusal) — never leaves the row without a draft."""
+    body = body or {}
+    acct = body.get("account", "")
+    row = next((r for r in core._STATE["accounts"] if r["account"] == acct), None)
+    if row is None:
+        return {"ok": False, "action": "draft_pitch", "account": acct,
+                "reason": "unknown account — refresh the pipeline first"}
+    tmpl = core.teardown(row)
+    evidence = row.get("evidence") or row.get("reason") or ""
+    out = _llm("Write a SHORT, friendly cold-outreach email (under 110 words; plain prose; no markdown; no "
+               "subject line; 1-2 short paragraphs separated by a blank line) from " + TENANT + " (" + PITCH +
+               ") to " + acct + ". Audience: " + (tmpl.get("icp") or "unknown") + ". The real reason for "
+               "reaching out: " + evidence + ". End with one short, specific call to action (a short call "
+               "this week). Output only the email body.", 220)
+    text = out.strip() if out else tmpl["body"]
+    draft = {"subject": tmpl["subject"], "body": text, "draft_source": "llm" if out else "template"}
+    draft["html"] = core.render_pitch_html(draft["subject"], draft["body"], row)
+    row["draft"] = draft
+    return {"ok": True, "action": "draft_pitch", "account": acct, **draft}
+
+
+def follow_up(body: dict | None = None) -> dict:
+    """Draft the second touch for one account and attach it as that account's draft — a warm,
+    reply-aware thank-you if `check_replies` already found a reply (`row["replied"]`), otherwise a
+    polite no-reply nudge. Sending it is NOT this function's job: it only stages the draft, exactly like
+    `draft_pitch` does for the first touch; the operator calls the existing gated `send_all` to actually
+    dispatch it. Read-only w.r.t. Twenty/CRM and the outside world, same consequence level as `draft_pitch`."""
+    body = body or {}
+    acct = body.get("account", "")
+    row = next((r for r in core._STATE["accounts"] if r["account"] == acct), None)
+    if row is None:
+        return {"ok": False, "action": "follow_up", "account": acct,
+                "reason": "unknown account — refresh the pipeline first"}
+    replied = bool(row.get("replied"))
+    if replied:
+        reply = row.get("reply") or {}
+        out = _llm("Write a SHORT, warm reply (under 90 words; plain prose; no markdown; no subject "
+                   "line) from " + TENANT + " thanking " + acct + " for responding" +
+                   ((" (they wrote: “" + str(reply.get("subject") or "") + "”)") if reply.get("subject") else "") +
+                   ". Propose one specific next step: a short call this week. Output only the email body.", 180)
+        fallback = "Thanks for getting back to me — would a short call this week work to continue the conversation?"
+    else:
+        out = _llm("Write a SHORT, friendly follow-up email (under 90 words; plain prose; no markdown; no "
+                   "subject line) from " + TENANT + " (" + PITCH + ") to " + acct + ", following up on an "
+                   "earlier note that got no reply. One polite nudge, no guilt, no repeating the whole "
+                   "pitch. End with one short, specific call to action (a short call this week). Output "
+                   "only the email body.", 180)
+        fallback = core.neutral_followup(acct)
+    text = out.strip() if out else fallback
+    subject = ("Re: " if replied else "Following up — ") + acct
+    draft = {"subject": subject, "body": text, "draft_source": "llm" if out else "template",
+            "follow_up_for": "reply" if replied else "no_reply"}
+    draft["html"] = core.render_pitch_html(subject, text, row)
+    row["draft"] = draft
+    return {"ok": True, "action": "follow_up", "account": acct, **draft}
+
+
+# registered here (not in the _ACTIONS/_TOOL_OF literal above) because draft_pitch/follow_up are defined
+# after it — they live in app.py, not core.py, since they need the governed LLM, which core.py deliberately
+# never touches.
+_ACTIONS["draft_pitch"] = draft_pitch
+_TOOL_OF["draft_pitch"] = "outreach.draft_pitch"
+_ACTIONS["follow_up"] = follow_up
+_TOOL_OF["follow_up"] = "outreach.follow_up"
+
+
 def pipeline_summary() -> dict:
     if not TWENTY_API_KEY:
         return {"total": 0, "value": 0, "by_stage": {}, "top": []}
@@ -563,8 +640,22 @@ h1{font:500 24px/32px var(--font);margin:0}.sub{color:var(--on-surface-muted);fo
 .btn{font:500 13px/1 var(--font);padding:9px 16px;border-radius:var(--radius-pill);border:0;cursor:pointer;background:var(--primary);color:var(--on-primary)}
 .btn.gate{background:var(--surface-container-high);color:var(--warning);border:1px solid var(--warning)}
 .btn.done{background:#0f3d22;color:var(--success);border:1px solid var(--success)}
-.actions{display:flex;gap:10px;margin-top:12px;align-items:center}
+.btn.ghost{background:var(--surface-container-high);color:var(--on-surface-variant)}
+.btn.small{padding:7px 12px;font-size:12px}
+.actions{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap}
 .foot{color:var(--on-surface-muted);font-size:12px}
+.chip.ok{background:#0f3d22;color:var(--success)}
+.status-line{font-size:12px;color:var(--on-surface-muted);margin-top:8px;min-height:1.2em}
+.email-preview{background:#fff;border-radius:10px;padding:16px 18px;overflow-x:auto}
+.email-preview-label{font:500 11px/1 var(--mono);color:var(--on-surface-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+@media (max-width:480px){
+  body{padding:14px}
+  .top{flex-direction:column;align-items:flex-start}
+  h1{font-size:20px}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .btn{padding:9px 14px;font-size:12.5px}
+  .score{margin-left:0;width:100%}
+}
 .chip.off{background:#4a3500;color:var(--warning);font-family:var(--font)}
 .synced-list{display:flex;flex-direction:column;gap:2px}
 .srow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--outline-variant)}
@@ -588,24 +679,40 @@ def render(rows: list[dict], conn: bool) -> str:
     accts = ""
     for r in rows:
         d = r["draft"]
+        acct_js = _esc(r["account"])
         btn = ('<button class="btn done" disabled>✓ approved · synced</button>' if r["approved"]
-               else f'<button class="btn gate" onclick="approve(this,\'{_esc(r["account"])}\')">⏸ approve &amp; sync to Twenty</button>')
+               else f'<button class="btn gate" onclick="approve(this,\'{acct_js}\')">⏸ approve &amp; sync to Twenty</button>')
         art = f' · <a href="{_esc(r["artifact"])}" target="_blank">artifact</a>' if r.get("artifact") else ""
+        email = r.get("contact_email")
+        email_chip = (f'<span class="chip ok">✉ {_esc(email)} ({"verified" if r.get("email_verified") else "unverified"})</span>'
+                     if email else
+                     f'<button class="btn ghost small" onclick="act(this,\'enrich\',\'{acct_js}\')">✉ enrich email</button>')
+        reply_chip = ('<span class="chip ok">↩ replied</span>' if r.get("replied")
+                     else f'<button class="btn ghost small" onclick="act(this,\'check_replies\',\'{acct_js}\')">📨 check reply</button>')
+        draft_body = (f'<div class="email-preview-label">Exactly what the prospect receives</div>'
+                     f'<div class="email-preview">{d["html"]}</div>') if d.get("html") else \
+                     f'<b>{_esc(d["subject"])}</b>\n\n{_esc(d["body"])}'
         accts += (
             f'<div class="acct"><div class="arow"><span class="name">{_esc(r["account"])}</span>'
             f'<span class="chip sig">{_esc(r["signal"])}</span><span class="chip play">play: {_esc(r["play"])} (fixed policy, not learned)</span>'
             f'<span class="chip">{_esc(r["source"])}</span><span class="score">{r["score"]}</span></div>'
             f'<div class="ev">{_esc(r["evidence"])}{art}</div>'
-            f'<div class="draft"><b>{_esc(d["subject"])}</b>\n\n{_esc(d["body"])}</div>'
-            f'<div class="actions">{btn}<span class="foot">nothing sends without your sign-off</span></div></div>')
+            f'<div class="arow" style="margin-top:8px">{email_chip}{reply_chip}</div>'
+            f'<div class="draft">{draft_body}</div>'
+            f'<div class="actions">{btn}'
+            f'<button class="btn ghost small" onclick="act(this,\'draft_pitch\',\'{acct_js}\')">📝 redraft pitch</button>'
+            f'<button class="btn ghost small" onclick="act(this,\'follow_up\',\'{acct_js}\')">🔁 draft follow-up</button>'
+            f'<span class="foot">nothing sends without your sign-off</span></div></div>')
     return f"""<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Outreach Engine · {TENANT}</title>
 <link rel=stylesheet href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&family=Roboto+Mono&display=swap">
 <style>{BASE_CSS}</style></head><body><div class=shell>
 <div class=top><div><h1>Outreach Engine</h1><div class=sub>Find leads, draft follow-ups, and track opportunities — a conversational agent over your <b>Twenty CRM</b>. Tenant: <b>{_esc(TENANT)}</b>.</div></div>
-<div style="display:flex;gap:10px;align-items:center">{conn_pill}
+<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">{conn_pill}
 <button class="btn" onclick="refresh(this,0)">↻ Refresh</button>
-<button class="btn" onclick="refresh(this,1)">⚡ Pull live signals</button></div></div>
+<button class="btn" onclick="refresh(this,1)">⚡ Pull live signals</button>
+<button class="btn ghost" onclick="act(this,'send_all','')">📤 send approved</button>
+<button class="btn ghost" onclick="act(this,'check_replies','')">📨 check all replies</button></div></div>
 <div class=kpis>{kpi_html}</div>
 <!--AGENT_PANEL-->
 <div class=card><div style="font:500 16px/1 var(--font);margin-bottom:4px">Ranked accounts &amp; drafted outreach</div>
@@ -623,6 +730,7 @@ def render(rows: list[dict], conn: bool) -> str:
 async function post(b){{const r=await fetch('api/run',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(b)}});return r.json()}}
 async function approve(el,a){{el.disabled=true;el.textContent='…';await post({{action:'approve',account:a}});location.reload()}}
 async function refresh(el,live){{el.disabled=true;el.textContent='…';await post({{action:'refresh',live:!!live}});location.reload()}}
+async function act(el,action,a){{el.disabled=true;el.textContent='…';await post({{action:action,account:a}});location.reload()}}
 function esc(s){{return String(s).replace(/[&<>"]/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}}[c]))}}
 async function loadSynced(){{
   const el=document.getElementById('synced-body');

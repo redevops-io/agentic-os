@@ -103,8 +103,8 @@ Licences vary by repository; see each repository's `LICENSE`. The titles below a
 
 | Repository | LICENSE title as it appears in the repo |
 |---|---|
-| agentic-os, runtime-contracts, discovery-runtime, redevops-connectors, redevops-projects, redevops-rag | AGPL-3.0 text plus Commons Clause; `LICENSE.md` reads "source-available, not open source". GitHub's licence label may show only AGPL-3.0 |
-| context-runtime, sidekick, agent-harness, knowledge-frontier | AGPL-3.0 (sidekick, agent-harness, knowledge-frontier declare `-or-later`) |
+| agentic-os, runtime-contracts, context-runtime, discovery-runtime, redevops-connectors, redevops-projects, redevops-rag | AGPL-3.0 text plus Commons Clause; `LICENSE.md` reads "source-available, not open source". GitHub's licence label may show only AGPL-3.0 |
+| sidekick, agent-harness, knowledge-frontier | AGPL-3.0 (sidekick, agent-harness, knowledge-frontier declare `-or-later`) |
 | redevops-demo, accounting-firm | AGPL-3.0 (declared `AGPL-3.0-only` in package metadata) |
 | mission-sdk, redevops-integrations, DataOpsBench | Apache-2.0 |
 | multiagent-orchestration-benchmark | MIT |

@@ -17,9 +17,12 @@ import json
 import os
 import stat
 import tempfile
+import warnings
 from dataclasses import dataclass
 from typing import Tuple
 from urllib.parse import urlparse
+
+from .._platform import files as _files
 
 SETTINGS_FILE_ENV = "REDEVOPS_LLM_SETTINGS_FILE"
 DEFAULT_MODEL = "DeepSeek-V4-Flash"
@@ -45,13 +48,38 @@ def _env_settings() -> LLMSettings:
                        key_ref="", in_boundary_hosts=hosts, source="env")
 
 
+def settings_file_problem(path: str) -> "str | None":
+    """Why this settings file is too exposed to be allowed to steer model traffic, or None when it is fine.
+
+    **POSIX** keeps the long-standing rule exactly: only group- or world-*writable* is refused, so a 0644
+    file provisioned by a configuration manager is accepted as it always was.
+
+    **Windows** has no POSIX mode bits: `os.stat().st_mode` reports `0o666` for an ordinary writable file,
+    so applying the POSIX rule there refuses *every* settings file and the caller silently falls back to the
+    environment — a configured deployment that quietly stops honouring its own configuration. The question
+    is asked the way the kernel's secret store already asks it (see `agentic_os/secrets/stores.py`): is this
+    file private to the running user, judged on the ACL. It is stricter than the mode check would have been
+    (a file others can *read* is also refused), and it answers the real question instead of a proxy for it.
+    """
+    if _files.HAS_POSIX_MODES:
+        mode = os.stat(path).st_mode
+        if mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return f"has mode {stat.S_IMODE(mode):04o}, which lets others write it"
+        return None
+    return _files.private_file_problem(path)
+
+
 def load_llm_settings(path: "str | None" = None) -> LLMSettings:
     path = (path if path is not None else os.environ.get(SETTINGS_FILE_ENV, "")).strip()
     if not path or not os.path.exists(path):
         return _env_settings()
-    mode = os.stat(path).st_mode
-    if mode & (stat.S_IWGRP | stat.S_IWOTH):
-        # a group/world-writable settings file could redirect model traffic: refuse it, use the environment
+    problem = settings_file_problem(path)
+    if problem:
+        # A settings file someone else can write could redirect model traffic and the key reference with it,
+        # so it is refused and the environment answers instead. The refusal is said out loud: an operator
+        # looking at a correct-looking settings file that the process quietly ignores has no way to find the
+        # mismatch, which is how this went unnoticed on Windows for weeks.
+        warnings.warn(f"agentic-os: ignoring LLM settings file {path}: {problem}", RuntimeWarning, stacklevel=2)
         return _env_settings()
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -91,7 +119,7 @@ def save_llm_settings(path: str, *, base_url: str, model: str, key_ref: str = ""
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, sort_keys=True)
-        os.chmod(tmp, 0o600)
+        _files.make_private(tmp)                                     # 0600 on POSIX; a user-and-system-only DACL on Windows
         os.replace(tmp, path)                               # atomic: a reader sees the old or the new, never half
     except BaseException:
         if os.path.exists(tmp):

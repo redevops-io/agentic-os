@@ -20,14 +20,12 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import errno
 import hashlib
 import json
 import logging
 import os
 import secrets as _secrets
 import stat
-import tempfile
 import math
 import time
 from dataclasses import dataclass, field
@@ -42,10 +40,7 @@ try:
 except Exception:  # noqa: BLE001
     _HAVE_CRYPTO = False
 
-try:
-    import fcntl as _fcntl
-except ImportError:  # not POSIX: GrantStore refuses to run without a lock
-    _fcntl = None
+from ._platform import files as _files, locks as _locks   # flock on POSIX, LockFileEx on Windows; GrantStore refuses to run without one
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
@@ -57,6 +52,12 @@ _YES = ("1", "true", "yes", "on")
 class GrantStorageError(RuntimeError):
     """The grant store cannot be opened safely (no encryption, unusable key, plaintext file it will not
     guess about). A RuntimeError, so the admin routers answer 409 like they do for a sealed store."""
+
+
+class GrantStorageBusy(GrantStorageError, OSError):
+    """A Windows sharing violation that outlasted the bounded replace retry: the grants file is held open by another process. It is a
+    ``GrantStorageError`` (the admin routers translate it) and an ``OSError`` (so a caller that tolerates an ``OSError`` from a write, such as
+    the first rollback-counter write of a plaintext migration, tolerates this one exactly as it did the raw ``PermissionError``)."""
 
 
 def _env_yes(name: str, default: bool = False) -> bool:
@@ -154,13 +155,23 @@ class Grant:
     masked_columns: list = field(default_factory=list)
     created_by: str = ""
     at: float = 0.0
+    # contract v1 (authz_contract): optional tenancy + revocation epoch. Absent/empty is EXACTLY the
+    # pre-contract single-operator grant: same stored bytes, same decisions, same digests.
+    tenant: str = ""
+    revocation_epoch: int = 0
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "subject_kind": self.subject_kind, "subject": self.subject,
-                "resource_kind": self.resource_kind, "resource_name": self.resource_name,
-                "actions": self.actions, "row_scope": self.row_scope, "row_column": self.row_column,
-                "row_values": self.row_values, "masked_columns": self.masked_columns,
-                "created_by": self.created_by, "at": self.at}
+        d = {"id": self.id, "subject_kind": self.subject_kind, "subject": self.subject,
+             "resource_kind": self.resource_kind, "resource_name": self.resource_name,
+             "actions": self.actions, "row_scope": self.row_scope, "row_column": self.row_column,
+             "row_values": self.row_values, "masked_columns": self.masked_columns,
+             "created_by": self.created_by, "at": self.at}
+        # written only when set, so a legacy grant re-serializes byte-identically (PR-A compatibility pin)
+        if self.tenant:
+            d["tenant"] = self.tenant
+        if self.revocation_epoch:
+            d["revocation_epoch"] = self.revocation_epoch
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Grant":
@@ -169,7 +180,10 @@ class Grant:
                    actions=(["read"] if d.get("actions") is None else d["actions"]), row_scope=d.get("row_scope", "all"),
                    row_column=d.get("row_column", "owner"), row_values=d.get("row_values") or [],
                    masked_columns=d.get("masked_columns") or [], created_by=d.get("created_by", ""),
-                   at=d.get("at", 0.0))
+                   at=d.get("at", 0.0), tenant=d.get("tenant") or "",
+                   # NOT coerced: a non-integer epoch stays what it is so grant_problem refuses the grant,
+                   # the same way every other malformed stored field is refused rather than repaired.
+                   revocation_epoch=d.get("revocation_epoch") or 0)
 
     def covers(self, resource_name: str) -> bool:
         if not isinstance(resource_name, str) or not isinstance(self.resource_name, str):
@@ -270,6 +284,10 @@ def grant_problem(g: "Grant") -> str | None:
         return "row_column must be a clean column name (non-blank, no padding, no commas) for an own/in grant"
     if g.row_scope == "in" and not isinstance(g.row_values, (list, tuple, set, frozenset)):
         return "row_values must be a list"
+    if g.tenant and not _ids.valid_identifier(g.tenant):     # contract v1: a set tenant must be a clean id
+        return "tenant is not a valid identifier"
+    if type(g.revocation_epoch) is not int or g.revocation_epoch < 0:
+        return "revocation_epoch must be a non-negative integer"
     return None
 
 
@@ -318,10 +336,19 @@ class AccessDecision:
     # rule masks it (exposed iff some matching rule exposes it). Empty for a decision with no per-grant detail
     # (a privileged bypass, a denial, a hand-built decision): then ``row_filter``/``masked_columns`` apply uniformly.
     rules: list = field(default_factory=list)
+    # contract v1 (authz_contract): echo of the tenancy/epoch the decision was evaluated under.
+    # Empty/0 is the pre-contract shape — omitted from to_dict, so every existing response is byte-identical.
+    tenant: str = ""
+    decision_epoch: int = 0
 
     def to_dict(self) -> dict:
-        return {"allowed": self.allowed, "reason": self.reason, "row_filter": self.row_filter,
-                "masked_columns": self.masked_columns, "rules": self.rules}
+        d = {"allowed": self.allowed, "reason": self.reason, "row_filter": self.row_filter,
+             "masked_columns": self.masked_columns, "rules": self.rules}
+        if self.tenant:
+            d["tenant"] = self.tenant
+        if self.decision_epoch:
+            d["decision_epoch"] = self.decision_epoch
+        return d
 
     @property
     def per_row_masks(self) -> bool:
@@ -385,9 +412,10 @@ class _SecretBox:
         except OSError:
             problem = None          # unreadable: the read below reports it
         if problem:
-            if not allow_generated_key_dev:
+            if not allow_generated_key_dev or not _files.HAS_POSIX_MODES:
+                # Without POSIX modes (Windows) no development switch makes an exposed key file usable: the opt-in only ever meant "generate one if there is none"
                 self._plaintext_or_raise(
-                    f"the key file {kf} {problem}. Fix it (`chmod 600 {kf}` and own it as the service user), or provide the "
+                    f"the key file {kf} {problem}. Fix it ({_key_fix_hint(kf)}), or provide the "
                     f"key as PERMISSIONS_KEY instead (a mounted secret is often 0444 and root-owned: use the environment "
                     f"variable there)")
                 return
@@ -411,8 +439,8 @@ class _SecretBox:
             try:
                 key = AESGCM.generate_key(bit_length=256)
                 _ensure_private_dir(kf.parent)
-                fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
-                with os.fdopen(fd, "w") as f:
+                fd = _files.create_exclusive(kf)
+                with os.fdopen(fd, "w", newline="\n") as f:
                     f.write(base64.b64encode(key).decode())
             except Exception as e:  # noqa: BLE001
                 self._plaintext_or_raise(f"could not generate a key file at {kf} ({type(e).__name__})")
@@ -479,22 +507,23 @@ def provision_key_file(directory: str, path: "str | None" = None) -> tuple[Path,
         except Exception as e:  # noqa: BLE001
             raise GrantStorageError(f"the existing key file {kf} is unusable ({type(e).__name__}); not replacing it") from e
         return kf, False
-    fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as f:
+    fd = _files.create_exclusive(kf)
+    with os.fdopen(fd, "w", newline="\n") as f:
         f.write(base64.b64encode(AESGCM.generate_key(bit_length=256)).decode())
     return kf, True
 
 
+def _key_fix_hint(kf) -> str:
+    if _files.HAS_POSIX_MODES:
+        return f"`chmod 600 {kf}` and own it as the service user"
+    return f"keep it under your user profile and restrict it to your account: `icacls \"{kf}\" /inheritance:r /grant:r \"%USERNAME%:F\"`"
+
+
 def _key_file_exposure(path) -> str | None:
-    """Why an existing key file is too exposed to use (wider than 0600, or not owned by the running user), or None. The mode of the
-    file a symlink points at is what counts. Platforms without ``geteuid`` skip the ownership test."""
-    st = os.stat(path)
-    why = []
-    if st.st_mode & 0o177:
-        why.append(f"has mode {stat.S_IMODE(st.st_mode):04o}, wider than 0600")
-    if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
-        why.append("is not owned by the running user")
-    return " and ".join(why) or None
+    """Why an existing key file is too exposed to use, or None. POSIX (Linux, macOS): wider than 0600, or not owned by the running
+    user (the mode of the file a symlink points at is what counts; platforms without ``geteuid`` skip the ownership test). Windows: the
+    file must live under the user's profile and its DACL must show no access for anyone but the user (see ``_platform.files``)."""
+    return _files.private_file_problem(path)
 
 
 # ── file helpers: private modes, no symlinks, atomic + durable replacement ──
@@ -510,47 +539,24 @@ def _refuse_symlink(path, what: str) -> None:
 
 
 def _ensure_private_dir(path) -> None:
-    """Create ``path`` and any MISSING parents with mode 0700 (``os.makedirs(mode=)`` would leave the intermediate ones at the default).
-    Directories that already exist are left exactly as they are."""
-    path = os.path.abspath(os.fspath(path))
-    missing = []
-    while path and not os.path.isdir(path):
-        missing.append(path)
-        parent = os.path.dirname(path)
-        if parent == path:
-            break
-        path = parent
-    for d in reversed(missing):
-        try:
-            os.mkdir(d, 0o700)
-        except FileExistsError:
-            pass
+    """Create ``path`` and any MISSING parents private (0700 on POSIX; a user-only protected DACL on Windows). Directories that already
+    exist are left exactly as they are."""
+    _files.ensure_private_dir(path)
 
 
 def _fsync_dir(path) -> None:
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+    _files.fsync_dir(path)
 
 
 def _read_regular(path) -> bytes:
-    """Read a regular file without following a symlink."""
-    fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as f:
-        return f.read()
+    """Read a regular file without following a symlink (and, on Windows, without losing a race with an atomic replace)."""
+    return _files.read_regular(path)
 
 
 def _copy_private(src, dst) -> None:
     """Copy ``src`` to a NEW file ``dst`` (0600, never an existing path, never through a symlink), durably."""
     data = _read_regular(src)
-    fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
+    fd = _files.create_exclusive(dst)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
         f.flush()
@@ -559,27 +565,19 @@ def _copy_private(src, dst) -> None:
 
 
 def _atomic_write(path, data: bytes) -> None:
-    """Replace ``path`` with ``data`` all-or-nothing: temp file in the same directory (0600, created
-    exclusively), write + fsync, ``os.replace``, fsync the directory. A failure — or a crash — leaves the
+    """Replace ``path`` with ``data`` all-or-nothing: temp file in the same directory (private, created
+    exclusively), write + fsync, replace, fsync the directory. A failure — or a crash — leaves the
     previous file or the complete new one, never a partial one; the temp file is removed on failure."""
     path = os.fspath(path)
     _refuse_symlink(path, "grants file")
-    d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(path) + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    _fsync_dir(d)
+        _files.atomic_write(path, data)
+    except PermissionError as e:
+        if not _files.is_sharing_violation(e):
+            raise                     # a directory this process may not write to, a privilege error: unchanged on every platform
+        # Windows only: the destination is still held open elsewhere after the bounded retry
+        raise GrantStorageBusy(f"could not replace {path}: it is in use by another process ({type(e).__name__}); the previous file was left "
+                                f"as it was. Retry the operation.") from e
 
 
 class _Doc(NamedTuple):
@@ -631,9 +629,9 @@ class GrantStore:
         plaintext file is an error, never something to migrate."""
         self.read_only = bool(read_only)
         self.dir = directory or os.getenv("PERMISSIONS_DIR", "/data/agentic-os/permissions")
-        if _fcntl is None:
-            raise GrantStorageError("GrantStore needs POSIX file locking (fcntl), which this platform does not "
-                                    "provide — refusing to run without a lock")
+        if not _locks.available():
+            raise GrantStorageError("GrantStore needs inter-process file locking (flock or LockFileEx), which this platform "
+                                    "does not provide — refusing to run without a lock")
         if allow_plaintext_dev is None:
             allow_plaintext_dev = _env_yes("PERMISSIONS_ALLOW_PLAINTEXT_DEV")
         if migrate_plaintext is None:
@@ -698,30 +696,22 @@ class GrantStore:
             fd = os.open(Path(self.dir) / ".grants.lock", os.O_RDWR | os.O_CREAT | _O_NOFOLLOW, 0o600)
         except OSError as e:
             raise GrantStorageError(f"cannot take the grants lock in {self.dir} ({type(e).__name__})") from e
-        locked = False
         try:
-            deadline = time.monotonic() + self.lock_timeout
-            while True:
-                try:
-                    _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-                    locked = True
-                    break
-                except OSError as e:
-                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
-                        raise GrantStorageError(f"cannot take the grants lock in {self.dir} ({type(e).__name__})") from e
-                    if time.monotonic() >= deadline:
-                        raise GrantStorageError(
-                            f"could not take the grants lock in {self.dir} within {self.lock_timeout:g} s — another process "
-                            f"holds it (a stuck writer?); the data was not changed. Retry, find the holder, or raise "
-                            f"PERMISSIONS_LOCK_TIMEOUT.") from None
-                    time.sleep(0.02)
-            yield
-        finally:
             try:
-                if locked:
-                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                _locks.acquire(fd, self.lock_timeout)
+            except _locks.LockTimeout:
+                raise GrantStorageError(
+                    f"could not take the grants lock in {self.dir} within {self.lock_timeout:g} s — another process "
+                    f"holds it (a stuck writer?); the data was not changed. Retry, find the holder, or raise "
+                    f"PERMISSIONS_LOCK_TIMEOUT.") from None
+            except OSError as e:
+                raise GrantStorageError(f"cannot take the grants lock in {self.dir} ({type(e).__name__})") from e
+            try:
+                yield
             finally:
-                os.close(fd)
+                _locks.release(fd)
+        finally:
+            os.close(fd)
 
     def _migrate_legacy(self, legacy: Path, enc: Path, enabled: bool) -> None:
         if not enabled:

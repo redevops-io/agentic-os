@@ -1,7 +1,7 @@
 # Reference apps
 
 The reference application implementations that run on the Mission Runtime — one focused
-agentic system per business function. (Each `apps/*/LICENSE` is a plain AGPL-3.0 text, while the repository
+agentic system per business function. (Each `apps/*/LICENSE` is a plain AGPL-3.0 text and each app is declared AGPL-3.0-only in the root `LICENSE.md`, while the repository
 root [LICENSE.md](../LICENSE.md) is titled "source-available, not open source".) Each app is the *implementation* (agents +
 operators + core logic + seed data); the **deployment** is kept separate — a self-contained compose
 demo lives in [`../deploy/`](../deploy/), while the full Terraform / Ansible / k3s machinery is
@@ -51,5 +51,5 @@ container refuses to start with a clear message if `/data` is not writable.
   Bind mounts need the same `chown` on the host path.
 - Apps that talk to the Docker socket need the socket's group added to the container, e.g. compose
   `group_add: ["<docker gid>"]` (find it with `stat -c %g /var/run/docker.sock`):
-  - edge-sentinel (docker CLI used for `cscli`, Trivy/Syft/Cosign inspection)
+  - edge-sentinel: only if an operator enables a Docker-backed feature; see its README ("Docker access"): use a restricted, operator-supplied proxy or a separate scanner worker, not the raw socket
   - compliance (only when `scan.sh` runs in its docker mode)

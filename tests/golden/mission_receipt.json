@@ -1,0 +1,52 @@
+{
+ "approvals": [
+  {
+   "approver": "approver:acme",
+   "capability": "pay",
+   "decision": "approve",
+   "inputs_sha256": "abababababababababababababababababababababababababababababababab",
+   "node_id": "n1",
+   "seq": 5
+  }
+ ],
+ "compensation": {
+  "compensated": [],
+  "compensated_unverified": [],
+  "compensation_acknowledged": [],
+  "compensation_failed": {},
+  "compensation_skipped": {},
+  "nodes": {},
+  "readback_only": true
+ },
+ "credential": "broker-mediated \u2014 values never logged",
+ "evidence_refs": [],
+ "goal": "pay the invoice",
+ "ledger_chain": {
+  "checked": 5,
+  "ok": true,
+  "unchained": 0
+ },
+ "ledger_head": "8093f7af386105ce8857be6a1028768a08f212b9e8e0dd70318d68935c072e34",
+ "mission_id": "m-1",
+ "outcome": {
+  "business_value": 12.5,
+  "kind": "done",
+  "success": true
+ },
+ "state": "planning",
+ "steps": [
+  {
+   "capability": null,
+   "node_id": "n1",
+   "result": {
+    "amount": 100,
+    "currency": "EUR",
+    "tags": [
+     "\u00e9",
+     "e\u0301"
+    ]
+   },
+   "seq": 4
+  }
+ ]
+}

@@ -9,7 +9,7 @@ modules:
     pain: network security & systems handled
     deploy: compose
     port: 8203
-    tagline: Your firewall, triaged and explained by an agent.
+    tagline: Threat triage and approval-gated response.
     agents: [triage, remediation]
     approval_required: [remediation]
   - name: agentic-support
@@ -133,6 +133,15 @@ modules:
     pain: build & automate (ship fast, cheap)
     deploy: tool
     agents: [coder]
+  - name: redevops-qa
+    source:
+    repo: redevops-io/redevops-qa
+    pain: QA & test evidence for your own rAIls deployments
+    deploy: compose
+    port: 8080
+    tagline: Frozen test plans run against your rAIls deployment, with a hash-chained evidence bundle.
+    agents: [qa]
+    approval_required: [approve_run]
   - name: video-ad
     source: apps/video-ad
     pain: video-ad generation (operator)

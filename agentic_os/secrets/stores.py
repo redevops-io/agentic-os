@@ -22,6 +22,7 @@ import stat
 import urllib.request
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from .._platform import files as _files
 from runtime_contracts.protocol.secrets import SecretDescriptor, SecretRef
 from runtime_contracts.secrets_local.store import SecretAccessError
 
@@ -67,8 +68,13 @@ class EncryptedFileSecretStore:
             raise SecretAccessError("secret not found")
         if os.path.islink(target):
             raise SecretAccessError("refusing to read a symlinked secret")
-        if os.lstat(target).st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-            raise SecretAccessError("refusing world/group-accessible secret file")
+        if _files.HAS_POSIX_MODES:
+            if os.lstat(target).st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                raise SecretAccessError("refusing world/group-accessible secret file")
+        else:       # Windows has no mode bits: the file must be under the user's profile with a DACL that shows no access for anyone else
+            why = _files.private_file_problem(target)
+            if why:
+                raise SecretAccessError(f"refusing a secret file that is not private to the running user: it {why}")
 
     def _seal(self, plaintext: bytes) -> bytes:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -96,13 +102,11 @@ class EncryptedFileSecretStore:
     def put(self, *, namespace: str, path: str, value: bytes,
             classifications: Tuple[str, ...] = (), metadata: Optional[Dict[str, str]] = None) -> SecretRef:
         target = self._resolve(namespace, path)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, self._seal(value))
-        finally:
-            os.close(fd)
-        os.chmod(target, 0o600)
+        if _files.HAS_POSIX_MODES:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+        else:
+            _files.ensure_private_dir(os.path.dirname(target))
+        _files.atomic_write(target, self._seal(value))          # temp + fsync + replace, 0600 (a user-only DACL on Windows): never a half-written secret
         return SecretRef(provider=self.provider, namespace=namespace, path=path, version="1")
 
     def rotate(self, ref: SecretRef) -> SecretRef:

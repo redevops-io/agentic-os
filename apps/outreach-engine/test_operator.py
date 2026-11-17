@@ -76,6 +76,9 @@ def _fake_twenty(monkeypatch):
     core._LIVE_CACHE.update(ts=0.0, rows=[])            # no cached live signals
     monkeypatch.setattr(core, "TWENTY_API_KEY", "test-key")
     monkeypatch.setattr(core.urllib.request, "urlopen", _fake_urlopen)
+    # hermetic against this machine's real ~/.zshrc exports: no test may attempt a real SMTP connection
+    monkeypatch.setattr(core, "GMAIL_SMTP_USER", "")
+    monkeypatch.setattr(core, "GMAIL_SMTP_APP_PASSWORD", "")
     yield
 
 
@@ -114,16 +117,26 @@ def test_capabilities_manifest(client):
     m = client.get("/capabilities").json()
     assert m["operator"] == "outreach-engine"
     caps = {c["name"]: c for c in m["capabilities"]}
-    assert set(caps) == {"outreach.refresh", "outreach.approve", "outreach.send_all"}
+    assert set(caps) == {"outreach.refresh", "outreach.enrich", "outreach.draft_pitch",
+                         "outreach.approve", "outreach.send_all", "outreach.check_replies",
+                         "outreach.follow_up"}
     # the gate is modules.yaml `approval_required: [send_sequence]` — only the send is gated
     assert caps["outreach.send_all"]["approval_required"] is True
     assert caps["outreach.refresh"]["approval_required"] is False
+    assert caps["outreach.enrich"]["approval_required"] is False      # spends provider credits, not trust
+    assert caps["outreach.draft_pitch"]["approval_required"] is False  # only writes the in-memory draft
     assert caps["outreach.approve"]["approval_required"] is True      # syncs a lead to Twenty -> gated
-    # side_effecting = writes/sends: refresh only reads, approve + send_all mutate the world
+    # side_effecting = writes/sends: refresh/enrich/draft_pitch only read, approve + send_all mutate the world
     assert caps["outreach.refresh"]["side_effecting"] is False
+    assert caps["outreach.enrich"]["side_effecting"] is False
+    assert caps["outreach.draft_pitch"]["side_effecting"] is False
+    assert caps["outreach.check_replies"]["side_effecting"] is False
+    assert caps["outreach.follow_up"]["side_effecting"] is False
     assert caps["outreach.approve"]["side_effecting"] is True
     assert caps["outreach.send_all"]["side_effecting"] is True
     assert "outreach_pipeline" in caps["outreach.refresh"]["provides"]
+    assert "contact_email" in caps["outreach.enrich"]["provides"]
+    assert "pitch_drafted" in caps["outreach.draft_pitch"]["provides"]
     assert "lead_synced" in caps["outreach.approve"]["provides"]
     assert "sequences_sent" in caps["outreach.send_all"]["provides"]
     assert "outreach:write" in caps["outreach.approve"]["permissions"]
@@ -135,6 +148,32 @@ def test_invoke_refresh_builds_pipeline_no_write(client):
     assert res["ok"] is True and res["action"] == "refresh"
     assert res["n"] == len(core.DEMO)          # offline signal sources → DEMO leads ranked
     assert _Twenty.posts == []                 # read-only: nothing written to Twenty
+
+
+def test_invoke_draft_pitch_via_the_operator_sdk(client, monkeypatch):
+    """The Sidekick/Mission-Runtime-relevant path: /invoke, not /api/run -- proves the deferred
+    operator->app import actually resolves through the real HTTP capability surface."""
+    import importlib as _il
+    app_mod = _il.import_module("outreach-engine.app")
+    monkeypatch.setattr(app_mod, "_llm", lambda *a, **k: "")   # deterministic: template fallback
+    _result(client, "outreach.refresh", {})
+    acct = core.DEMO[0]["account"]
+    res = _result(client, "outreach.draft_pitch", {"account": acct})
+    assert res["ok"] is True and res["action"] == "draft_pitch" and res["draft_source"] == "template"
+    assert "<table" in res["html"]
+    row = next(r for r in core._STATE["accounts"] if r["account"] == acct)
+    assert row["draft"]["body"] == res["body"]
+
+
+def test_invoke_follow_up_via_the_operator_sdk(client, monkeypatch):
+    import importlib as _il
+    app_mod = _il.import_module("outreach-engine.app")
+    monkeypatch.setattr(app_mod, "_llm", lambda *a, **k: "")
+    _result(client, "outreach.refresh", {})
+    acct = core.DEMO[0]["account"]
+    res = _result(client, "outreach.follow_up", {"account": acct})
+    assert res["ok"] is True and res["action"] == "follow_up" and res["follow_up_for"] == "no_reply"
+    assert "<table" in res["html"]
 
 
 def test_invoke_approve_syncs_pilot_to_twenty(client):

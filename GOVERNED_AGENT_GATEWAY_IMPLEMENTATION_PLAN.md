@@ -393,9 +393,9 @@ Mission resumes
 
 For reversible actions, optionally add an undo window backed by declared compensation capabilities.
 
-## 12. Open-core placement
+## 12. Edition placement
 
-### Open source
+### Source-available core (family licence)
 - MCP/Agent Gateway protocol layer
 - capability manifest schema
 - filtered capability registry

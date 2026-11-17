@@ -1,4 +1,4 @@
-"""edge-sentinel · live permissions demo (row-scope + column-mask over the vuln DB).
+"""edge-sentinel · interactive permissions demo (row-scope + column-mask over the vuln DB).
 
 A control-plane-style UI to set a "query agent"'s permissions on the DB + table and watch the
 resulting query re-slice live: full access (left) vs the scoped grant (right). The decision mirrors
@@ -164,7 +164,7 @@ def query(body: dict) -> dict:
 PERM_PAGE = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vuln-DB Access Control — live permissions</title>
+<title>Vuln-DB Access Control — interactive permissions demo</title>
 <style>
 :root{--primary:#4fd1c5;--bg:#0e0e10;--card:#141416;--card2:#1a1a1d;--bd:#2b2b30;--tx:#e7e5ea;--mut:#9b99a1}
 *{box-sizing:border-box}
@@ -219,8 +219,8 @@ code{background:#000;border:1px solid var(--bd);border-radius:5px;padding:1px 6p
 <body>
 <div class="wrap">
 <header>
-<h1>&#128274; Vuln-DB Access Control &mdash; live permissions</h1>
-<p>The same retrieval, two ways &mdash; <b>permissionless</b> (Security Admin, left) vs <b>permissioned</b> (the scoped Query Agent, right). Change the agent's grant on <code id="res">context_runtime.vulns</code> below and the right column re-slices live: withheld hits are <b>dimmed</b> (row scope), masked fields show as <b>&bull;&bull;&bull;</b>. <span id="src"></span></p>
+<h1>&#128274; Vuln-DB Access Control &mdash; interactive permissions demo</h1>
+<p>The same retrieval, two ways &mdash; <b>permissionless</b> (Security Admin, left) vs <b>permissioned</b> (the scoped Query Agent, right). Change the agent's grant on <code id="res">context_runtime.vulns</code> below and the right column re-slices live: withheld hits are <b>dimmed</b> (row scope), masked fields show as <b>&bull;&bull;&bull;</b>. <span id="src"><b style="color:#e7d488">Data source:</b> none loaded yet. The rows are read when the page loads; if the Apache Doris vulnerability table is not reachable, they are built-in <b>SAMPLE DATA</b>.</span></p>
 </header>
 
 <div class="controls">
@@ -340,8 +340,8 @@ async function refresh(){
     renderEcoChips(d.scopes||[]);
     document.getElementById("res").textContent=d.db+"."+d.table;
     document.getElementById("src").innerHTML = d.source==="doris"
-      ? "Live Doris data ("+d.total+" rows)."
-      : '<b style="color:#e7d488">Sample data</b> &mdash; Doris unreachable ('+d.total+' rows).';
+      ? '<b>Data source:</b> Apache Doris vulnerability table, read just now ('+d.total+' rows of advisory data, not scan results).'
+      : '<b style="color:#e7d488">SAMPLE DATA</b> &mdash; '+d.total+' built-in example rows; the Apache Doris vulnerability table was not reachable. Nothing below was read from a live database.';
     document.getElementById("lim-sub").textContent = "role: "+cfg().role;
     document.getElementById("full-count").textContent = d.full.count+" hits";
     const L=d.limited;

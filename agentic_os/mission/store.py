@@ -13,6 +13,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
+from .._platform import files as _files, locks as _locks
 from .types import (
     Mission, MissionState, ExecutionPlan, ExecutionGraph, Node, NodeState,
     Belief, HumanTask, now, new_id, to_jsonable,
@@ -173,12 +174,8 @@ class EventStore:
             if self._path:
                 # The exclusive inter-process lock is taken on the log file itself (no sidecar file), so
                 # read-only parent directories and single-file bind mounts work.
-                with open(self._path, "ab") as fh:
-                    try:
-                        import fcntl  # noqa: PLC0415
-                        fcntl.flock(fh, fcntl.LOCK_EX)
-                    except ImportError:
-                        pass                               # no inter-process lock on this platform
+                _files.touch_private(self._path)           # Windows: the log is created private, never under the parent's ACL
+                with open(self._path, "ab") as fh, _locks.locked(fh):     # flock on POSIX, LockFileEx on Windows; no lock means no append
                     self._read_tail()                      # see other writers' events first, so seq is global
                     size = os.fstat(fh.fileno()).st_size
                     prefix = b""

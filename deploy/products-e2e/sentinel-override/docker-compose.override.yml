@@ -1,0 +1,10 @@
+# e2e additions (not part of the product compose): service credential for Projects and the shared approval secret
+services:
+  edge-sentinel:
+    environment:
+      AGENTIC_OS_CONTROL_TOKEN_FILE: /run/secrets/control_token
+      AGENTIC_OS_APPROVAL_SECRET: "${AGENTIC_OS_APPROVAL_SECRET}"
+    secrets: [control_token]
+secrets:
+  control_token:
+    file: ./secrets/control_token

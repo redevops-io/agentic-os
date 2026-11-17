@@ -159,15 +159,18 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
         topic="Cost & licensing",
         keywords=("how much", "cost", "pricing", "price", "free", "open source", "open-source",
                   "license", "licence", "licensing", "agpl", "pay", "subscription", "trial"),
-        question="What does it cost — is it open source?",
+        question="What does it cost, and how is it licensed?",
         answer=(
-            "The core stack is open source (AGPL-3.0) and free to self-host — you run it on your "
-            "own infrastructure with no licence fee. What you pay for is your own compute and any "
+            "The core stack is source-available under the family licence (AGPL-3.0-or-later with the "
+            "Commons Clause), not open source. You can self-host it on your own infrastructure, including "
+            "inside a company for its own business, with no licence fee; the Commons Clause removes the "
+            "right to charge third parties for the software, for hosting it, or for support or consulting "
+            "whose value derives substantially from it. What you pay for is your own compute and any "
             "cloud model or cloud-suite usage you choose to enable. Hosted/managed options and "
             "commercial support are a separate conversation — reach the team at #agentic-apps on "
             "Slack or info@redevops.io. (No pricing tiers are quoted here so this answer can't go "
             "stale — ask the team for current commercial terms.)"),
-        source="AGPL-3.0 flagship repos · self-host is free · commercial terms via contact"),
+        source="LICENSE.md (family licence) · self-host is free · commercial terms via contact"),
     KnowledgeEntry(
         id="compliance",
         topic="Governance",
@@ -597,12 +600,18 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "renewal outreach, or just monitor) with a predicted value and — because they're outbound "
             "— an approval gate; the shared runtime selects the highest-utility one and LEARNS from "
             "observed outcomes (reply → meeting → conversion → loss) which action actually works, "
-            "correcting its priors over time. Two honesty caveats: this is validated IN SIMULATION "
-            "(observing outcomes measurably improves selection on a controlled environment) — it is "
-            "NOT a real-world commercial-lift claim, which needs live deal outcomes; and the loop keeps "
-            "governance intact (a consequential send still needs approval) no matter what it learns."),
+            "correcting its priors over time. Three honesty caveats: the learning mechanism itself is "
+            "validated IN SIMULATION (observing outcomes measurably improves selection on a controlled "
+            "environment) — it is still NOT A REAL-WORLD commercial-lift claim, which needs an actually "
+            "promoted policy, not just a connected signal; the conversion/loss half of the outcome "
+            "signal is now CONNECTED TO LIVE Twenty opportunity data (closed_won/closed_lost) — "
+            "connected to live outcomes, no promotion yet, since nothing has been separately approved "
+            "through the promotion gate; the reply/meeting half of the signal still has no live source. "
+            "The loop keeps governance intact (a consequential send still needs approval, and nothing "
+            "promotes automatically from a connected signal) no matter what it learns."),
         source="Shipped producer: agentic_os/crm_nba.py → shared loop (priority_engine select_action + "
-               "outcome_learning UtilityModel), simulation-validated · Roadmap: live commercial outcomes"),
+               "outcome_learning UtilityModel) · conversion/loss connected to live Twenty opportunities "
+               "via agentic_os/crm_outcome_live.py (2026-11-15) · reply/meeting still simulation-only"),
     KnowledgeEntry(
         id="support-resolution-intelligence",
         topic="Proactive intelligence (roadmap)",

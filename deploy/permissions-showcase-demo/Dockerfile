@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 WORKDIR /app
+# Which commit this image was built from, stamped at build time so GET /api/version can name it. deploy.sh
+# passes --build-arg from the source checkout; an unstamped build reports "unknown" rather than a guess.
+ARG AGENTIC_OS_BUILD_REVISION=unknown
+ARG AGENTIC_OS_BUILD_TIME=unknown
+ENV AGENTIC_OS_BUILD_REVISION="$AGENTIC_OS_BUILD_REVISION" AGENTIC_OS_BUILD_TIME="$AGENTIC_OS_BUILD_TIME"
 # fastapi/uvicorn for the surface; cryptography so the GrantStore does REAL AES-GCM at-rest (encrypted=True) instead of the dev plaintext
 # fallback. Pinned to the versions the kernel test suite runs against (a moving range is an unreviewed supply-chain change).
 RUN pip install --no-cache-dir "fastapi==0.162.0" "uvicorn==0.54.0" "pydantic==2.14.1" "cryptography==50.0.2" "pyyaml==6.0.3"

@@ -1,0 +1,650 @@
+# Real Windows code-signing for Agentic Apps R0-prime (Microsoft Store S-A readiness), using the
+# repository's own documented, reviewed procedure: packaging/signing/SIGNING-PROCEDURE-R0PRIME.md.
+#
+# This workflow performs REAL, consequential Authenticode signing against a live Azure Trusted Signing
+# (Public Trust) certificate under the company's legal identity. It is workflow_dispatch only — never
+# on push or pull_request — and the signing jobs run under the `windows-signing` GitHub Environment,
+# whose OIDC federated credential is scoped exactly to this repo + this environment (no stored secret
+# exists anywhere; azure/login authenticates via short-lived federated tokens only).
+#
+# Shape (packaging/signing/SIGNING-PROCEDURE-R0PRIME.md section 6): two rounds, because the installer
+# containers must be rebuilt after the inner executables (launcher, sidecar, NSIS uninstaller) are signed.
+#   collect (windows-2022)        -> build unsigned, capture inner-file requests via the signCommand hook
+#   sign-inner (macos-14, Azure)  -> Authenticode-sign the inner files with sign_windows_r0prime_v3.sh --real
+#   apply-and-sign-container       -> rebuild the installers with the signed inner files substituted in,
+#     (windows-2022 then macos-14)   then sign the two installer containers the same way
+#
+# distribution=no throughout: this authorizes a signed CANDIDATE, not a distribution build. It does not
+# invoke --distribution and does not claim the distribution-blocking legal decisions are resolved.
+name: windows-signing-r0prime
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type EXACTLY: sign fc254a34610dcd84b4cd10147299c7d12fca4119'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  BUILD_COMMIT: fc254a34610dcd84b4cd10147299c7d12fca4119
+  PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.1"
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm the exact commit phrase was typed
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "sign fc254a34610dcd84b4cd10147299c7d12fca4119" ]; then
+            echo "::error::confirmation phrase did not match exactly; refusing to proceed"
+            exit 1
+          fi
+      - name: BUILD_COMMIT must actually exist in this repository (sanity, not identity)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+      - run: |
+          if ! git cat-file -e "${BUILD_COMMIT}^{commit}" 2>/dev/null; then
+            echo "::error::BUILD_COMMIT ($BUILD_COMMIT) does not exist in this repository"
+            exit 1
+          fi
+          TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
+          if [ "${TREE:0:8}" != "b9f490a7" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected b9f490a7 prefix (got $TREE) - refusing"
+            exit 1
+          fi
+          echo "BUILD_COMMIT verified present, tree prefix b9f490a7 confirmed."
+
+  collect:
+    needs: guard
+    runs-on: windows-2022
+    env:
+      UV_PYTHON_PREFERENCE: only-system
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      # Pinned explicitly to BUILD_COMMIT, independent of whatever ref/branch this run was dispatched
+      # against - the actual product build is always of this exact commit's tree, never "whatever HEAD
+      # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+      - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
+        shell: bash
+        run: |
+          GOT="$(git rev-parse HEAD)"
+          if [ "$GOT" != "$BUILD_COMMIT" ]; then
+            echo "::error::checked-out HEAD ($GOT) does not equal BUILD_COMMIT ($BUILD_COMMIT)"
+            exit 1
+          fi
+
+      - name: CPython 3.12.10 (packaging/toolchain.env PYTHON_VERSION)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12.10"
+          check-latest: false
+
+      - name: Install uv (packaging/toolchain.env UV_VERSION)
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          version: "0.12.16"
+
+      - name: Rust toolchain 1.98.1 (packaging/toolchain.env RUST_VERSION)
+        uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7  # branch 1.98.1
+        with:
+          toolchain: "1.98.1"
+
+      - name: Pins are consistent
+        shell: bash
+        run: python -I packaging/verify-pins.py
+
+      - name: Task 1 - reproducible wheelhouse
+        shell: bash
+        run: ./packaging/build-wheelhouse.sh
+
+      - name: Task 2 - freeze the Python sidecar (pass 1)
+        shell: bash
+        run: ./packaging/build-sidecar.sh
+
+      - name: Task 3 - licence notices from the SBOM
+        shell: bash
+        run: ./packaging/build-notices.sh
+
+      - name: Task 2b - freeze again, embedding the Licenses folder
+        shell: bash
+        env:
+          REDEVOPS_LICENSES_DIR: ${{ github.workspace }}/deploy/launcher/src-tauri/licenses
+        run: ./packaging/build-sidecar.sh
+
+      - name: Stage sidecar for Tauri externalBin
+        shell: bash
+        run: ./packaging/stage-sidecar.sh
+
+      - name: Install Tauri CLI 2.11.4
+        run: cargo install tauri-cli --version 2.11.4 --locked
+
+      - name: Build the launcher with --no-bundle (keep a pristine unpatched exe)
+        shell: bash
+        working-directory: deploy/launcher/src-tauri
+        run: |
+          cargo tauri build --no-bundle -- --locked
+          cp target/release/agentic-r0prime.exe target/release/agentic-r0prime.exe.pristine
+
+      - name: Write the signCommand override (handoff helper has no credential)
+        shell: bash
+        run: |
+          # github.workspace on windows-2022 resolves with backslashes (e.g. D:\a\agentic-os\agentic-os),
+          # which breaks naive embedding into a JSON string literal (\a is not a valid JSON escape).
+          WS_FWD=$(printf %s "${{ github.workspace }}" | tr '\\' '/')
+          # cmd must be the absolute path to Git Bash, not the bare string "bash": on windows-2022 runners
+          # C:\Windows\System32\bash.exe (the WSL launcher stub) shadows Git Bash on PATH, and no WSL
+          # distribution is installed, so a bare "bash" cmd fails immediately with
+          # "Windows Subsystem for Linux has no installed distributions." before the script ever runs.
+          cat > "$RUNNER_TEMP/override.json" <<JSON
+          {"bundle":{"windows":{"signCommand":{"cmd":"C:/Program Files/Git/bin/bash.exe","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
+          JSON
+
+      - name: Collect inner files for MSI (round 1, package type msi)
+        shell: bash
+        working-directory: deploy/launcher/src-tauri
+        env:
+          R0P_HANDOFF_MODE: collect
+          R0P_HANDOFF_DIR: ${{ github.workspace }}/round1
+        run: |
+          mkdir -p "$R0P_HANDOFF_DIR"
+          cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
+          # -v: tauri-bundler logs a signCommand subprocess's own stdout/stderr at debug level only;
+          # without it, a real failure inside r0prime_win_signcommand.sh is swallowed and all that
+          # surfaces is the generic "failed to run bash" wrapper error.
+          cargo tauri bundle -v --bundles msi --config "$(cat "$RUNNER_TEMP/override.json")"
+
+      - name: Collect inner files for NSIS (round 1, package type nsis)
+        shell: bash
+        working-directory: deploy/launcher/src-tauri
+        env:
+          R0P_HANDOFF_MODE: collect
+          R0P_HANDOFF_DIR: ${{ github.workspace }}/round1
+        run: |
+          cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
+          cargo tauri bundle -v --bundles nsis --config "$(cat "$RUNNER_TEMP/override.json")"
+
+      - name: Show what was collected (no secrets - these are unsigned files)
+        shell: bash
+        run: |
+          echo "--- requests-inner ---"; ls -la round1/requests-inner || true
+          echo "--- REQUESTS.sha256 ---"; cat round1/REQUESTS.sha256 || true
+          echo "--- requests-container ---"; ls -la round1/requests-container || true
+
+      - name: Upload round1 (unsigned inner requests + full target/release tree for byte-identical round 2)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: round1-state
+          retention-days: 2
+          path: |
+            round1/requests-inner/**
+            round1/REQUESTS.sha256
+            deploy/launcher/src-tauri/target/release/agentic-r0prime.exe.pristine
+            deploy/launcher/src-tauri/target/release/redevops-sidecar.exe
+            deploy/launcher/src-tauri/target/release/licenses/**
+            deploy/launcher/src-tauri/target/release/build/**
+            deploy/launcher/src-tauri/target/release/resources/**
+
+  sign-inner:
+    needs: collect
+    runs-on: macos-15
+    environment: windows-signing
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+
+      - name: Download round1 state
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: round1-state
+          path: round1-dl
+
+      - name: Azure login via OIDC (no stored secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Confirm the signer role is actually held (read-only check, no signing yet)
+        run: |
+          az role assignment list --assignee-object-id "$(az ad sp show --id "${{ vars.AZURE_CLIENT_ID }}" --query id -o tsv)" \
+            --query "[?roleDefinitionName=='Artifact Signing Certificate Profile Signer']" -o table
+
+      - name: Provision tools - JDK (Temurin 21, macOS aarch64, portable layout the script expects)
+        run: |
+          set -euo pipefail
+          TOOLS="$RUNNER_TEMP/tools"
+          mkdir -p "$TOOLS/jdk/x"
+          curl -fsSL -o "$RUNNER_TEMP/jdk.tar.gz" \
+            "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz"
+          tar -xzf "$RUNNER_TEMP/jdk.tar.gz" -C "$TOOLS/jdk/x"
+          ls -d "$TOOLS"/jdk/x/*/Contents/Home
+          "$TOOLS"/jdk/x/*/Contents/Home/bin/java -version
+
+      - name: Provision tools - jsign 7.6 jar (hash-pinned)
+        run: |
+          set -euo pipefail
+          TOOLS="$RUNNER_TEMP/tools"
+          mkdir -p "$TOOLS/jsign"
+          curl -fsSL -o "$TOOLS/jsign/jsign-7.6.jar" \
+            "https://github.com/ebourg/jsign/releases/download/7.6/jsign-7.6.jar"
+          GOT="$(shasum -a 256 "$TOOLS/jsign/jsign-7.6.jar" | awk '{print $1}')"
+          WANT="6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
+          if [ "$GOT" != "$WANT" ]; then echo "::error::jsign jar sha256 mismatch: got $GOT want $WANT"; exit 1; fi
+
+      - name: Provision tools - Python venv with signify (for the script's own post-sign verification)
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
+          "$RUNNER_TEMP/venv-v/bin/python" -I -c "import signify; print(signify.__version__)"
+
+      - name: Build the scope file for stage inner (every value computed live on this runner)
+        id: scope
+        run: |
+          set -euo pipefail
+          OUTDIR="$RUNNER_TEMP/out-inner"
+          TOOLS="$RUNNER_TEMP/tools"
+          PY="$RUNNER_TEMP/venv-v/bin/python"
+          JAVA="$(ls -d "$TOOLS"/jdk/x/*/Contents/Home)/bin/java"
+          LEDGER="$RUNNER_TEMP/ledger"
+          mkdir -p "$RUNNER_TEMP/scope"
+
+          sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+          SCRIPT_SHA="$(sha packaging/signing/sign_windows_r0prime_v3.sh)"
+          COMMON_SHA="$(sha packaging/signing/signing-common.sh)"
+          VERIFIER_SHA="$(sha packaging/signing/verify_signature_v2.py)"
+          IDJSON_SHA="$(sha packaging/identity.json)"
+          GATE_SHA="$(sha packaging/distribution-gate.json)"
+          GATE_TOOL_SHA="$(sha packaging/check-distribution-gate.py)"
+          CHECK_ABOUT_SHA="$(sha packaging/notices/check_about.py)"
+          GEN_ABOUT_SHA="$(sha packaging/notices/generate_about.py)"
+          ABOUT_REC_SHA="$(sha agentic_os/about_record.py)"
+          LEGAL_SIGNERS_SHA="$(sha packaging/legal-allowed-signers)"
+
+          # the three (or more) inner files from round1's REQUESTS.sha256, renamed to their expected <role>-<sha>.exe form
+          mkdir -p "$RUNNER_TEMP/inner-inputs"
+          INPUT_ARGS=()
+          HASHES=()
+          while read -r hash name; do
+            cp "round1-dl/requests-inner/$name" "$RUNNER_TEMP/inner-inputs/$name"
+            INPUT_ARGS+=(--input "$RUNNER_TEMP/inner-inputs/$name" --sha256 "$hash")
+            HASHES+=("$hash")
+          done < round1-dl/REQUESTS.sha256
+          echo "input_args<<EOF" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${INPUT_ARGS[@]}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          SORTED_HASHES="$(printf '%s\n' "${HASHES[@]}" | sort | tr '\n' ',' | sed 's/,$//')"
+
+          AZ_PATH="$(command -v az)"
+          AZ_SHA="$(sha "$AZ_PATH")"
+          JAVA_SHA="$(sha "$JAVA")"
+          PY_SHA="$(sha "$PY")"
+          PKGS="$("$PY" -I -c 'import importlib.metadata as m; print("\n".join(sorted("%s==%s" % (d.metadata["Name"].lower(), d.version) for d in m.distributions())))')"
+          PKGS_SHA="$(printf '%s\n' "$PKGS" | shasum -a 256 | awk '{print $1}')"
+          VENV_ROOT="$(cd "$(dirname "$PY")/.." && pwd -P)"
+          PTH_LIST="$(cd "$VENV_ROOT" && find lib -maxdepth 5 -name '*.pth' -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r pf; do printf '%s %s\n' "$pf" "$(sha "$pf")"; done)"
+          PTH_SHA="$(printf '%s\n' "$PTH_LIST" | shasum -a 256 | awk '{print $1}')"
+
+          NOT_BEFORE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          NOT_AFTER="$(date -u -v+2H +%Y-%m-%dT%H:%M:%SZ)"
+
+          cat > "$RUNNER_TEMP/scope/scope-win-inner.txt" <<EOF
+          scope_version=3
+          not_before=$NOT_BEFORE
+          not_after=$NOT_AFTER
+          script_sha256=$SCRIPT_SHA
+          common_sha256=$COMMON_SHA
+          verifier_sha256=$VERIFIER_SHA
+          identity_json_sha256=$IDJSON_SHA
+          stage=inner
+          inputs_sha256=$SORTED_HASHES
+          az_endpoint=https://eus.codesigning.azure.net/
+          az_account=redevops
+          az_profile=redevops-public
+          expected_cn=CN=ReDevOps.io LLC
+          gate_sha256=$GATE_SHA
+          gate_tool_sha256=$GATE_TOOL_SHA
+          distribution=no
+          evidence_manifest_sha256=$(printf 'ci-run-%s-inner' "${{ github.run_id }}" | shasum -a 256 | awk '{print $1}')
+          build_commit=$BUILD_COMMIT
+          procedure_commit=$BUILD_COMMIT
+          tool_az_sha256=$AZ_SHA
+          tool_java_sha256=$JAVA_SHA
+          tool_python_sha256=$PY_SHA
+          tool_python_packages_sha256=$PKGS_SHA
+          tool_python_pth_sha256=$PTH_SHA
+          tool_osslsigncode_sha256=none
+          container_listing_sha256=none
+          check_about_sha256=$CHECK_ABOUT_SHA
+          generate_about_sha256=$GEN_ABOUT_SHA
+          about_record_sha256=$ABOUT_REC_SHA
+          legal_signers_sha256=$LEGAL_SIGNERS_SHA
+          EOF
+          AUTH_SHA="$(sha "$RUNNER_TEMP/scope/scope-win-inner.txt")"
+          echo "auth_sha=$AUTH_SHA" >> "$GITHUB_OUTPUT"
+          echo "outdir=$OUTDIR" >> "$GITHUB_OUTPUT"
+          echo "ledger=$LEDGER" >> "$GITHUB_OUTPUT"
+          echo "tools_dir=$TOOLS" >> "$GITHUB_OUTPUT"
+          echo "py=$PY" >> "$GITHUB_OUTPUT"
+
+      - name: Plan (dry-run) - sanity check before touching Azure
+        run: |
+          set -euo pipefail
+          INPUT_ARGS=(); while IFS= read -r line; do [ -n "$line" ] && INPUT_ARGS+=("$line"); done <<< "${{ steps.scope.outputs.input_args }}"
+          ./packaging/signing/sign_windows_r0prime_v3.sh --stage inner "${INPUT_ARGS[@]}" \
+            --outdir "$RUNNER_TEMP/out-inner-plan" --dry-run \
+            --tools-dir "${{ steps.scope.outputs.tools_dir }}" --python "${{ steps.scope.outputs.py }}"
+
+      - name: REAL signing - stage inner (this is the live Azure Trusted Signing call)
+        env:
+          R0P_AZ_ENDPOINT: https://eus.codesigning.azure.net/
+          R0P_AZ_ACCOUNT: redevops
+          R0P_AZ_PROFILE: redevops-public
+          R0P_AZ_EXPECTED_CN: "CN=ReDevOps.io LLC"
+        run: |
+          set -euo pipefail
+          INPUT_ARGS=(); while IFS= read -r line; do [ -n "$line" ] && INPUT_ARGS+=("$line"); done <<< "${{ steps.scope.outputs.input_args }}"
+          ./packaging/signing/sign_windows_r0prime_v3.sh --stage inner "${INPUT_ARGS[@]}" \
+            --outdir "${{ steps.scope.outputs.outdir }}" --real \
+            --i-have-owner-authorization "${{ steps.scope.outputs.auth_sha }}" \
+            --scope-file "$RUNNER_TEMP/scope/scope-win-inner.txt" \
+            --ledger "${{ steps.scope.outputs.ledger }}" \
+            --tools-dir "${{ steps.scope.outputs.tools_dir }}" --python "${{ steps.scope.outputs.py }}"
+
+      - name: Show evidence (no secrets - scrubbed by the script itself)
+        if: always() && steps.scope.outputs.outdir != ''
+        run: |
+          cat "${{ steps.scope.outputs.outdir }}/EVIDENCE.txt" 2>/dev/null || cat "${{ steps.scope.outputs.outdir }}/FAILED" 2>/dev/null || true
+
+      - name: Upload signed-inner output
+        # steps.scope.outputs.outdir is empty if the scope step itself never ran (e.g. the Azure
+        # login step before it failed); without this guard the path below becomes the bare glob
+        # "/**", which walks the entire runner filesystem instead of being skipped.
+        if: always() && steps.scope.outputs.outdir != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: signed-inner
+          retention-days: 2
+          path: |
+            ${{ steps.scope.outputs.outdir }}/**
+
+  apply-and-rebuild:
+    needs: sign-inner
+    runs-on: windows-2022
+    env:
+      UV_PYTHON_PREFERENCE: only-system
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+
+      - name: CPython 3.12.10
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12.10"
+          check-latest: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          version: "0.12.16"
+
+      - name: Rust toolchain 1.98.1
+        uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7  # branch 1.98.1
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install Tauri CLI 2.11.4
+        run: cargo install tauri-cli --version 2.11.4 --locked
+
+      - name: Download round1 state (byte-identical unsigned build outputs)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: round1-state
+          path: round1-dl
+
+      - name: Download signed-inner files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: signed-inner
+          path: signed-inner-dl
+
+      - name: Restore round1's unsigned build state into the real build tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/launcher/src-tauri/target/release
+          cp -r round1-dl/deploy/launcher/src-tauri/target/release/. deploy/launcher/src-tauri/target/release/
+          cp round1-dl/deploy/launcher/src-tauri/target/release/agentic-r0prime.exe.pristine deploy/launcher/src-tauri/target/release/agentic-r0prime.exe
+
+      - name: Build requests + signed-inner folders for the handoff helper's apply mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p round2/signed-inner
+          cp round1-dl/REQUESTS.sha256 round2/REQUESTS.sha256
+          find signed-inner-dl -name '*.exe' -exec cp {} round2/signed-inner/ \;
+          ( cd round2/signed-inner && for f in *.exe; do [ -f "$f" ] && shasum -a 256 "$f"; done ) > round2/signed-inner/SHA256SUMS
+          cat round2/signed-inner/SHA256SUMS
+
+      - name: Write the signCommand override
+        shell: bash
+        run: |
+          # github.workspace on windows-2022 resolves with backslashes (e.g. D:\a\agentic-os\agentic-os),
+          # which breaks naive embedding into a JSON string literal (\a is not a valid JSON escape).
+          WS_FWD=$(printf %s "${{ github.workspace }}" | tr '\\' '/')
+          # cmd must be the absolute path to Git Bash, not the bare string "bash": see the matching
+          # comment in the collect job's "Write the signCommand override" step for why.
+          cat > "$RUNNER_TEMP/override.json" <<JSON
+          {"bundle":{"windows":{"signCommand":{"cmd":"C:/Program Files/Git/bin/bash.exe","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
+          JSON
+
+      - name: Apply + rebuild MSI with signed inner files
+        shell: bash
+        working-directory: deploy/launcher/src-tauri
+        env:
+          R0P_HANDOFF_MODE: apply
+          R0P_HANDOFF_DIR: ${{ github.workspace }}/round2
+          R0P_HANDOFF_REQUESTS: ${{ github.workspace }}/round2/REQUESTS.sha256
+          R0P_EXPECT_SIGNER_CN: "ReDevOps.io LLC"
+          R0P_EXPECT_ISSUER_SUBSTR: "Microsoft"
+        run: |
+          cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
+          cargo tauri bundle -v --bundles msi --config "$(cat "$RUNNER_TEMP/override.json")"
+
+      - name: Apply + rebuild NSIS with signed inner files
+        shell: bash
+        working-directory: deploy/launcher/src-tauri
+        env:
+          R0P_HANDOFF_MODE: apply
+          R0P_HANDOFF_DIR: ${{ github.workspace }}/round2
+          R0P_HANDOFF_REQUESTS: ${{ github.workspace }}/round2/REQUESTS.sha256
+          R0P_EXPECT_SIGNER_CN: "ReDevOps.io LLC"
+          R0P_EXPECT_ISSUER_SUBSTR: "Microsoft"
+        run: |
+          cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
+          cargo tauri bundle -v --bundles nsis --config "$(cat "$RUNNER_TEMP/override.json")"
+
+      - name: Build the container listing (file list of the rebuilt installers, with sha256)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p round2/listing
+          MSI="deploy/launcher/src-tauri/target/release/bundle/msi/${PRODUCT_SLUG}_x64_en-US.msi"
+          NSIS="deploy/launcher/src-tauri/target/release/bundle/nsis/${PRODUCT_SLUG}_x64-setup.exe"
+          : > round2/listing/container-listing.txt
+          TMPX=$(mktemp -d)
+          msiexec /a "$(cygpath -w "$MSI")" /qn TARGETDIR="$(cygpath -w "$TMPX/msi-extract")" || true
+          find "$TMPX/msi-extract" -type f | while read -r f; do shasum -a 256 "$f" >> round2/listing/container-listing.txt; done
+          shasum -a 256 "$MSI" >> round2/listing/container-listing.txt
+          shasum -a 256 "$NSIS" >> round2/listing/container-listing.txt
+          cat round2/listing/container-listing.txt
+
+      - name: Upload rebuilt containers + licenses dir + listing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: round2-containers
+          retention-days: 2
+          path: |
+            deploy/launcher/src-tauri/target/release/bundle/msi/*.msi
+            deploy/launcher/src-tauri/target/release/bundle/nsis/*-setup.exe
+            deploy/launcher/src-tauri/licenses/**
+            round2/listing/container-listing.txt
+
+  sign-container:
+    needs: apply-and-rebuild
+    runs-on: macos-15
+    environment: windows-signing
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+
+      - name: Download round2 containers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: round2-containers
+          path: round2-dl
+
+      - name: Azure login via OIDC (no stored secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision tools (same pins as sign-inner)
+        run: |
+          set -euo pipefail
+          TOOLS="$RUNNER_TEMP/tools"
+          mkdir -p "$TOOLS/jdk/x" "$TOOLS/jsign"
+          curl -fsSL -o "$RUNNER_TEMP/jdk.tar.gz" \
+            "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz"
+          tar -xzf "$RUNNER_TEMP/jdk.tar.gz" -C "$TOOLS/jdk/x"
+          curl -fsSL -o "$TOOLS/jsign/jsign-7.6.jar" \
+            "https://github.com/ebourg/jsign/releases/download/7.6/jsign-7.6.jar"
+          GOT="$(shasum -a 256 "$TOOLS/jsign/jsign-7.6.jar" | awk '{print $1}')"
+          [ "$GOT" = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5" ] || { echo "::error::jsign hash mismatch"; exit 1; }
+          /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
+
+      - name: Build the scope file for stage container
+        id: scope
+        run: |
+          set -euo pipefail
+          TOOLS="$RUNNER_TEMP/tools"
+          PY="$RUNNER_TEMP/venv-v/bin/python"
+          JAVA="$(ls -d "$TOOLS"/jdk/x/*/Contents/Home)/bin/java"
+          sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+          MSI="round2-dl/deploy/launcher/src-tauri/target/release/bundle/msi/${PRODUCT_SLUG}_x64_en-US.msi"
+          NSIS="round2-dl/deploy/launcher/src-tauri/target/release/bundle/nsis/${PRODUCT_SLUG}_x64-setup.exe"
+          mkdir -p "$RUNNER_TEMP/container-inputs"
+          cp "$MSI" "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64_en-US.msi"
+          cp "$NSIS" "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64-setup.exe"
+          MSI_SHA="$(sha "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64_en-US.msi")"
+          NSIS_SHA="$(sha "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64-setup.exe")"
+          SORTED_HASHES="$(printf '%s\n%s\n' "$MSI_SHA" "$NSIS_SHA" | sort | tr '\n' ',' | sed 's/,$//')"
+          echo "input_args=--input $RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64_en-US.msi --sha256 $MSI_SHA --input $RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64-setup.exe --sha256 $NSIS_SHA" >> "$GITHUB_OUTPUT"
+
+          LISTING_SHA="$(sha round2-dl/round2/listing/container-listing.txt)"
+
+          AZ_PATH="$(command -v az)"
+          AZ_SHA="$(sha "$AZ_PATH")"; JAVA_SHA="$(sha "$JAVA")"; PY_SHA="$(sha "$PY")"
+          PKGS="$("$PY" -I -c 'import importlib.metadata as m; print("\n".join(sorted("%s==%s" % (d.metadata["Name"].lower(), d.version) for d in m.distributions())))')"
+          PKGS_SHA="$(printf '%s\n' "$PKGS" | shasum -a 256 | awk '{print $1}')"
+          VENV_ROOT="$(cd "$(dirname "$PY")/.." && pwd -P)"
+          PTH_LIST="$(cd "$VENV_ROOT" && find lib -maxdepth 5 -name '*.pth' -type f 2>/dev/null | LC_ALL=C sort | while IFS= read -r pf; do printf '%s %s\n' "$pf" "$(sha "$pf")"; done)"
+          PTH_SHA="$(printf '%s\n' "$PTH_LIST" | shasum -a 256 | awk '{print $1}')"
+
+          NOT_BEFORE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          NOT_AFTER="$(date -u -v+2H +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p "$RUNNER_TEMP/scope"
+          cat > "$RUNNER_TEMP/scope/scope-win-container.txt" <<EOF
+          scope_version=3
+          not_before=$NOT_BEFORE
+          not_after=$NOT_AFTER
+          script_sha256=$(sha packaging/signing/sign_windows_r0prime_v3.sh)
+          common_sha256=$(sha packaging/signing/signing-common.sh)
+          verifier_sha256=$(sha packaging/signing/verify_signature_v2.py)
+          identity_json_sha256=$(sha packaging/identity.json)
+          stage=container
+          inputs_sha256=$SORTED_HASHES
+          az_endpoint=https://eus.codesigning.azure.net/
+          az_account=redevops
+          az_profile=redevops-public
+          expected_cn=CN=ReDevOps.io LLC
+          gate_sha256=$(sha packaging/distribution-gate.json)
+          gate_tool_sha256=$(sha packaging/check-distribution-gate.py)
+          distribution=no
+          evidence_manifest_sha256=$(printf 'ci-run-%s-container' "${{ github.run_id }}" | shasum -a 256 | awk '{print $1}')
+          build_commit=$BUILD_COMMIT
+          procedure_commit=$BUILD_COMMIT
+          tool_az_sha256=$AZ_SHA
+          tool_java_sha256=$JAVA_SHA
+          tool_python_sha256=$PY_SHA
+          tool_python_packages_sha256=$PKGS_SHA
+          tool_python_pth_sha256=$PTH_SHA
+          tool_osslsigncode_sha256=none
+          container_listing_sha256=$LISTING_SHA
+          check_about_sha256=$(sha packaging/notices/check_about.py)
+          generate_about_sha256=$(sha packaging/notices/generate_about.py)
+          about_record_sha256=$(sha agentic_os/about_record.py)
+          legal_signers_sha256=$(sha packaging/legal-allowed-signers)
+          EOF
+          echo "auth_sha=$(sha "$RUNNER_TEMP/scope/scope-win-container.txt")" >> "$GITHUB_OUTPUT"
+          echo "outdir=$RUNNER_TEMP/out-container" >> "$GITHUB_OUTPUT"
+          echo "ledger=$RUNNER_TEMP/ledger" >> "$GITHUB_OUTPUT"
+          echo "tools_dir=$TOOLS" >> "$GITHUB_OUTPUT"
+          echo "py=$PY" >> "$GITHUB_OUTPUT"
+          echo "listing=round2-dl/round2/listing/container-listing.txt" >> "$GITHUB_OUTPUT"
+
+      - name: REAL signing - stage container (live Azure Trusted Signing call)
+        env:
+          R0P_AZ_ENDPOINT: https://eus.codesigning.azure.net/
+          R0P_AZ_ACCOUNT: redevops
+          R0P_AZ_PROFILE: redevops-public
+          R0P_AZ_EXPECTED_CN: "CN=ReDevOps.io LLC"
+        run: |
+          set -euo pipefail
+          ./packaging/signing/sign_windows_r0prime_v3.sh --stage container ${{ steps.scope.outputs.input_args }} \
+            --outdir "${{ steps.scope.outputs.outdir }}" --real \
+            --i-have-owner-authorization "${{ steps.scope.outputs.auth_sha }}" \
+            --scope-file "$RUNNER_TEMP/scope/scope-win-container.txt" \
+            --ledger "${{ steps.scope.outputs.ledger }}" \
+            --tools-dir "${{ steps.scope.outputs.tools_dir }}" --python "${{ steps.scope.outputs.py }}" \
+            --container-listing "${{ steps.scope.outputs.listing }}" \
+            --licenses-dir round2-dl/deploy/launcher/src-tauri/licenses
+
+      - name: Show evidence
+        if: always() && steps.scope.outputs.outdir != ''
+        run: |
+          cat "${{ steps.scope.outputs.outdir }}/EVIDENCE.txt" 2>/dev/null || cat "${{ steps.scope.outputs.outdir }}/FAILED" 2>/dev/null || true
+          cat "${{ steps.scope.outputs.outdir }}/SHA256SUMS" 2>/dev/null || true
+
+      - name: Upload final signed installers + evidence
+        # see the matching comment on sign-inner's "Upload signed-inner output" step
+        if: always() && steps.scope.outputs.outdir != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: signed-containers-final
+          retention-days: 14
+          path: |
+            ${{ steps.scope.outputs.outdir }}/**

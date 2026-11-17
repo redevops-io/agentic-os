@@ -11,7 +11,9 @@ import os
 
 import pytest
 
-from agentic_os.integrations.chatwoot import ChatwootClient, chatwoot_from_env, scan_unanswered_quotes
+from agentic_os.integrations.chatwoot import (
+    ChatwootClient, chatwoot_from_env, scan_inbound_contacts, scan_unanswered_quotes,
+)
 from agentic_os.intelligence import resolve_decision_need
 from agentic_os.intelligence.families import (
     ChatwootLeakageState, InMemoryRevenueState, chatwoot_revenue_registry, composite_revenue_registry,
@@ -71,6 +73,28 @@ def test_other_subject_is_no_match():
     reg = chatwoot_revenue_registry(_StubChatwoot(), scope_ref="book:acme", now_ms=_NOW)
     res, _ = resolve_decision_need(reg, _need("book:other"), synthesize=revenue_synthesize)
     assert res.answer == ""
+
+
+# ── Stage E: inbound -> intent -> validated Contact-upsert proposal (read-only; proposes, never writes) ───
+def test_scan_inbound_contacts_proposes_only_for_actionable_email_sender():
+    proposals = scan_inbound_contacts(_StubChatwoot(), now_ms=_NOW)
+    assert len(proposals) == 1
+    p = proposals[0]
+    assert p.name == "ACME Corp" and p.email == "buyer@acme.com"
+    assert p.intent == "QUOTE_REQUEST" and p.source_ref == "11"
+
+
+def test_scan_inbound_contacts_skips_sender_without_email():
+    # conversation 12 ("Beta LLC") has no email on the sender -> no proposal possible regardless of intent
+    class _NoEmailOnly(ChatwootClient):
+        def __init__(self):
+            super().__init__(base_url="http://stub", api_token="t", account_id="1")
+
+        def conversations(self, *, status="open", max_pages=20):
+            return [{"id": 12, "messages": [{"message_type": 0, "content": "thanks, the invoice looks correct"}],
+                    "meta": {"sender": {"name": "Beta LLC"}}}]
+
+    assert scan_inbound_contacts(_NoEmailOnly(), now_ms=_NOW) == []
 
 
 # ── composite (merge Chatwoot + another source under one scope) ──────────────────────────────────────────

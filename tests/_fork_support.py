@@ -184,3 +184,15 @@ class CrashingStore(EventStore):
         if hit:
             raise SimulatedCrash(f"after {type}")
         return ev
+
+
+def record_effect(effects_dir: str, tag: str) -> None:
+    """Record ONE real effect of a branch from any thread or process: a file named ``tag``, created exclusively.
+
+    Several branches finish within milliseconds of each other and write from different threads. Appending to ONE shared file is not safe for
+    that on Windows (the C runtime emulates ``O_APPEND`` as "seek to the end, then write", which two writers with their own descriptors can
+    interleave, so one line overwrites another and an effect that happened looks missing). One file per effect has no shared offset, and the
+    exclusive create makes a second dispatch of the same branch fail loudly instead of looking like a repeat line."""
+    import os
+    fd = os.open(os.path.join(effects_dir, tag), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0))
+    os.close(fd)

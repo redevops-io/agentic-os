@@ -98,6 +98,7 @@ ALLOWED = {
     ("edge-sentinel", "sentinel.triage"): "subprocess.run of a FIXED argv: `cscli ... list` (CrowdSec alerts/decisions) through docker exec: a listing, caller input is never part of the argv",
     ("growth-engine", "growth.analyze"): "httpx.post to Umami's /api/auth/login (a token for the read API); the analysis itself only reads",
     ("outreach-engine", "outreach.refresh"): "urlopen GETs of Twenty / GitHub to rebuild an in-memory pipeline; no write to either",
+    ("outreach-engine", "outreach.enrich"): "urlopen GETs of a public GitHub profile/contributor (to derive a domain + contact name) and of the configured enrichment provider's email-finder/verifier (Hunter by default); resolves + attaches an email, writes nothing to Twenty or any provider",
 }
 
 

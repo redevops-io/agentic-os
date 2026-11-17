@@ -29,7 +29,9 @@ Send `Authorization: Bearer <token>` (compared with `hmac.compare_digest`).
 The main control plane still accepts the legacy `X-API-Key` (`AGENTIC_OS_API_KEY`) as an alternative for the fleet routes; the grants API is a separate privilege (`PERMISSIONS_ADMIN_KEY` only). **Behaviour change:** an unset key used to mean "open"; it now means "disabled".
 `python -m agentic_os.mission.unified_server` binds `127.0.0.1` (override with `UNIFIED_HOST`, port `UNIFIED_PORT`, default 8090).
 `agentic_os/mission/control_plane.py` is only the wire-protocol codec (no HTTP surface), so nothing to gate there.
-**The module proxy is open and unchanged by this release.** `GET /m/<name>`, `GET /m/<name>/raw` and `GET`/`POST /m/<name>/api/*` forward anonymously to the module's service in every default deployment; the only restriction is `DEMO_READ_ONLY=1` (which no shipped configuration sets, and which blocks only POST). It is tracked as public issue #528. Whether the apps' own gates stop a request that arrives through it has not been verified. Do not expose the control plane's port to an untrusted network; put an authenticating reverse proxy in front of it or block `/m/` there.
+**The module proxy: reads anonymous, writes contained (2026-11-08).** `GET /m/<name>`, `GET /m/<name>/raw` and `GET /m/<name>/api/*` still forward anonymously — that is the public demo surface, pinned by `audit/public_demo_contract.json`. `POST /m/<name>/api/*` no longer does: a write is forwarded only when the connection **arrived over loopback**, or the operator has set `DEMO_ALLOW_WRITES=1` on a deployment where a caller-authenticating proxy really sits in front of the port. The decision reads the ASGI `server` scope, which uvicorn fills with the **local address of the accepted socket**, per connection — verified against a real server: a `0.0.0.0` bind dialled from loopback reports `127.0.0.1`, and a `::` bind dialled from `::1` reports `::1`. No `Host`, `X-Forwarded-For` or Cloudflare header can change which local address the connection was delivered on, and a request that reaches the app with no edge in front is judged by the same rule. `DEMO_READ_ONLY=1` still refuses POST everywhere, including loopback. This closes the write half of public issue #528.
+
+**What the socket test deliberately does not claim.** A reverse proxy terminating *on the same host* connects over loopback, so its writes are forwarded; the gate describes the socket, not who is upstream. An edge that terminates outside the host — the Cloudflare tunnel container, which reaches the control plane over the container network — arrives on the container's interface address and is refused. Treat a same-host proxy in front of this port as part of the trusted surface: it must authenticate callers itself, or `DEMO_READ_ONLY=1` should be set. What remains unverified is the read half: whether each app's own gate stops a request that arrives through the proxy. Do not expose the control plane's port to an untrusted network; put an authenticating reverse proxy in front of it or block `/m/` there.
 
 ### Mission API (`/missions`, `/inbox`, `/cockpit`, `/capabilities`, `/learning`) - default-deny
 
@@ -94,7 +96,7 @@ Authoritative requirements (4xx and **no append** otherwise):
 
 `POST /api/projects/{id}/policy/promotion-cycle`: `apply=true` or any `tenant_id` requires the control token; an anonymous dry run evaluates only **untenanted** evidence. The cycle is always scoped to one tenant (no mixing).
 
-Defence in depth: `OutcomeEvent.simulated=True` is refused by every `OutcomeStore.append` and filtered by `policy_promotion.run_promotion_cycle`. Store `append` is atomic (lock; `flock` + `O_APPEND` for the file store, multi-process safe on local POSIX filesystems only: the flock is a no-op without `fcntl` (Windows, a warning is logged once) and unreliable on NFS; use the Postgres store or a single writer there) and idempotent on `event_id` (tenant-scoped). **Changed dedupe semantics:** a derived outcome with identical (source observation ids, selected intervention) is now dropped on append (previously both were stored). Trusted in-process callers (`apps/billing`, connectors) keep using `record_outcome_event` / store `append` directly.
+Defence in depth: `OutcomeEvent.simulated=True` is refused by every `OutcomeStore.append` and filtered by `policy_promotion.run_promotion_cycle`. Store `append` is atomic (lock; `flock` + `O_APPEND` for the file store, multi-process safe on local filesystems (the lock is `flock` on POSIX and `LockFileEx` on Windows, `agentic_os/_platform/locks.py`; a platform with neither raises instead of appending unlocked) and unreliable on NFS; use the Postgres store or a single writer there) and idempotent on `event_id` (tenant-scoped). **Changed dedupe semantics:** a derived outcome with identical (source observation ids, selected intervention) is now dropped on append (previously both were stored). Trusted in-process callers (`apps/billing`, connectors) keep using `record_outcome_event` / store `append` directly.
 
 ## Security profile and the operator authority boundary
 
@@ -113,6 +115,48 @@ An **unset** profile behaves as `development` and logs a warning (once per compo
 database keeps working. `AGENTIC_OS_REQUIRE_AUTHORITY=1` is kept as an alias for `production`. Any other value is an error.
 Official production deployments must set `AGENTIC_OS_PROFILE=production` explicitly; the Compose file passes the variable
 through to every service that decides authority (empty means development).
+
+### Route-policy enforcement does not wait for the profile
+
+A profile asks for provisioning a deployment may not have done yet (a durable authority store, an owner envelope), and
+the shipped Compose files leave the profile unset — so enforcement used to be the one thing an operator got only by
+opting in. That is inverted: an app's declared write-route policies are **enforced by default**, and the advisory
+posture has to be claimed with a statement about the deployment.
+
+| The request… | Posture |
+|---|---|
+| arrived on a routable address (a container edge like `172.17.0.4`, a LAN address, anything not loopback) | **enforced** |
+| arrived over loopback, and the front is **undeclared** — provenance unknown | **enforced** |
+| arrived over loopback, and the service declared `FORWARDED_ALLOW_IPS` or `AGENTIC_OS_BEHIND_PROXY=1` | **enforced** |
+| any request while the process states a published bind host (`AGENTIC_OS_BIND_HOST` beyond loopback) | **enforced** |
+| any request under `AGENTIC_OS_PROFILE=production` | **enforced** |
+| arrived over loopback **and** the service declared `AGENTIC_OS_BEHIND_PROXY=0` | advisory |
+| was produced by an in-process harness (no IP peer at all) | advisory |
+
+Loopback is not proof of locality: a reverse proxy terminating on the same host connects over `127.0.0.1`, and the
+accepted socket is then identical to a developer's own request. That is why an *unknown* front enforces — the bypass
+a loopback default would leave is demonstrated end to end in `tests/test_route_authz_real_topology.py`, on a real
+uvicorn behind a real forwarding proxy.
+
+`AGENTIC_OS_ROUTE_AUTHZ_ENFORCE` overrides the computation: `always` enforces everywhere, `profile` restores the
+pre-2026-11-08 behaviour (enforce only in production), unset is the default above. An unrecognised value enforces —
+a typo in a security variable is not a licence to stop enforcing.
+
+**Trusted network ranges are configured per service, by stating two facts:**
+
+- `AGENTIC_OS_BEHIND_PROXY=1` / `FORWARDED_ALLOW_IPS=127.0.0.1` — something forwards other callers' requests to this
+  process (uvicorn's own switch, the address of the proxy whose `X-Forwarded-For` is trusted).
+- `AGENTIC_OS_BEHIND_PROXY=0` — nothing forwards here; a loopback peer really is a client on this machine. This is
+  the **only** route to the advisory posture, and it is a claim about topology, not a default.
+- `AGENTIC_OS_BIND_HOST=0.0.0.0` (or `::`, or a named address) — other machines can reach this process, which
+  outranks the front statement and enforces everything.
+
+Both are required in the shipped Compose files for every published first-party service
+(`tests/test_route_authz_exposure_gate.py` checks it, and names any service that loses one). Reads and public intake
+are unaffected: `decide()` never refuses them, so enforcing the deniable classes is not a blanket authentication
+wall — the public demo journeys stay open, verified through the proxy and directly.
+
+
 
 **See the posture:** `GET /health` on the control plane (with the fleet credential) and on the suite server include `security`; every operator serves
 `GET /_security`. A deployment that is in development mode, or whose guard or replay store is not durable, shows
@@ -408,8 +452,10 @@ Status (`GET /api/permissions/status`) reports `encrypted` / `key_source` (`env`
 **Concurrency and files.** `add`, `remove` and `seed` hold one exclusive `flock` (`.grants.lock`) across
 the **whole** read-modify-write and persist through a temp file in the same directory, `fsync`,
 `os.replace` and a directory `fsync`, so concurrent writers (threads or processes) lose no update and a
-reader never sees a torn file. The store needs POSIX `fcntl` and **raises at start-up on a platform
-without it** rather than run unlocked. The directory is created 0700, files 0600; a symbolic link in
+reader never sees a torn file. The store needs an inter-process file lock (`flock` on POSIX, `LockFileEx` on Windows) and **raises at
+start-up on a platform without one** rather than run unlocked. The directory is created 0700, files 0600 (on Windows: a protected DACL for
+the user and the system; a key or profile file is accepted only under the user's profile and only when its DACL shows no access for anyone
+else); a symbolic link in
 place of a grants file, backup or temp path is refused.
 
 #### Migrating an existing plaintext `grants.jsonl`
@@ -696,3 +742,51 @@ With `AGENTIC_OS_PERMISSIONS=1` every app acts as ONE local user, taken from `pr
 (a store provisioned before profiles existed) the principal is the default local user `local`: the app logs a warning naming the file and the fix, and `local` can do only what grants for `local` allow (none unless
 someone created them). Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. The quickstart therefore protects against callers who are not the machine's user, not against another process running as that user: anything that can read the permissions directory
 and key already holds the grants.
+
+## The anonymous demo surfaces are bounded without being closed
+
+Two surfaces answer without a credential by design, because that is what makes the guided journey work: the
+unified desktop's `/api/sidekick`, and the intelligence router in demo mode. Bounding them with a credential
+would end the journey, so the bound is placed on **work** instead of on identity. Both bounds are checked
+before anything consequential, and this is the property the tests hold: a refused request creates no mission,
+writes no event, and calls no provider.
+
+`agentic_os/mission/demo_limits.py` holds both:
+
+* **Rate limit** — a token bucket per caller (`UNIFIED_SIDEKICK_REQUESTS_PER_MIN`, `UNIFIED_SIDEKICK_BURST`).
+  Per-caller keying trusts one address only: the socket peer. `X-Forwarded-For` is consulted when, and only
+  when, the operator declares the proxy in `UNIFIED_TRUSTED_PROXY_IPS` **and** the socket really came from it.
+  A spoofed forwarded header therefore buys no fresh budget; behind an *undeclared* same-host proxy every
+  caller shares one bucket, which collapses toward stricter rather than looser.
+* **Resource quota** — how many demo missions the process will create (`UNIFIED_DEMO_MISSION_LIMIT`), checked
+  twice: against missions still parked at the approval gate, and against the process's lifetime total. A demo
+  mission parks until a human resolves it, so the open count is the live resource; the lifetime total is what
+  bounds work when missions terminate quickly and holds nothing open. It recovers with the process, not with
+  the caller, which is deliberate on an anonymous surface.
+
+Defaults are set above what one visit costs (20/min, burst 8) rather than at it: a limit that fires inside a
+legitimate visit is a defect, not a defence. An unparseable or zero value falls back to the default instead of
+meaning "unlimited".
+
+**Reset and retention.** Nothing here is persisted — buckets and the lifetime allowance live in this process's
+memory, so restarting is the reset, and that is deliberate: a caller cannot clear state they cannot write.
+Two consequences are stated here rather than discovered in an incident:
+
+* **N workers, N budgets.** Every process holds its own buckets and its own mission allowance, so a deployment
+  running four workers has four anonymous budgets and four mission allowances. One shared ceiling would need
+  shared state this surface does not have; if it is ever wanted, it should be added on purpose rather than
+  inherited from a worker count.
+* **Caller keys are bounded.** When a proxy is declared, the caller key comes from `X-Forwarded-For`, which the
+  client chooses — so the map of tracked callers is capped (`UNIFIED_DEMO_MAX_TRACKED_CALLERS`, default 4096)
+  and entries are reclaimed once a bucket has fully refilled. Reclaiming a full bucket cannot change any
+  decision, because a full bucket and a forgotten one admit exactly the same requests: the prune is memory,
+  never policy. If the cap is reached with nothing idle to reclaim, newcomers share one bucket — exhaustion
+  tightens the limit instead of lifting it. Live callers are never evicted to make room, because eviction
+  would hand each new key of a flood a fresh full bucket.
+
+The intelligence router is confined the same way it is opened: `build_router(..., synthetic_demo_tenants=...)`
+declares up front which tenants the open surface may address, and a body naming any other tenant is refused
+before the service is reached. `/api/sidekick` refuses `tenant` and `policy_refs` outright — the route creates
+the demo mission under its own identity, and silently tolerating those fields is the kind of quiet tolerance
+that becomes a cross-tenant path the day a handler starts reading them. Neither is authentication, and neither
+is claimed to be: they bound what an anonymous caller can ask for, not who can ask.

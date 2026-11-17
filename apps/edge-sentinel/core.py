@@ -17,9 +17,11 @@ keeping this module dependency-light and deterministic.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -29,6 +31,7 @@ import ipaddress
 import httpx
 
 from . import ipguard
+from . import secret_files as _secret_files
 
 # ── config (env; seed.py writes agents/edge-sentinel/.env) ───────────────────
 # Idempotent .env load so this module is self-sufficient when imported by the operator
@@ -41,16 +44,27 @@ if _ENV_FILE.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
+_secret_files.load_file_secrets()        # NAME_FILE -> NAME (Docker/Kubernetes secrets)
+
 CROWDSEC_LAPI_URL = os.environ.get("CROWDSEC_LAPI_URL", "http://localhost:8086").rstrip("/")
 CROWDSEC_BOUNCER_KEY = os.environ.get("CROWDSEC_BOUNCER_KEY", "")
+# Optional WATCHER (machine) login on the LAPI. With it the alert feed is read and bans are written over the LAPI
+# (no docker); without it the alert feed uses `cscli` through docker exec and bans use the bouncer key as before.
+CROWDSEC_MACHINE_ID = os.environ.get("CROWDSEC_MACHINE_ID", "")
+CROWDSEC_MACHINE_PASSWORD = os.environ.get("CROWDSEC_MACHINE_PASSWORD", "")
 CROWDSEC_CONTAINER = os.environ.get("CROWDSEC_CONTAINER", "agentic-cores-crowdsec-1")
 CROWDSEC_FRONT_URL = os.environ.get("CROWDSEC_FRONT_URL", "http://localhost:8086").rstrip("/")
-# How to invoke docker for `cscli` (alerts). On the host this needs `sudo docker`; inside the
-# integrated container we run as root with the docker socket mounted, so DOCKER_CMD="docker"
-# (no sudo). Override via env.
-DOCKER_CMD = os.environ.get("DOCKER_CMD", "sudo docker").split()
+# How to invoke docker for `cscli` (alerts). P9: the request path never calls sudo — an interactive
+# `Password:` prompt inside an HTTP handler hangs the worker and turns a page view into a privileged
+# action. The default is plain `docker`: on a host, give the service user docker access; inside a
+# container the operator provides docker access without the raw socket (README, "Docker access").
+# If an operator truly needs an escalation wrapper, they set DOCKER_CMD themselves; _docker_cmd keeps
+# any `sudo` in it strictly non-interactive (-n), so it can only ever fail fast, never prompt.
+DOCKER_CMD = os.environ.get("DOCKER_CMD", "docker").split()
 
-TENANT = "Meridian Wealth Management"
+# The organisation name the operator sets for this deployment (SENTINEL_TENANT, 80 characters at most). There is no default:
+# an unset name shows nothing rather than a fictional company.
+TENANT = os.environ.get("SENTINEL_TENANT", "").strip()[:80]
 SUBTITLE = "Network security & systems, triaged and explained by an agent — on a real CrowdSec core, with a human in the loop before any block."
 
 
@@ -59,14 +73,77 @@ def _headers() -> dict:
     return {"X-Api-Key": CROWDSEC_BOUNCER_KEY, "Content-Type": "application/json"}
 
 
+def _docker_cmd() -> list[str]:
+    """The docker invocation for this process, never interactive. If an operator configured a `sudo`
+    wrapper anyway, it is forced to `-n` (non-interactive): sudo then fails immediately instead of
+    printing `Password:` into a request handler and hanging the worker waiting for input nobody can give."""
+    cmd = list(DOCKER_CMD)
+    if cmd and cmd[0] == "sudo" and "-n" not in cmd and "--non-interactive" not in cmd:
+        cmd.insert(1, "-n")
+    return cmd
+
+
 def _cscli(args: list[str]) -> tuple[int, str, str]:
-    """Run `cscli <args>` inside the CrowdSec container. `sudo` for the docker socket."""
-    cmd = [*DOCKER_CMD, "exec", CROWDSEC_CONTAINER, "cscli", *args]
+    """Run `cscli <args>` inside the CrowdSec container. Plain `docker` by default (P9): the request
+    path never invokes sudo, and an operator-supplied escalation is enforced non-interactive."""
+    cmd = [*_docker_cmd(), "exec", CROWDSEC_CONTAINER, "cscli", *args]
     try:
         p = subprocess.run(cmd, text=True, capture_output=True, timeout=20)
         return p.returncode, p.stdout, p.stderr
     except Exception as e:  # noqa: BLE001
         return 1, "", str(e)
+
+
+def watcher_configured() -> bool:
+    """True when a machine (watcher) login is configured: alerts are then read, and bans written, over the LAPI."""
+    return bool(CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD)
+
+
+_JWT: dict = {"token": "", "exp": 0.0}
+_JWT_LOCK = threading.Lock()
+
+
+def _watcher_login(client: "httpx.Client") -> str:
+    """JWT for the configured machine login (cached until shortly before it expires). Raises on failure; the message
+    never contains the password."""
+    with _JWT_LOCK:
+        if _JWT["token"] and time.time() < _JWT["exp"] - 60:
+            return _JWT["token"]
+        r = client.post(f"{CROWDSEC_LAPI_URL}/v1/watchers/login",
+                        json={"machine_id": CROWDSEC_MACHINE_ID, "password": CROWDSEC_MACHINE_PASSWORD})
+        if r.status_code != 200:
+            raise RuntimeError(f"watcher login refused (HTTP {r.status_code})")
+        body = r.json()
+        _JWT["token"] = str(body.get("token") or "")
+        try:
+            _JWT["exp"] = _dt.datetime.fromisoformat(str(body.get("expire", "")).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            _JWT["exp"] = time.time() + 600
+        if not _JWT["token"]:
+            raise RuntimeError("watcher login returned no token")
+        return _JWT["token"]
+
+
+def _watcher_request(method: str, path: str, **kw) -> "httpx.Response":
+    """One authenticated LAPI request as the watcher; a 401 forces one fresh login and a single retry."""
+    with httpx.Client(timeout=10.0) as client:
+        for attempt in (0, 1):
+            tok = _watcher_login(client)
+            r = client.request(method, f"{CROWDSEC_LAPI_URL}{path}", headers={"Authorization": f"Bearer {tok}"}, **kw)
+            if r.status_code != 401 or attempt == 1:
+                return r
+            with _JWT_LOCK:
+                _JWT.update(token="", exp=0.0)
+        return r
+
+
+def _lapi_ban_alert(decision: dict) -> dict:
+    """The alert CrowdSec expects for a manual ban (the shape `cscli decisions add` posts)."""
+    now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"scenario": decision["scenario"], "scenario_hash": "", "scenario_version": "", "message": decision["scenario"],
+            "events_count": 1, "start_at": now, "stop_at": now, "capacity": 0, "leakspeed": "0", "simulated": False,
+            "events": [], "source": {"scope": decision["scope"], "value": decision["value"]},
+            "decisions": [{**decision, "start_at": now, "stop_at": now, "simulated": False}]}
 
 
 def crowdsec_connected() -> bool:
@@ -83,9 +160,37 @@ def crowdsec_connected() -> bool:
             return False
 
 
+_TLS = threading.local()    # the status and finish time of the read this THREAD just made (module globals are shared by requests)
+
+
+def _set_status(store: dict, source: str, *, ok: bool, note: str) -> None:
+    """Record a source's read status in the shared store (health) AND for the calling thread with the time this read
+    finished, so a request never reports another request's result or the finish time of a different source."""
+    store.update(ok=ok, note=note)
+    setattr(_TLS, f"{source}_status", {"ok": ok, "note": note})
+    setattr(_TLS, f"{source}_at", _dt.datetime.now(_dt.timezone.utc))
+
+
+def _own_read(source: str):
+    st = getattr(_TLS, f"{source}_status", None)
+    if st is None:                                      # the fetch function did not record one (e.g. replaced in a test)
+        return {"ok": True, "note": "", "at": _dt.datetime.now(_dt.timezone.utc)}
+    return {**st, "at": getattr(_TLS, f"{source}_at", None)}
+
+
+_DECISIONS_STATUS: dict = {"ok": False, "note": "not read yet"}
+
+
+def decisions_status() -> dict:
+    """Why the decisions read did (not) work: {ok, note}. Never contains credentials."""
+    return dict(_DECISIONS_STATUS)
+
+
 def fetch_decisions() -> list[dict]:
-    """Live active decisions via the LAPI bouncer endpoint (GET /v1/decisions)."""
+    """Active decisions via the LAPI bouncer endpoint (GET /v1/decisions). Returns [] on any failure and records why in
+    :func:`decisions_status`, so an empty list from a failed read is never mistaken for 'CrowdSec holds no decisions'."""
     if not CROWDSEC_BOUNCER_KEY:
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note="CrowdSec bouncer key not configured")
         return []
     try:
         r = httpx.get(
@@ -93,21 +198,97 @@ def fetch_decisions() -> list[dict]:
             headers={"X-Api-Key": CROWDSEC_BOUNCER_KEY},
             timeout=8.0,
         )
-        r.raise_for_status()
-        return r.json() or []
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note=f"LAPI request failed ({type(e).__name__})")
         return []
+    if r.status_code != 200:
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note=f"LAPI decisions HTTP {r.status_code}")
+        return []
+    try:
+        data = r.json()
+    except Exception:  # noqa: BLE001
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note="LAPI decisions: malformed response")
+        return []
+    if data is None:                                   # CrowdSec answers `null` for "no decisions"
+        data = []
+    if not isinstance(data, list):
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note="LAPI decisions: unexpected response")
+        return []
+    _set_status(_DECISIONS_STATUS, "decisions", ok=True, note="")
+    return data
+
+
+_ALERTS_STATUS: dict = {"ok": False, "note": "not read yet"}
+
+
+def alerts_status() -> dict:
+    """Why the alerts read did (not) work: {ok, note}."""
+    return dict(_ALERTS_STATUS)
 
 
 def fetch_alerts() -> list[dict]:
-    """Recent alerts via `cscli alerts list -o json` (docker exec)."""
+    """Recent alerts via `cscli alerts list -o json` (docker exec). Returns [] on any failure and records why in
+    :func:`alerts_status`, so an empty list from a failed read is never mistaken for 'no alerts'."""
+    if watcher_configured():
+        return _fetch_alerts_lapi()
     rc, out, _err = _cscli(["alerts", "list", "-o", "json"])
-    if rc != 0 or not out.strip():
+    if rc != 0:
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note=f"cscli failed (exit {rc})")
+        return []
+    if not out.strip():
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="cscli printed nothing")
         return []
     try:
-        return json.loads(out) or []
-    except Exception:
+        data = json.loads(out)
+    except Exception:  # noqa: BLE001
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="cscli output is not JSON")
         return []
+    if data is None:                                   # cscli prints `null` for "no alerts"
+        data = []
+    if not isinstance(data, list):
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="cscli output has an unexpected shape")
+        return []
+    _set_status(_ALERTS_STATUS, "alerts", ok=True, note="")
+    return data
+
+
+def _fetch_alerts_lapi() -> list[dict]:
+    """Recent alerts over the LAPI as the watcher (GET /v1/alerts): the same JSON as `cscli alerts list -o json`, with no docker access."""
+    try:
+        r = _watcher_request("GET", "/v1/alerts", params={"limit": 50})
+    except Exception as e:  # noqa: BLE001
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note=f"LAPI alerts request failed ({type(e).__name__})")
+        return []
+    if r.status_code != 200:
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note=f"LAPI alerts HTTP {r.status_code}")
+        return []
+    try:
+        data = r.json()
+    except Exception:  # noqa: BLE001
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="LAPI alerts: malformed response")
+        return []
+    if data is None:                                   # CrowdSec answers `null` for "no alerts"
+        data = []
+    if not isinstance(data, list):
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="LAPI alerts: unexpected response")
+        return []
+    _set_status(_ALERTS_STATUS, "alerts", ok=True, note="")
+    return data
+
+
+def read_decisions() -> tuple[list[dict], dict]:
+    """(data, status) of one decisions read. The status is this call's own (thread-local) and carries the read's finish
+    time under "at"; it is never another request's result."""
+    _TLS.decisions_status = None
+    data = fetch_decisions()
+    return data, _own_read("decisions")
+
+
+def read_alerts() -> tuple[list[dict], dict]:
+    """(data, status) of one alerts read; see :func:`read_decisions`."""
+    _TLS.alerts_status = None
+    data = fetch_alerts()
+    return data, _own_read("alerts")
 
 
 # ── pure display helpers ─────────────────────────────────────────────────────
@@ -152,6 +333,14 @@ def _ago(iso: str) -> str:
         return iso[:16].replace("T", " ")
 
 
+def _alert_origin(alert: dict) -> str:
+    """Origin of the first decision attached to an alert (CrowdSec: 'crowdsec' for an engine detection, 'cscli' for an
+    entry added by hand), or '' when the alert carries none."""
+    ds = alert.get("decisions") if isinstance(alert, dict) else None
+    first = ds[0] if isinstance(ds, list) and ds and isinstance(ds[0], dict) else {}
+    return str(first.get("origin") or "")
+
+
 # ── live data + KPIs (cached briefly) ────────────────────────────────────────
 _CACHE: dict = {"ts": 0.0, "data": None}
 _CACHE_TTL = 10.0  # seconds — keep the dashboard snappy without hammering CrowdSec
@@ -164,8 +353,13 @@ def fetch_activity(force: bool = False) -> dict:
         return _CACHE["data"]
 
     connected = crowdsec_connected()
-    decisions = fetch_decisions() if connected else []
-    alerts = fetch_alerts() if connected else []
+    not_read = {"ok": False, "note": "CrowdSec unreachable"}
+    if connected:
+        decisions, d_status = read_decisions()
+        alerts, a_status = read_alerts()
+    else:
+        decisions, alerts, d_status, a_status = [], [], dict(not_read), dict(not_read)
+    d_at, a_at = d_status.pop("at", None), a_status.pop("at", None)       # each source's OWN read time
 
     # --- decisions table (active bans) ---
     decision_rows = []
@@ -197,6 +391,7 @@ def fetch_activity(force: bool = False) -> dict:
             "created_at": a.get("created_at", ""),
             "ago": _ago(a.get("created_at", "")),
             "severity": _severity(scenario),
+            "origin": _alert_origin(a),
         })
     alert_rows.sort(key=lambda r: r["created_at"], reverse=True)
 
@@ -204,6 +399,10 @@ def fetch_activity(force: bool = False) -> dict:
     active_bans = len([d for d in decisions if (d.get("type") or "ban") == "ban"])
 
     from datetime import datetime, timezone, timedelta
+    def _fmt(dt) -> str:
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC") if dt else ""
+    both_ok = d_status["ok"] and a_status["ok"] and d_at and a_at
+    last_dt = max(d_at, a_at) if both_ok else None
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     def _within_24h(iso: str) -> bool:
@@ -239,14 +438,24 @@ def fetch_activity(force: bool = False) -> dict:
         "tenant": TENANT,
         "core": "crowdsec",
         "connected": connected,
+        # read_at is set only when BOTH sources were read; each source also has its own stamp and status
+        "read_at": _fmt(last_dt),
+        "read_at_iso": last_dt.isoformat(timespec="seconds") if last_dt else "",
+        "decisions_read_at": _fmt(d_at) if d_status["ok"] else "",
+        "alerts_read_at": _fmt(a_at) if a_status["ok"] else "",
+        "decisions_status": d_status,
         "front_url": CROWDSEC_FRONT_URL,
         "has_threat": has_threat,
         "kpis": [
-            {"label": "Threats blocked", "value": str(active_bans), "note": "active decisions enforced"},
-            {"label": "Alerts (24h)", "value": str(alerts_24h), "note": f"{len(alerts)} total in store"},
-            {"label": "Source IPs", "value": str(unique_sources), "note": "unique blocked sources"},
-            {"label": "Last event", "value": last_event, "note": top_scenarios[0][0] if top_scenarios else "—"},
+            {"label": "Active decisions", "value": (str(active_bans) if d_status["ok"] else "not read"),
+             "note": ("bans held in CrowdSec (not proof that a bouncer enforces them)" if d_status["ok"] else d_status["note"])},
+            {"label": "Alerts (24h)", "value": (str(alerts_24h) if a_status["ok"] else "not read"),
+             "note": (f"{len(alerts)} total in store" if a_status["ok"] else a_status["note"])},
+            {"label": "Source IPs", "value": (str(unique_sources) if d_status["ok"] else "not read"),
+             "note": ("unique sources in active decisions" if d_status["ok"] else d_status["note"])},
+            {"label": "Last event", "value": (last_event if a_status["ok"] else "not read"), "note": top_scenarios[0][0] if top_scenarios else "—"},
         ],
+        "alerts_status": a_status,
         "decisions": decision_rows,
         "alerts": alert_rows,
         "top_scenarios": [{"scenario": k, "count": v} for k, v in top_scenarios],
@@ -308,11 +517,15 @@ def block_ip(body: dict) -> dict:
     err = None
     try:
         with httpx.Client(timeout=10.0) as client:
-            resp = client.post(
-                f"{CROWDSEC_LAPI_URL}/v1/decisions",
-                headers=_headers(),
-                json=[decision],
-            )
+            if watcher_configured():
+                # a real LAPI refuses POST /v1/decisions (405); a ban is written as an alert carrying the decision
+                resp = _watcher_request("POST", "/v1/alerts", json=[_lapi_ban_alert(decision)])
+            else:
+                resp = client.post(
+                    f"{CROWDSEC_LAPI_URL}/v1/decisions",
+                    headers=_headers(),
+                    json=[decision],
+                )
             status_code = resp.status_code
             if status_code in (200, 201, 202):
                 # Read-back: the POST status alone does not prove the ban is ACTIVE. Re-read the LAPI's
@@ -387,11 +600,14 @@ def unblock_ip(body: dict) -> dict:
     err = None
     try:
         with httpx.Client(timeout=10.0) as client:
-            resp = client.delete(
-                f"{CROWDSEC_LAPI_URL}/v1/decisions",
-                headers=_headers(),
-                params={"ip": ip},
-            )
+            if watcher_configured():
+                resp = _watcher_request("DELETE", "/v1/decisions", params={"ip": ip})
+            else:
+                resp = client.delete(
+                    f"{CROWDSEC_LAPI_URL}/v1/decisions",
+                    headers=_headers(),
+                    params={"ip": ip},
+                )
             status_code = resp.status_code
             still_banned, seen = (False, None)
             if status_code in (200, 204):
@@ -437,7 +653,7 @@ def triage(blurb: Callable[[str], str | None] | None = None) -> dict:
 
     detail = "; ".join(f"{d['value']} ({d['scenario']}, {d['severity']})" for d in decisions[:6]) or "none"
     summary = (
-        f"{len(decisions)} active block(s), {len(alerts)} alert(s) in store. "
+        f"{len(decisions)} active decision(s), {len(alerts)} alert(s) in store. "
         f"Severity mix: " + ", ".join(f"{k}={v}" for k, v in sorted(by_sev.items())) + ". "
         f"Top scenarios: " + ", ".join(f"{s['scenario']}({s['count']})" for s in top) + "."
     )
@@ -453,7 +669,7 @@ def triage(blurb: Callable[[str], str | None] | None = None) -> dict:
         "summary": summary,
     }
     reasoning = blurb(
-        "You are a SOC analyst agent for a wealth-management firm's network. In ONE sentence, "
+        "You are a SOC analyst agent for this organisation's network. In ONE sentence, "
         f"triage these active CrowdSec block decisions and recommend a next step: {detail}. "
         "Be concrete and professional. Final answer only, no preamble."
     ) if blurb else None

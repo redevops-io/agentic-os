@@ -212,7 +212,7 @@ class FindCompaniesRebuildingTheRuntime(WorldDefinition):
         rt.tick(2)
         subject = f"{top['pilot']} for {top['account']}"
         body = (f"I noticed {top['evidence']}. We've been building those concerns "
-                f"({', '.join(top['components'][:3])}) into an open-source Runtime layer rather than "
+                f"({', '.join(top['components'][:3])}) into a source-available Runtime layer rather than "
                 f"re-implementing them in each agent. Smallest credible experiment: a {top['pilot']}.")
         draft = rt.fabric.invoke("mail.draft", {"subject": subject, "body": body,
                                  "idempotency_key": f"{top['account']}:draft"})

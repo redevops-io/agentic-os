@@ -22,8 +22,12 @@ CRED = "operator:s3cret-operator-pass"
 ACCT = core.DEMO[0]["account"]
 BODIES = {
     "refresh": {"action": "refresh", "live": False},
+    "enrich": {"action": "enrich", "account": ACCT},
+    "draft_pitch": {"action": "draft_pitch", "account": ACCT},
     "approve": {"action": "approve", "account": ACCT},
     "send_all": {"action": "send_all"},
+    "check_replies": {"action": "check_replies"},
+    "follow_up": {"action": "follow_up", "account": ACCT},
 }
 GATED = ("approve", "send_all")
 PATHS = ("/api/run", "/agent/run")
@@ -68,6 +72,9 @@ def _env(monkeypatch):
     core._LIVE_CACHE.update(ts=0.0, rows=[])
     monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
     monkeypatch.setattr(core.urllib.request, "urlopen", _urlopen)
+    # hermetic against this machine's real ~/.zshrc exports: no test may attempt a real SMTP connection
+    monkeypatch.setattr(core, "GMAIL_SMTP_USER", "")
+    monkeypatch.setattr(core, "GMAIL_SMTP_APP_PASSWORD", "")
     monkeypatch.setenv("OPERATOR_BASIC_AUTH", CRED)
     monkeypatch.delenv("OUTREACH_BASIC_AUTH", raising=False)
     monkeypatch.setattr(app_mod, "_llm", lambda *a, **k: "")
@@ -148,6 +155,41 @@ def test_operator_send_all_executes_through_core_honestly(client):
 def test_refresh_is_ungated_read(client):
     r = client.post("/api/run", json=BODIES["refresh"])
     assert r.json()["action"] == "refresh" and _Twenty.writes == []
+
+
+def test_draft_pitch_is_ungated_read(client):
+    # app_mod._llm is forced to "" by the autouse fixture, so this exercises the deterministic
+    # template fallback -- still runs with no approval marker, and still never touches Twenty.
+    r = client.post("/api/run", json=BODIES["draft_pitch"])
+    j = r.json()
+    assert j["ok"] is True and j["action"] == "draft_pitch" and j["draft_source"] == "template"
+    assert "<table" in j["html"] and _Twenty.writes == []
+    row = next(row for row in core._STATE["accounts"] if row["account"] == ACCT)
+    assert row["draft"]["body"] == j["body"]
+
+
+def test_follow_up_is_ungated_read(client):
+    r = client.post("/api/run", json=BODIES["follow_up"])
+    j = r.json()
+    assert j["ok"] is True and j["action"] == "follow_up" and j["follow_up_for"] == "no_reply"
+    assert "<table" in j["html"] and _Twenty.writes == []
+
+
+def test_enrich_is_ungated_read(client):
+    # DEMO leads are "manual" source (no GitHub profile) -> no domain -> honest degrade, but it never
+    # needs an approval marker to run, and it never touches Twenty.
+    r = client.post("/api/run", json=BODIES["enrich"])
+    j = r.json()
+    assert j["ok"] is True and j["action"] == "enrich" and j["email"] is None and _Twenty.writes == []
+
+
+def test_check_replies_is_ungated_read_and_honest_without_a_reader(client):
+    # the autouse fixture forces GMAIL_SMTP_USER/APP_PASSWORD off, so this is the honest "not configured"
+    # path -- no approval marker needed either way, and it never touches Twenty.
+    r = client.post("/api/run", json=BODIES["check_replies"])
+    j = r.json()
+    assert j["ok"] is False and j["action"] == "check_replies" and "no reader" in j["reason"]
+    assert _Twenty.writes == []
 
 
 def test_unknown_action(client):

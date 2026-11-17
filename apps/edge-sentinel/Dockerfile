@@ -3,9 +3,10 @@ FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0
 
 WORKDIR /app
 
-# docker CLI (static binary) so `cscli` (alerts/bans) can be exec'd into the CrowdSec
-# container via the mounted /var/run/docker.sock. Decisions/health are read purely over
-# the LAPI and need none of this — alerts just degrade gracefully if the socket is absent.
+# docker CLI (static binary) so `cscli` (alerts/bans) CAN be exec'd into the CrowdSec container when an operator
+# provides Docker access (a restricted, operator-supplied proxy or a separate worker; see the README, "Docker access").
+# Decisions/health are read purely over the LAPI and need none of this; without Docker access the alert feed
+# shows as unavailable.
 ARG DOCKER_CLI_VERSION=27.3.1
 ARG TRIVY_VERSION=0.75.0
 ARG TRIVY_SHA256=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -43,7 +44,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # The agentic-os KERNEL is pinned HERE (single source, overridable) rather than in requirements.txt, so
 # the image tracks a known kernel tag instead of a stale commit. Override at build time, e.g.
 #   docker build --build-arg KERNEL_REF=main .   (or a newer release tag)
-ARG KERNEL_REF=v0.4.1
+ARG KERNEL_REF=v0.4.2
 RUN pip install --no-cache-dir "agentic-os @ https://github.com/redevops-io/agentic-os/archive/${KERNEL_REF}.tar.gz"
 
 # Copy ALL python modules into an importable PACKAGE. app.py uses package-relative imports
@@ -58,9 +59,9 @@ RUN touch edge_sentinel/__init__.py
 # Notes for containerized runs:
 #   * CROWDSEC_LAPI_URL should point at the CrowdSec service on the shared docker
 #     network (e.g. http://crowdsec:8080), not localhost.
-#   * The `triage`/`approve_block`/alerts path shells out to `cscli` via the docker
-#     socket; to use it from a container, mount /var/run/docker.sock. Decisions are
-#     read purely over the LAPI bouncer key and need no socket.
+#   * The `triage`/`approve_block`/alerts path shells out to `cscli` via the docker CLI, which needs Docker access
+#     (do not mount the raw /var/run/docker.sock; see the README, "Docker access"). Decisions are read purely over
+#     the LAPI bouncer key and need none.
 # Run as an unprivileged user; /app and /data are writable by it (state lives under $HOME or /data).
 RUN useradd --system --uid 10001 --create-home --home-dir /home/app app \
  && mkdir -p /data && chown -R app:app /app /data
@@ -74,6 +75,21 @@ USER app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/health' % os.environ['PORT'], timeout=3)"
 ENV PORT=8203 PYTHONPATH=/app
+# The bind is declared, not hard-coded (P9): the image says it binds every interface — inside a network
+# namespace that is how a container is served — and the app's startup guard checks that declaration before
+# a single request is served. What the image deliberately does NOT do is enable exposure for you:
+# SENTINEL_ALLOW_EXPOSURE is the deployment's decision, made on the run/compose command together with an
+# operator credential (independently enforced on every execution route), e.g.
+#   docker run -e SENTINEL_ALLOW_EXPOSURE=1 -e SENTINEL_BASIC_AUTH_USER=... -e SENTINEL_BASIC_AUTH_PASS=... ...
+# A deliberately open read-only demo (execution stays authenticated and dry-run) must say so itself:
+#   -e SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1
+# BREAKING by design: this image, started WITHOUT that deployment decision, refuses to come up.
+ENV SENTINEL_BIND_HOST=0.0.0.0
 EXPOSE 8203
 
-CMD ["uvicorn", "edge_sentinel.app:app", "--host", "0.0.0.0", "--port", "8203"]
+# Shell form so the declared bind host and port above are the ones actually bound. `exec` is what makes that safe:
+# the shell replaces itself with uvicorn, so uvicorn is still PID 1 and still receives SIGTERM for the graceful
+# shutdown the container depends on. The app module is quoted because the kernel entrypoint guard
+# (tests/test_app_dockerfiles.py) requires the package-qualified target to appear quoted, and a JSON-array CMD
+# would escape those quotes; a flat `app:app` target cannot resolve the package-relative imports.
+CMD exec uvicorn "edge_sentinel.app:app" --host "$SENTINEL_BIND_HOST" --port "$PORT"

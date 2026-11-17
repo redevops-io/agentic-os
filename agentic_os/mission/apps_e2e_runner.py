@@ -13,6 +13,7 @@ import json
 import os
 from typing import Callable, Mapping
 
+from agentic_os._platform.files import append_line as _append_line
 from agentic_os.mission.apps_e2e import AppsE2EScenario, CoverageMatrix, OracleVerdict, coverage_matrix
 from agentic_os.mission.context_view import content_hash
 from agentic_os.mission.decision_episode import DecisionEpisode
@@ -136,11 +137,7 @@ class JsonlEpisodeStore(InMemoryEpisodeStore):
 
     def append(self, run: ScenarioRun) -> EpisodeAppendReceipt:
         receipt = super().append(run)
-        parent = os.path.dirname(self.path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(self.path, "a") as fh:
-            fh.write(json.dumps(run.canonical_payload(), sort_keys=True) + "\n")
+        _append_line(self.path, json.dumps(run.canonical_payload(), sort_keys=True))     # one locked write (Windows append is not atomic)
         return receipt
 
 

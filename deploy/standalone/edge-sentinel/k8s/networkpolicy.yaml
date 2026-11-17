@@ -1,0 +1,54 @@
+# Default deny for the namespace, then exactly what the two workloads need. Enforced only when the cluster's network plugin
+# implements NetworkPolicy (k3s does; a plain kind cluster does not).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: edge-sentinel}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: edge-sentinel, namespace: edge-sentinel}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: edge-sentinel}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # who may reach the dashboard: the namespace of your ingress controller (edit the label), or an operator's port-forward
+    # (kubectl port-forward is not subject to NetworkPolicy)
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+      ports:
+        - {protocol: TCP, port: 8203}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: crowdsec}}
+      ports:
+        - {protocol: TCP, port: 8080}
+    - to:                              # cluster DNS
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: crowdsec, namespace: edge-sentinel}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: crowdsec}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: edge-sentinel}}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:                              # cluster DNS
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:                              # CrowdSec fetches its hub index (parsers, scenarios) and version over HTTPS at start; the
+        - ipBlock: {cidr: 0.0.0.0/0}   # community API uses the same port. Remove this rule only with a pre-populated config volume.
+      ports:
+        - {protocol: TCP, port: 443}

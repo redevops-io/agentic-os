@@ -27,6 +27,12 @@ class CapabilityDomain(str, Enum):
     COMMERCIAL = "commercial"
     OPERATIONS = "operations"
     FINANCE = "finance"
+    # Standalone products integrated through agentic_os.products (tools bound to each product's own HTTP API).
+    SECURITY = "security"
+    QUALITY = "quality"
+    # A cross-product read-only composition (findings.consolidate): it reads the SECURITY and QUALITY products and
+    # owns no product of its own, so it gets its own domain rather than pretending to be one of theirs.
+    FINDINGS = "findings"
 
 
 class Maturity(str, Enum):

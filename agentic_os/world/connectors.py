@@ -1,4 +1,4 @@
-"""Real GTM connectors — HubSpot, Salesforce, Postmark — as governed Capability Fabric providers.
+"""Real GTM connectors — HubSpot, Salesforce, Postmark, Gmail SMTP/IMAP — as governed Capability Fabric providers.
 
 These turn the GTM world's simulated reconcile/draft into real capabilities: CRM lookup/upsert across HubSpot
 and Salesforce, and email send via Postmark. They are **read-first and approval-gated by construction**:
@@ -268,3 +268,92 @@ class PostmarkConnector:
                   headers={"X-Postmark-Server-Token": self._token, "Content-Type": "application/json",
                            "Accept": "application/json"}, data=json.dumps(payload).encode())
         return {"message_id": r.get("MessageID"), "to": r.get("To"), "error_code": r.get("ErrorCode", 0)}
+
+
+class GmailSMTPConnector:
+    """Email send via a Gmail mailbox's App Password (smtp.gmail.com:587, STARTTLS) — the simplest real
+    sender when no Postmark/SES is configured for this mailbox. An App Password needs 2FA enabled on the
+    Google account and nothing else (no OAuth app, no domain-wide delegation); Gmail requires ``from_addr``
+    to be the authenticated mailbox itself or one of its verified aliases, so it defaults to ``user``."""
+
+    def __init__(self, user: str, app_password: str, *, from_addr: str = "") -> None:
+        self._user = user
+        self._password = app_password
+        self._from = from_addr or user
+
+    def send(self, *, to: str, subject: str, body: str, tag: str = "gtm",
+             html: Optional[str] = None) -> Dict[str, Any]:
+        import smtplib  # noqa: PLC0415
+        from email.message import EmailMessage  # noqa: PLC0415
+        from email.utils import make_msgid  # noqa: PLC0415
+
+        msg = EmailMessage()
+        msg["From"], msg["To"], msg["Subject"] = self._from, to, subject
+        msg["X-Tag"] = tag
+        msg_id = make_msgid(domain=(self._user.split("@", 1)[-1] or None))
+        msg["Message-Id"] = msg_id
+        msg.set_content(body)
+        if html:
+            msg.add_alternative(html, subtype="html")
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as s:
+                s.starttls()
+                s.login(self._user, self._password)
+                s.send_message(msg)
+            return {"message_id": msg_id, "to": to, "error_code": 0}
+        except Exception as e:  # noqa: BLE001 — never raise into a send-all loop; report the failure instead
+            return {"message_id": None, "to": to, "error_code": 1, "error": f"{type(e).__name__}: {e}"}
+
+
+class GmailIMAPConnector:
+    """Read access to a Gmail mailbox's INBOX via its App Password (imap.gmail.com:993, SSL) — the read
+    half of ``GmailSMTPConnector``'s send, same credential, read-only (``readonly=True`` on SELECT so this
+    can never mark a message seen or move/delete anything). Used to detect a prospect's reply without any
+    OAuth app, Gmail API project or push subscription — just a search."""
+
+    def __init__(self, user: str, app_password: str) -> None:
+        self._user = user
+        self._password = app_password
+
+    def find_replies(self, from_addr: str, *, limit: int = 5) -> Dict[str, Any]:
+        import imaplib  # noqa: PLC0415
+        from email import message_from_bytes  # noqa: PLC0415
+        from email.header import decode_header  # noqa: PLC0415
+        from email.utils import parsedate_to_datetime  # noqa: PLC0415
+
+        if '"' in from_addr or "\\" in from_addr:   # never let a stored address break out of the IMAP literal
+            return {"ok": False, "replies": [], "error": "invalid address for an IMAP search term"}
+        m = None
+        try:
+            m = imaplib.IMAP4_SSL("imap.gmail.com")
+            m.login(self._user, self._password)
+            m.select("INBOX", readonly=True)
+            typ, data = m.search(None, f'(FROM "{from_addr}")')
+            if typ != "OK":
+                return {"ok": False, "replies": [], "error": f"IMAP SEARCH -> {typ}"}
+            out = []
+            for uid in reversed((data[0].split() if data and data[0] else [])[-limit:]):
+                typ, msg_data = m.fetch(uid, "(RFC822)")
+                if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+                    continue
+                msg = message_from_bytes(msg_data[0][1])
+                parts = decode_header(msg.get("Subject", "") or "")
+                subject = "".join(
+                    t.decode(enc or "utf-8", errors="replace") if isinstance(t, bytes) else t
+                    for t, enc in parts)
+                date = msg.get("Date", "")
+                try:
+                    when = parsedate_to_datetime(date).isoformat() if date else None
+                except Exception:  # noqa: BLE001
+                    when = None
+                out.append({"from": msg.get("From", ""), "subject": subject, "date": when,
+                            "message_id": msg.get("Message-Id", "")})
+            return {"ok": True, "replies": out}
+        except Exception as e:  # noqa: BLE001 — a reader that crashes callers is worse than one that reports
+            return {"ok": False, "replies": [], "error": f"{type(e).__name__}: {e}"}
+        finally:
+            if m is not None:
+                try:
+                    m.logout()
+                except Exception:  # noqa: BLE001
+                    pass

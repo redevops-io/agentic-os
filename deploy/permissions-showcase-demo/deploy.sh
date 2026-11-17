@@ -33,7 +33,16 @@ ssh "root@$HOST" "mkdir -p $HOST_DIR"
 # --delete must never remove what this script did not create: key and env files stay on the host
 rsync -aH --delete --exclude '.git' --exclude 'permissions.env' --exclude '.permissions.key' --exclude '.env' --exclude '*.key' "$STAGE"/ "root@$HOST:$HOST_DIR/"
 
-ssh "root@$HOST" PERM_HOST_DIR="$HOST_DIR" PERM_BIND="${PERM_BIND_HOST:-$HOST}" 'bash -s' <<'REMOTE'
+# Stamp the image with the commit being deployed, computed here (the staged build context has no .git) and
+# carried to the host as environment. Without this the running container cannot name its own code. The tree
+# is what gets rsynced, so a dirty checkout is named as one: a stamp that silently claims a clean commit
+# would be worse than none, because the code would not match the commit anyone goes to read.
+PERM_BUILD_REV="$(git -C "$AGENTIC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+[ "$PERM_BUILD_REV" = "unknown" ] || [ -z "$(git -C "$AGENTIC" status --porcelain 2>/dev/null)" ] || PERM_BUILD_REV="$PERM_BUILD_REV-dirty"
+PERM_BUILD_TIME="$(git -C "$AGENTIC" show -s --format=%cI HEAD 2>/dev/null || echo unknown)"
+echo "== deploying $PERM_BUILD_REV ($PERM_BUILD_TIME) =="
+
+ssh "root@$HOST" PERM_HOST_DIR="$HOST_DIR" PERM_BIND="${PERM_BIND_HOST:-$HOST}" PERM_BUILD_REV="$PERM_BUILD_REV" PERM_BUILD_TIME="$PERM_BUILD_TIME" 'bash -s' <<'REMOTE'
 set -e
 cd "$PERM_HOST_DIR"
 if ! grep -q '^PERMISSIONS_KEY=.' permissions.env 2>/dev/null; then
@@ -48,13 +57,22 @@ if ! grep -q '^PERMISSIONS_TRUSTED_PROXIES=.' permissions.env 2>/dev/null; then
   echo "       failed-attempt bucket and the admin API cannot tell them apart. Add PERMISSIONS_TRUSTED_PROXIES=<address> to permissions.env on the host, then re-run." >&2
   exit 1
 fi
-PERM_EDGE_PORT=8109 PERM_BIND_HOST="$PERM_BIND" docker compose --env-file permissions.env -p permissions-demo -f permissions-demo.compose.yml up -d --build
+AGENTIC_OS_BUILD_REVISION="$PERM_BUILD_REV" AGENTIC_OS_BUILD_TIME="$PERM_BUILD_TIME" \
+  PERM_EDGE_PORT=8109 PERM_BIND_HOST="$PERM_BIND" docker compose --env-file permissions.env -p permissions-demo -f permissions-demo.compose.yml up -d --build
 for i in $(seq 1 30); do
   curl -s --max-time 6 "http://$PERM_BIND:8109/healthz" 2>/dev/null | grep -q '"ok":true' && { echo healthy; break; }
   sleep 2
 done
 echo -n "demo:   "; curl -s "http://$PERM_BIND:8109/api/demo/scenarios" 2>/dev/null | head -c 120; echo
 echo -n "page:   "; curl -s -o /dev/null -w "/permissions -> %{http_code}\n" "http://$PERM_BIND:8109/permissions"
+# What the running container says it is, checked against what this run intended to deploy. A mismatch means
+# the image did not rebuild (or something else owns the port) — the kind of thing that used to be invisible.
+RUN_REV="$(curl -s --max-time 6 "http://$PERM_BIND:8109/api/version" 2>/dev/null | sed -n 's/.*"revision":"\([^"]*\)".*/\1/p')"
+if [ "$RUN_REV" = "$PERM_BUILD_REV" ]; then
+  echo "build:  $RUN_REV (matches what was deployed)"
+else
+  echo "warning: container reports revision '$RUN_REV', this run deployed '$PERM_BUILD_REV' - the image may not have rebuilt" >&2
+fi
 REMOTE
 
 echo

@@ -19,6 +19,7 @@ import sys
 import textwrap
 
 import pytest
+from tests._posix_marks import posix_modes, posix_shell_recipes
 
 from agentic_os import permissions as perm
 from agentic_os.permissions import GrantStorageError, GrantStore
@@ -146,6 +147,7 @@ class TestComposeStopsWithoutAKey:
 
 
 class TestTheSetupStep:
+    @posix_modes
     def test_the_key_command_writes_a_0600_file_and_never_prints_the_key(self, tmp_path):
         envf = tmp_path / "permissions.env"
         r = _cli("key", "--env-file", str(envf), "--k8s-secret", "redevops-permissions-key", "--namespace", "aos")
@@ -189,8 +191,8 @@ class TestTheSetupStep:
         assert pathlib.Path(kf).read_text().strip() not in r.stdout + r.stderr
         out = _py("""
             from agentic_os.permissions import GrantStore
-            s = GrantStore("%s"); print(s.status()["key_source"], [g.subject for g in s.list()], s.sealed)
-        """ % d, **_parse_env_file(envf))
+            s = GrantStore(%r); print(s.status()["key_source"], [g.subject for g in s.list()], s.sealed)
+        """ % str(d), **_parse_env_file(envf))
         assert out.returncode == 0 and out.stdout.strip() == "env ['support'] False"
 
     def test_a_damaged_key_file_is_refused_and_nothing_is_written(self, tmp_path):
@@ -199,6 +201,7 @@ class TestTheSetupStep:
         r = _cli("key", "--env-file", str(tmp_path / "e.env"), "--from-key-file", str(bad))
         assert r.returncode == 2 and "unusable" in r.stderr and not (tmp_path / "e.env").exists()
 
+    @posix_modes
     def test_init_key_only_creates_the_key_file_and_no_grants(self, tmp_path):
         d = tmp_path / "perm"
         r = _cli("init", "--dir", str(d), "--key-only")
@@ -281,6 +284,7 @@ class TestFreshInstallWalkthroughs:
         out = _py(code, PERMISSIONS_DIR=vol, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", **_parse_env_file(envf))
         assert out.returncode == 0 and '"env"' in out.stdout
 
+    @posix_shell_recipes
     def test_make_run_path(self, tmp_path):
         """`make run` needs a key (env, key file, or the permissions.env written by `make permissions-key`) and otherwise stops."""
         shim = tmp_path / "bin"

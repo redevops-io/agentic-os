@@ -15,6 +15,7 @@ import sys
 import threading
 
 import pytest
+from tests._posix_marks import posix_modes
 
 from agentic_os.permissions import GrantStorageError, GrantStore, Identity, PermissionsPlane
 
@@ -111,6 +112,7 @@ class TestRollbackProtection:
         raw = store.path.read_bytes()
         assert b"counter" not in raw                      # inside the encrypted payload, not visible
 
+    @posix_modes
     def test_a_sidecar_records_the_highest_counter_with_mode_0600(self, store):
         store.add("role", "a", "table", "t")
         side = pathlib.Path(store.dir) / "grants.counter"

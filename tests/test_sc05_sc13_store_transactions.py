@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import errno
-import fcntl
 import os
 import threading
 import time
@@ -16,6 +15,7 @@ import time
 import pytest
 
 from agentic_os import permissions as P
+from agentic_os._platform import locks
 from agentic_os.permissions import GrantStorageError, GrantStore, Identity, PermissionsPlane
 
 KEY = base64.b64encode(b"s" * 32).decode()
@@ -128,11 +128,11 @@ class TestSC05TheReadStateIsPerOperation:
 
 
 def _hold_lock(directory, started, release):
-    fd = os.open(os.path.join(directory, ".grants.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    fd = os.open(os.path.join(directory, ".grants.lock"), os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+    locks.acquire(fd)                                  # the platform lock (flock / LockFileEx): the store's own transaction contends with it
     started.set()
     release.wait(30)
-    fcntl.flock(fd, fcntl.LOCK_UN)
+    locks.release(fd)
     os.close(fd)
 
 

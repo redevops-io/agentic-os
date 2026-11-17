@@ -11,5 +11,7 @@
    characterize licences.
 5. Releases: follow [docs/RELEASING.md](docs/RELEASING.md); never delete or rewrite tags.
 6. Security issues: [SECURITY.md](SECURITY.md), not a public issue.
+7. Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Review ownership is in
+   [.github/CODEOWNERS](.github/CODEOWNERS); issue and pull-request forms are under `.github/`.
 
 Contributions are under the repository [LICENSE.md](LICENSE.md).

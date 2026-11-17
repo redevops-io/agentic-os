@@ -219,7 +219,7 @@ _PAGE = """<!DOCTYPE html>
       <span class="badge">§3 HTTP API</span>
       <span class="badge">__NCAPS__ capabilities live</span>
       <span class="badge">bi-temporal · leakage-safe</span>
-      <span class="badge">open-core demo</span>
+      <span class="badge">source-available core demo</span>
     </div>
   </header>
 
@@ -261,7 +261,7 @@ _PAGE = """<!DOCTYPE html>
   </section>
 
   <footer>
-    Open-core demo over the public intelligence families on self-contained data. The managed, single-key
+    Source-available core demo over the public intelligence families on self-contained data. The managed, single-key
     pay-per-decision gateway is a separate layer. · <a href="https://redevops.io">redevops.io</a>
   </footer>
 </div>

@@ -30,4 +30,11 @@ regexes = [
                                     # Shaped like a real "<digits>-token" ONLY to prove from_env() maps
                                     # access-key vs secret by that shape; non-functional. Committed in
                                     # ab3f486 (PR #184), immutable, so the history-wide scan needs it.
+  '''approval-secret-for-tests-[0-9a-f]+''',  # fake plan-approval key constant (tests/aosdd_fakes.py); the AOS-DD
+                                    # tests seed known fake credentials to prove they never reach any sink.
+  '''lagoKEYsecret0004''',           # fake Lago key used by the same AOS-DD fakes and tests (committed in the
+                                    # immutable AOS-DD commits, so the history-wide scan needs it).
+  '''secret: `sign_and_notarize_r0prime_macos_v3\.sh''',  # PROSE false-positive in packaging/signing/README.md:
+                                    # "secret:" followed by a script name in backticks; no credential. Merged
+                                    # with the signing procedure (immutable commit b8fc388c).
 ]

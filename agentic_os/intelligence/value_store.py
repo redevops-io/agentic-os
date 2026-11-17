@@ -12,6 +12,7 @@ import os
 from dataclasses import replace
 from typing import Optional
 
+from agentic_os._platform.files import append_line as _append_line, fsync_enabled, locked_rewrite
 from runtime_contracts.protocol import Capability, EvidenceValueRecord
 
 
@@ -21,39 +22,46 @@ class EvidenceValueStore:
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
 
     def append(self, record: EvidenceValueRecord) -> None:
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record.canonical_form()) + "\n")
+        _append_line(self.path, json.dumps(record.canonical_form()), fsync=fsync_enabled())      # a cost ledger: forced to disk
+
+    @staticmethod
+    def _parse(text: str) -> list[EvidenceValueRecord]:
+        out: list[EvidenceValueRecord] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            out.append(EvidenceValueRecord(
+                decision_case_id=d["decision_case_id"], capability=Capability(d["capability"]),
+                provider=d.get("provider", ""), evidence_requested=d["evidence_requested"],
+                evidence_received=d["evidence_received"], cost=d.get("cost", 0.0),
+                decision_before=d.get("decision_before", ""), decision_after=d.get("decision_after", ""),
+                action=d.get("action", ""), verified_outcome=d.get("verified_outcome")))
+        return out
 
     def records(self) -> list[EvidenceValueRecord]:
         if not os.path.exists(self.path):
             return []
-        out: list[EvidenceValueRecord] = []
         with open(self.path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                d = json.loads(line)
-                out.append(EvidenceValueRecord(
-                    decision_case_id=d["decision_case_id"], capability=Capability(d["capability"]),
-                    provider=d.get("provider", ""), evidence_requested=d["evidence_requested"],
-                    evidence_received=d["evidence_received"], cost=d.get("cost", 0.0),
-                    decision_before=d.get("decision_before", ""), decision_after=d.get("decision_after", ""),
-                    action=d.get("action", ""), verified_outcome=d.get("verified_outcome")))
-        return out
+            return self._parse(fh.read())
 
     def resolve_outcome(self, decision_case_id: str, verified_outcome: str) -> int:
         """Backfill the verified outcome for a decision's records (called after the outcome is observed)."""
-        recs = self.records()
-        n = 0
-        for i, r in enumerate(recs):
-            if r.decision_case_id == decision_case_id and r.verified_outcome is None:
-                recs[i] = replace(r, verified_outcome=verified_outcome)
-                n += 1
-        with open(self.path, "w", encoding="utf-8") as fh:
-            for r in recs:
-                fh.write(json.dumps(r.canonical_form()) + "\n")
-        return n
+        changed = [0]
+
+        def rewrite(old: bytes):
+            recs = self._parse(old.decode("utf-8"))
+            for i, r in enumerate(recs):
+                if r.decision_case_id == decision_case_id and r.verified_outcome is None:
+                    recs[i] = replace(r, verified_outcome=verified_outcome)
+                    changed[0] += 1
+            if not changed[0]:
+                return None
+            return "".join(json.dumps(r.canonical_form()) + "\n" for r in recs).encode("utf-8")
+        # In place, under the lock appends take: a rewrite cannot destroy a record appended meanwhile, and an append cannot land in the middle of it.
+        locked_rewrite(self.path, rewrite, fsync=fsync_enabled())
+        return changed[0]
 
     def summary(self) -> dict[tuple[str, str], dict]:
         """Per (provider, capability): lookups, spend, changed-decision count, verified-beneficial count."""

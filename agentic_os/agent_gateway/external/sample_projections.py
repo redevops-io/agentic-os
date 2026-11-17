@@ -57,6 +57,7 @@ def deployment_inspection_view(target: str = "", *, project_id: str = "",
         "findings_by_severity": by_sev,
         "finding_count": len(ins["findings"]),
         "proposed_actions": ins["proposed_actions"],
+        "sample_sources": ins.get("sample_sources", []),
         "governed_action": out["governed_action"],
     }
 
