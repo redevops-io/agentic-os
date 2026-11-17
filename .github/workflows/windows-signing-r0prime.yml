@@ -243,6 +243,17 @@ jobs:
           WANT="6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
           if [ "$GOT" != "$WANT" ]; then echo "::error::jsign jar sha256 mismatch: got $GOT want $WANT"; exit 1; fi
 
+      # The signing script's own fixed PATH is /usr/bin:/bin:/usr/sbin:/sbin plus --tools-dir only -
+      # it does not include wherever this runner's Azure CLI actually lives. Symlinking it into the
+      # same tools dir already passed as --tools-dir makes it resolve there too, under the same
+      # sha256 pin the scope file already computes (shasum follows the symlink to the real content).
+      - name: Provision tools - az CLI symlink into the tools dir
+        run: |
+          set -euo pipefail
+          REAL_AZ="$(command -v az)"
+          ln -sf "$REAL_AZ" "$RUNNER_TEMP/tools/az"
+          shasum -a 256 "$RUNNER_TEMP/tools/az"
+
       - name: Provision tools - Python venv with signify (for the script's own post-sign verification)
         run: |
           set -euo pipefail
@@ -544,6 +555,10 @@ jobs:
           [ "$GOT" = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5" ] || { echo "::error::jsign hash mismatch"; exit 1; }
           /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
           "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
+          # same reasoning as sign-inner's own step: the signing script's fixed PATH does not include
+          # wherever this runner's az actually lives, only /usr/bin:/bin:/usr/sbin:/sbin + --tools-dir.
+          ln -sf "$(command -v az)" "$TOOLS/az"
+          shasum -a 256 "$TOOLS/az"
 
       - name: Build the scope file for stage container
         id: scope
