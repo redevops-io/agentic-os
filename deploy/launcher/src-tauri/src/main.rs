@@ -169,8 +169,23 @@ async fn legacy_service_warning() -> Option<String> {
 }
 
 /// Hand the redirect page's PATH to the OS opener. The argv holds a file path only: no URL, no code, no
-/// secret (see opener.rs).
+/// secret (see opener.rs). Windows only: if the user's default browser is a known Chromium build, spawn
+/// it directly with `--no-first-run` instead of going through `cmd /C start`, so a brand-new Windows
+/// profile's first-ever Edge launch doesn't let its First Run Experience take over instead of the
+/// handed-off page (see opener::windows_chromium). Any failure to spawn that way falls back to the
+/// normal cross-platform opener unchanged.
 fn open_in_browser(file: &std::path::Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if let Some((exe, args)) = opener::windows_chromium::override_command(file) {
+            let mut cmd = Command::new(exe);
+            cmd.args(args);
+            lifecycle::hide_console(&mut cmd);
+            if cmd.spawn().is_ok() {
+                return Ok(());
+            }
+        }
+    }
     let (prog, args) = opener::opener_command(file);
     let mut cmd = Command::new(prog);
     cmd.args(args);

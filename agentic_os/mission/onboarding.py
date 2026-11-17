@@ -51,9 +51,24 @@ class ProvisionedCredential:
 
 
 def default_secret_dir() -> str:
-    """The on-device secret directory: ``$REDEVOPS_SECRET_DIR`` or ``~/.redevops/secrets``."""
-    return os.environ.get("REDEVOPS_SECRET_DIR") or os.path.join(
-        os.path.expanduser("~"), DEFAULT_SECRET_DIRNAME)
+    """The on-device secret directory.
+
+    ``$REDEVOPS_SECRET_DIR`` if set. Otherwise ``~/.redevops/secrets`` on macOS/Linux; on Windows,
+    ``%LOCALAPPDATA%\\ReDevOps\\secrets`` (Microsoft Store policy 10.2.7 needs state under a location
+    the uninstaller can clean, not the profile root) — migrating any existing ``%USERPROFILE%``-rooted
+    secrets there once, additively; see :mod:`agentic_os.mission.windows_state_migration`.
+    """
+    explicit = os.environ.get("REDEVOPS_SECRET_DIR")
+    if explicit:
+        return explicit
+    legacy = os.path.join(os.path.expanduser("~"), DEFAULT_SECRET_DIRNAME)
+    from agentic_os.mission import windows_state_migration as _wsm  # noqa: PLC0415
+    if _wsm.is_windows():
+        from pathlib import Path                               # noqa: PLC0415
+        new_dir = _wsm.windows_app_data_root() / "secrets"
+        _wsm.migrate_if_needed(Path(legacy), new_dir)
+        return str(new_dir)
+    return legacy
 
 
 def provision_local_secret(name: str, value: str, *, secret_dir: Optional[str] = None,
