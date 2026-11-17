@@ -86,7 +86,10 @@ def test_the_settings_file_never_holds_the_key(cfg, a):
     save_llm_settings(str(cfg), base_url=a.url, model="m", key_ref="file:llm/provider")
     text = cfg.read_text()
     assert "super-secret-value" not in text and "file:llm/provider" in text
-    assert oct(os.stat(cfg).st_mode & 0o777) == "0o600"
+    from agentic_os._platform import files as _files
+    # "private to the running user" is the requirement; 0600 is only how POSIX spells it, and Windows
+    # reports 0o666 for every writable file (tests/test_llm_settings_privacy.py pins both branches).
+    assert _files.private_file_problem(str(cfg)) is None
 
 
 def test_an_unreadable_reference_degrades_and_never_falls_back_to_another_credential(cfg, a, monkeypatch):
