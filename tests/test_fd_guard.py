@@ -102,3 +102,36 @@ def test_the_descriptor_the_guard_watches_is_open_and_is_a_copy_of_standard_erro
     fd = request.config.stash[fault_handler_stderr_fd_key]
     assert fd > 2
     os.fstat(fd)
+
+
+def test_fd_identity_does_not_crash_without_st_rdev():
+    """CPython's Windows os.fstat() result has no st_rdev (AttributeError on access): every test errored at this
+    fixture's setup on native Windows until _fd_identity used getattr with a fallback. Simulate that platform here
+    without needing a Windows host: a stat_result-alike missing st_rdev must still produce a 4-tuple, not raise.
+
+    os.fstat is patched and restored by hand inside this function, not via the `monkeypatch` fixture: that fixture's
+    own teardown is not guaranteed to run before _fd_integrity_guard's after-test fstat(2) check (that guard is the
+    first autouse fixture, finalized last), and a still-patched os.fstat at that point makes the guard itself
+    misreport fd 2 as changed -- a real ordering trap found while writing this test, not a hypothetical one."""
+    from tests import conftest
+
+    real_fstat = os.fstat
+    real_st = real_fstat(2)
+
+    class _NoRdevStat:
+        st_dev = real_st.st_dev
+        st_ino = real_st.st_ino
+        st_mode = real_st.st_mode
+        # no st_rdev attribute at all, matching Windows' os.stat_result
+
+    os.fstat = lambda fd: _NoRdevStat()
+    try:
+        identity = conftest._fd_identity(2)
+        second = conftest._fd_identity(2)
+    finally:
+        os.fstat = real_fstat
+
+    assert identity == (real_st.st_dev, real_st.st_ino, real_st.st_mode, None)
+    # two distinct "devices" that would only differ by st_rdev on POSIX still compare equal without it (an inherent,
+    # accepted precision loss on Windows, not a crash) -- same identity in, same identity out, no exception either way.
+    assert second == identity

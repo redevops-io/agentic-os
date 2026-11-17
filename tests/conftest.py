@@ -72,7 +72,11 @@ def _fd_identity(fd: int):
         st = os.fstat(fd)
     except OSError as e:
         return ("closed", e.errno)
-    return (st.st_dev, st.st_ino, st.st_mode, st.st_rdev)
+    # st_rdev is POSIX-only: CPython's Windows os.fstat() does not populate it, and
+    # accessing it raises AttributeError there. The other three fields already catch a
+    # closed-and-reopened descriptor on every platform; st_rdev only adds precision on
+    # POSIX (e.g. distinguishing two character devices with otherwise-equal identity).
+    return (st.st_dev, st.st_ino, st.st_mode, getattr(st, "st_rdev", None))
 
 
 _FD_ALREADY_REPORTED: set = set()          # a descriptor whose loss has been reported is not watched again: later tests may legitimately reuse its number
