@@ -148,7 +148,7 @@ jobs:
         run: |
           mkdir -p "$R0P_HANDOFF_DIR"
           cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
-          cargo tauri bundle --bundles msi --config "$(cat "$RUNNER_TEMP/override.json")" -- --locked
+          cargo tauri bundle --bundles msi --config "$(cat "$RUNNER_TEMP/override.json")"
 
       - name: Collect inner files for NSIS (round 1, package type nsis)
         shell: bash
@@ -158,7 +158,7 @@ jobs:
           R0P_HANDOFF_DIR: ${{ github.workspace }}/round1
         run: |
           cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
-          cargo tauri bundle --bundles nsis --config "$(cat "$RUNNER_TEMP/override.json")" -- --locked
+          cargo tauri bundle --bundles nsis --config "$(cat "$RUNNER_TEMP/override.json")"
 
       - name: Show what was collected (no secrets - these are unsigned files)
         shell: bash
@@ -446,7 +446,7 @@ jobs:
           R0P_EXPECT_ISSUER_SUBSTR: "Microsoft"
         run: |
           cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
-          cargo tauri bundle --bundles msi --config "$(cat "$RUNNER_TEMP/override.json")" -- --locked
+          cargo tauri bundle --bundles msi --config "$(cat "$RUNNER_TEMP/override.json")"
 
       - name: Apply + rebuild NSIS with signed inner files
         shell: bash
@@ -459,7 +459,7 @@ jobs:
           R0P_EXPECT_ISSUER_SUBSTR: "Microsoft"
         run: |
           cp target/release/agentic-r0prime.exe.pristine target/release/agentic-r0prime.exe
-          cargo tauri bundle --bundles nsis --config "$(cat "$RUNNER_TEMP/override.json")" -- --locked
+          cargo tauri bundle --bundles nsis --config "$(cat "$RUNNER_TEMP/override.json")"
 
       - name: Build the container listing (file list of the rebuilt installers, with sha256)
         shell: bash
