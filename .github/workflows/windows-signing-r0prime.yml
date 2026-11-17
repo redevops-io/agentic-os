@@ -138,8 +138,12 @@ jobs:
           # github.workspace on windows-2022 resolves with backslashes (e.g. D:\a\agentic-os\agentic-os),
           # which breaks naive embedding into a JSON string literal (\a is not a valid JSON escape).
           WS_FWD=$(printf %s "${{ github.workspace }}" | tr '\\' '/')
+          # cmd must be the absolute path to Git Bash, not the bare string "bash": on windows-2022 runners
+          # C:\Windows\System32\bash.exe (the WSL launcher stub) shadows Git Bash on PATH, and no WSL
+          # distribution is installed, so a bare "bash" cmd fails immediately with
+          # "Windows Subsystem for Linux has no installed distributions." before the script ever runs.
           cat > "$RUNNER_TEMP/override.json" <<JSON
-          {"bundle":{"windows":{"signCommand":{"cmd":"bash","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
+          {"bundle":{"windows":{"signCommand":{"cmd":"C:/Program Files/Git/bin/bash.exe","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
           JSON
 
       - name: Collect inner files for MSI (round 1, package type msi)
@@ -440,8 +444,10 @@ jobs:
           # github.workspace on windows-2022 resolves with backslashes (e.g. D:\a\agentic-os\agentic-os),
           # which breaks naive embedding into a JSON string literal (\a is not a valid JSON escape).
           WS_FWD=$(printf %s "${{ github.workspace }}" | tr '\\' '/')
+          # cmd must be the absolute path to Git Bash, not the bare string "bash": see the matching
+          # comment in the collect job's "Write the signCommand override" step for why.
           cat > "$RUNNER_TEMP/override.json" <<JSON
-          {"bundle":{"windows":{"signCommand":{"cmd":"bash","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
+          {"bundle":{"windows":{"signCommand":{"cmd":"C:/Program Files/Git/bin/bash.exe","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
           JSON
 
       - name: Apply + rebuild MSI with signed inner files
