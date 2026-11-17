@@ -28,10 +28,15 @@ getrandom = "0.3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+# Win32_System_Registry (src/opener.rs::windows_chromium): resolves the user's real default-browser exe
+# via the same UserChoice -> ProgId -> shell\open\command path Windows itself uses, to fix the Edge
+# First Run Experience hijack. Same pinned version already in the lockfile; only a feature flag is added
+# (Cargo.lock does not record per-crate features), so this needs no lockfile change.
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_System_JobObjects",
+  "Win32_System_Registry",
   "Win32_System_Threading",
 ] }
 
