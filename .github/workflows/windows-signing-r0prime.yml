@@ -279,10 +279,10 @@ jobs:
           INPUT_ARGS=()
           HASHES=()
           while read -r hash name; do
-            cp "round1-dl/requests-inner/$name" "$RUNNER_TEMP/inner-inputs/$name"
+            cp "round1-dl/round1/requests-inner/$name" "$RUNNER_TEMP/inner-inputs/$name"
             INPUT_ARGS+=(--input "$RUNNER_TEMP/inner-inputs/$name" --sha256 "$hash")
             HASHES+=("$hash")
-          done < round1-dl/REQUESTS.sha256
+          done < round1-dl/round1/REQUESTS.sha256
           echo "input_args<<EOF" >> "$GITHUB_OUTPUT"
           printf '%s\n' "${INPUT_ARGS[@]}" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
@@ -436,7 +436,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p round2/signed-inner
-          cp round1-dl/REQUESTS.sha256 round2/REQUESTS.sha256
+          cp round1-dl/round1/REQUESTS.sha256 round2/REQUESTS.sha256
           find signed-inner-dl -name '*.exe' -exec cp {} round2/signed-inner/ \;
           ( cd round2/signed-inner && for f in *.exe; do [ -f "$f" ] && shasum -a 256 "$f"; done ) > round2/signed-inner/SHA256SUMS
           cat round2/signed-inner/SHA256SUMS
