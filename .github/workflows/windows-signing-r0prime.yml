@@ -135,8 +135,11 @@ jobs:
       - name: Write the signCommand override (handoff helper has no credential)
         shell: bash
         run: |
+          # github.workspace on windows-2022 resolves with backslashes (e.g. D:\a\agentic-os\agentic-os),
+          # which breaks naive embedding into a JSON string literal (\a is not a valid JSON escape).
+          WS_FWD=$(printf %s "${{ github.workspace }}" | tr '\\' '/')
           cat > "$RUNNER_TEMP/override.json" <<JSON
-          {"bundle":{"windows":{"signCommand":{"cmd":"bash","args":["${{ github.workspace }}/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
+          {"bundle":{"windows":{"signCommand":{"cmd":"bash","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
           JSON
 
       - name: Collect inner files for MSI (round 1, package type msi)
@@ -431,8 +434,11 @@ jobs:
       - name: Write the signCommand override
         shell: bash
         run: |
+          # github.workspace on windows-2022 resolves with backslashes (e.g. D:\a\agentic-os\agentic-os),
+          # which breaks naive embedding into a JSON string literal (\a is not a valid JSON escape).
+          WS_FWD=$(printf %s "${{ github.workspace }}" | tr '\\' '/')
           cat > "$RUNNER_TEMP/override.json" <<JSON
-          {"bundle":{"windows":{"signCommand":{"cmd":"bash","args":["${{ github.workspace }}/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
+          {"bundle":{"windows":{"signCommand":{"cmd":"bash","args":["$WS_FWD/packaging/signing/r0prime_win_signcommand.sh","%1"]}}}}
           JSON
 
       - name: Apply + rebuild MSI with signed inner files
