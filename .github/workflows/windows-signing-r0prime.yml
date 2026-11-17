@@ -42,12 +42,21 @@ jobs:
             echo "::error::confirmation phrase did not match exactly; refusing to proceed"
             exit 1
           fi
-      - name: This run must be against the pinned commit
-        run: |
-          if [ "${{ github.sha }}" != "$BUILD_COMMIT" ]; then
-            echo "::error::github.sha (${{ github.sha }}) is not the pinned BUILD_COMMIT ($BUILD_COMMIT)"
+      - name: BUILD_COMMIT must actually exist in this repository (sanity, not identity)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+      - run: |
+          if ! git cat-file -e "${BUILD_COMMIT}^{commit}" 2>/dev/null; then
+            echo "::error::BUILD_COMMIT ($BUILD_COMMIT) does not exist in this repository"
             exit 1
           fi
+          TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
+          if [ "${TREE:0:8}" != "b9f490a7" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected b9f490a7 prefix (got $TREE) - refusing"
+            exit 1
+          fi
+          echo "BUILD_COMMIT verified present, tree prefix b9f490a7 confirmed."
 
   collect:
     needs: guard
@@ -56,7 +65,20 @@ jobs:
       UV_PYTHON_PREFERENCE: only-system
       UV_PYTHON_DOWNLOADS: never
     steps:
+      # Pinned explicitly to BUILD_COMMIT, independent of whatever ref/branch this run was dispatched
+      # against - the actual product build is always of this exact commit's tree, never "whatever HEAD
+      # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+      - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
+        shell: bash
+        run: |
+          GOT="$(git rev-parse HEAD)"
+          if [ "$GOT" != "$BUILD_COMMIT" ]; then
+            echo "::error::checked-out HEAD ($GOT) does not equal BUILD_COMMIT ($BUILD_COMMIT)"
+            exit 1
+          fi
 
       - name: CPython 3.12.10 (packaging/toolchain.env PYTHON_VERSION)
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -168,6 +190,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
 
       - name: Download round1 state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -352,6 +376,8 @@ jobs:
       UV_PYTHON_DOWNLOADS: never
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
 
       - name: CPython 3.12.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -470,6 +496,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
 
       - name: Download round2 containers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
