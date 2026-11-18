@@ -81,6 +81,7 @@ from . import auth  # noqa: E402 — the HTTP-Basic operator gate for real execu
 from . import netbird  # noqa: E402 — NetBird zero-trust access review
 from . import portabase  # noqa: E402 — Portabase backup/continuity coverage
 from . import deploy_scan  # noqa: E402 — runtime-DAST proxy to the deploy-scan MCP service
+from . import static_scan  # noqa: E402 — static-engine (supply-chain) proxy to the static-scan MCP service
 from . import permissions_ui  # noqa: E402 — live vuln-DB permissions demo
 from . import security as _security  # noqa: E402 — secure defaults: loopback bind, TLS verify, headers (P9)
 from . import fixture_mode  # noqa: E402 — opt-in fixture core for demos and UI acceptance (P4)
@@ -913,7 +914,9 @@ NETWORK ACCESS (NetBird) is the "who can reach what" half of security — a priv
 
 BACKUPS / CONTINUITY (Portabase) answer "is every database safely backed up, and could we recover?". Portabase is a self-hosted backup control plane: small agents sit next to each database, take an ENCRYPTED dump, and ship it to one or more STORAGE DESTINATIONS — a local disk for a fast restore, and an OFFSITE S3 bucket (AWS S3 or MinIO) for durability if a whole host is lost. edge-sentinel reports COVERAGE — ask "are the databases backed up?" and it says which cores have a recent, encrypted, offsite backup and where the gaps are (no backup at all, local-only with no offsite copy, or unencrypted). HOW TO SET UP OFFSITE S3 BACKUPS: bring up the backup control plane, add each database as a source and an S3 storage destination (keep the real keys in Vault), enrol the backup agent, then set PORTABASE_API_TOKEN so edge-sentinel can read coverage. Tip: add BOTH a local and an S3 destination and fan each backup out to both. Until a token is set, coverage shows clearly-labelled SAMPLE data.
 
-RUNTIME EXPOSURE (deploy-scan) is the complement of the supply-chain scan: it actively scans a LIVE deployment (a host or URL) with nmap / nuclei / ZAP and reports what the scanners find (scanner output, not confirmed exploitation). Supply-chain scanning inspects code & packages BEFORE deploy; this is the RUNTIME half. Because it sends probe traffic it is destructive, so starting a scan is staged for your approval, and scope is fail-closed to an allowlist on the deploy-scan side. It is available only once DEPLOY_SCAN_MCP_URL points at the deploy-scan service, and it cannot be started from the public demo chat."""
+RUNTIME EXPOSURE (deploy-scan) is the complement of the supply-chain scan: it actively scans a LIVE deployment (a host or URL) with nmap / nuclei / ZAP and reports what the scanners find (scanner output, not confirmed exploitation). Supply-chain scanning inspects code & packages BEFORE deploy; this is the RUNTIME half. Because it sends probe traffic it is destructive, so starting a scan is staged for your approval, and scope is fail-closed to an allowlist on the deploy-scan side. It is available only once DEPLOY_SCAN_MCP_URL points at the deploy-scan service, and it cannot be started from the public demo chat.
+
+STATIC SCANNING (static-scan) is the pre-deployment half done by its own service. Trivy reads a tree for known vulnerabilities (CVEs) in its dependencies and for leaked secrets; SkillSpector reads a SKILL or MCP SERVER the way an adversary would — prompt injection, exfiltration, hidden instructions — before an agent is ever pointed at it. It reads files and sends no probe traffic, so it is not destructive, but starting one is still staged for approval and its scope is fail-closed: it can read only the paths its own STATIC_SCAN_ROOTS names, and an empty list means nothing scans. Read its COVERAGE before its counts. An engine that is absent, off its pinned version, or comparing against a stale vulnerability database turns "no findings" into "not compared", and the service reports that as a coverage gap, not as a clean result; a completed scan writes evidence and a case you can point at. It is available only once STATIC_SCAN_MCP_URL points at the static-scan service."""
 
 
 def _t_threat_summary(_a: dict) -> dict:
@@ -1446,6 +1449,21 @@ def _build_sentinel_console(console_cls, _crtool):
             _crtool("scan_status", "read the status of a deployment scan job by its job id", deploy_scan.status,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
             _crtool("scan_results", "read the findings of a finished deployment scan job by its job id", deploy_scan.results,
+                    parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
+            # static-engine (pre-deploy supply chain) plane — Trivy / SkillSpector via static-scan.
+            # Starting a scan is side_effecting: it reads trees and spawns engines, so the harness gates
+            # it. The reads are open — a coverage board you need permission to look at is how a blind
+            # spot becomes permanent.
+            _crtool("static_engine_status", "which static engines the static-scan service actually has (each version against its pin, the vulnerability-DB revision and age, whether any path is allow-listed to scan at all, whether its case store is durable) — read this before believing any finding count", static_scan.engines),
+            _crtool("static_coverage_board", "what the static engines have actually covered, one row per recorded run with its own coverage verdict; deliberately never rolled up into a single clean result", static_scan.board),
+            _crtool("scan_static", "start a static scan of a path on the static-scan service (trivy for dependencies, images and leaked secrets; skillspector to read a skill or MCP server before an agent is pointed at it); it reads files and spawns engines but sends no probe traffic, it is staged for approval, and its scope is fail-closed to the static-scan service's own allowlist", static_scan.scan, side_effecting=True,
+                    parameters={"type": "object", "properties": {
+                        "target": {"type": "string", "description": "absolute path to scan (must be under the static-scan service's STATIC_SCAN_ROOTS)"},
+                        "engine": {"type": "string", "description": "trivy | semgrep | skillspector (default trivy); an engine the image does not ship is reported engine_unavailable, never as a clean result"},
+                        "mode": {"type": "string", "description": "scan mode, per engine (default fs)"}}}),
+            _crtool("static_scan_status", "read the status of a static scan job by its job id, including its coverage verdict (this call starts nothing)", static_scan.status,
+                    parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
+            _crtool("static_scan_results", "read the findings of a finished static scan job by its job id — the answer carries the run's own coverage verdict, so a 'no findings' result cannot be relayed without it", static_scan.results,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
             # runtime data plane
             _crtool("malware_scan", "scan files visible to the ClamAV service with ClamAV (only where a ClamAV service is configured)", _t_malware_scan,

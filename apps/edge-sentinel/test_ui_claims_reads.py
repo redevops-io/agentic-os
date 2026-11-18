@@ -197,14 +197,21 @@ class _StubConsole:
 
 
 def _stub_tool(name, description, fn, *, parameters=None, side_effecting=False):
-    return {"name": name, "description": description, "side_effecting": side_effecting}
+    # `parameters` is captured as well as the description: the honest sentence about an engine the image
+    # does not ship lives in the parameter the caller actually reads, and a claims test that only looked
+    # at the description could not see it.
+    return {"name": name, "description": description, "parameters": parameters or {},
+            "side_effecting": side_effecting}
 
 
 EXPECTED_TOOLS = {
     "threat_summary", "list_bans", "explain_alert", "ban_ip", "supply_chain_scan", "list_vulnerabilities",
     "explain_vulnerability", "scan_app", "scan_apps", "list_scannable_apps", "vuln_db_lookup", "vuln_db_permissions", "sbom",
     "scanner_status", "scan_deployment", "scan_status", "scan_results", "malware_scan", "wazuh_status", "network_access_review",
-    "network_posture", "propose_network_policy", "backup_status"}
+    "network_posture", "propose_network_policy", "backup_status",
+    # the static-engine plane (the static-scan service): two reads, one gated start, two job reads
+    "static_engine_status", "static_coverage_board", "scan_static", "static_scan_status",
+    "static_scan_results"}
 CLAIMS_THE_DEMO_CANNOT_BACK = [
     "block an IP at the edge", "threat posture", "scan all apps", "exploitable", "SIEM", "who is being blocked",
     "CrowdSec blocked them", "nothing to do", "inspects the software before you trust it", "block the attacker",
@@ -217,8 +224,8 @@ def console(app):
     return app._build_sentinel_console(_StubConsole, _stub_tool)
 
 
-def test_all_23_tools_are_registered_and_none_claims_what_the_demo_cannot_do(console):
-    assert set(console.tools) == EXPECTED_TOOLS and len(console.tools) == 23
+def test_all_28_tools_are_registered_and_none_claims_what_the_demo_cannot_do(console):
+    assert set(console.tools) == EXPECTED_TOOLS and len(console.tools) == 28
     for name, t in console.tools.items():
         for bad in CLAIMS_THE_DEMO_CANNOT_BACK:
             assert bad.lower() not in t["description"].lower(), f"{name}: {bad!r}"
@@ -237,6 +244,18 @@ def test_all_23_tools_are_registered_and_none_claims_what_the_demo_cannot_do(con
     assert console.tools["scan_deployment"]["side_effecting"]
     assert not scan_dep.startswith("Not available")
     assert "public demo chat" in scan_dep and "DEPLOY_SCAN_MCP_URL" in scan_dep
+    # The static plane (static-scan service) is wired the same way: starting a scan is gated like every
+    # other side effect, the reads are described by what they return (coverage, version against pin) and
+    # never by a clean-estate claim, and an engine the image does not ship is named as unavailable rather
+    # than silently missing from the offer.
+    assert console.tools["scan_static"]["side_effecting"], "a scan start must stay behind the approval gate"
+    assert "allowlist" in console.tools["scan_static"]["description"]
+    static_reads = (console.tools["static_engine_status"]["description"]
+                    + console.tools["static_coverage_board"]["description"]
+                    + console.tools["static_scan_results"]["description"])
+    assert "pin" in static_reads and "coverage" in static_reads, static_reads
+    engine_param = str(console.tools["scan_static"]["parameters"])
+    assert "engine_unavailable" in engine_param, engine_param
     assert console.allow == []                                              # no side-effecting tool may run from chat
 
 
