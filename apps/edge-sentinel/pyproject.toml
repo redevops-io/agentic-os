@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edge-sentinel"
+version = "0.1.0"
+description = "SOC dashboard on a real CrowdSec core, with a human in the loop before any block."
+readme = "README.md"
+requires-python = ">=3.11"
+# Same list as requirements.txt — keep the two in lockstep until the lock work (P12) replaces both.
+# `serve` additionally needs the agentic-os kernel, which this package deliberately does NOT declare:
+# the kernel carries a different licence (AGPL-3.0-or-later with the Commons Clause) and duplicating or
+# re-licensing it here is counsel-gated (D1/D2); declare it in your own environment instead.
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "httpx>=0.27",
+  "pymysql>=1.1",
+  "context-runtime @ https://github.com/redevops-io/context-runtime/archive/e44ed9f3dbe0a7a63126976bba3bdb62b554dcb6.tar.gz",
+]
+
+[project.scripts]
+edge-sentinel = "edge_sentinel.cli:main"
+
+# The wheel maps this flat app directory onto the importable package `edge_sentinel` — one home for the
+# modules, no copies, and the monorepo keeps its flat apps/<name>/ layout that its conformance tests
+# (apps/*/operator.py) and the kernel's app registry depend on.
+[tool.setuptools]
+packages = ["edge_sentinel", "edge_sentinel.soc2"]
+
+[tool.setuptools.package-dir]
+edge_sentinel = "."
