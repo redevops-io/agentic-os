@@ -460,7 +460,7 @@ jobs:
           mkdir -p round2/signed-inner
           cp round1-dl/round1/REQUESTS.sha256 round2/REQUESTS.sha256
           find signed-inner-dl -name '*.exe' -exec cp {} round2/signed-inner/ \;
-          ( cd round2/signed-inner && for f in *.exe; do [ -f "$f" ] && sha256sum "$f"; done ) > round2/signed-inner/SHA256SUMS
+          ( cd round2/signed-inner && for f in *.exe; do [ -f "$f" ] && sha256sum --text "$f"; done ) > round2/signed-inner/SHA256SUMS
           cat round2/signed-inner/SHA256SUMS
 
       - name: Write the signCommand override
@@ -511,9 +511,9 @@ jobs:
           : > round2/listing/container-listing.txt
           TMPX=$(mktemp -d)
           msiexec /a "$(cygpath -w "$MSI")" /qn TARGETDIR="$(cygpath -w "$TMPX/msi-extract")" || true
-          find "$TMPX/msi-extract" -type f | while read -r f; do sha256sum "$f" >> round2/listing/container-listing.txt; done
-          sha256sum "$MSI" >> round2/listing/container-listing.txt
-          sha256sum "$NSIS" >> round2/listing/container-listing.txt
+          find "$TMPX/msi-extract" -type f | while read -r f; do sha256sum --text "$f" >> round2/listing/container-listing.txt; done
+          sha256sum --text "$MSI" >> round2/listing/container-listing.txt
+          sha256sum --text "$NSIS" >> round2/listing/container-listing.txt
           cat round2/listing/container-listing.txt
 
       - name: Upload rebuilt containers + licenses dir + listing
