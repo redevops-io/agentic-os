@@ -662,7 +662,13 @@ def anchor_problems(allowed_signers: Path, signers) -> list[str]:
 
 
 def _ssh_keygen() -> str:
-    return shutil.which("ssh-keygen", path="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin") or ""
+    # shutil.which's `path=` override is split on os.pathsep, which is ';' on Windows: the fixed
+    # POSIX-style string below is then treated as one (nonexistent) directory, so ssh-keygen is
+    # never found there even though Windows runners ship OpenSSH on PATH. Search the real PATH
+    # first (finds it on every platform, including Windows' C:\Windows\System32\OpenSSH), then
+    # fall back to the fixed POSIX locations for a shell that was launched with a stripped PATH.
+    return shutil.which("ssh-keygen") or next(
+        (str(p) for d in ("/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin") if (p := Path(d) / "ssh-keygen").is_file()), "")
 
 
 def verify_sshsig_bytes(root: Path, rel: str, allowed_signers: Path, signers=()) -> tuple[bytes, str]:
