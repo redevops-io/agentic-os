@@ -40,6 +40,14 @@ def pytest_configure(config):
     if not ALLOW_LIVE:
         for name in [n for n in os.environ if _CRED_NAME.search(n)]:
             _HIDDEN[name] = os.environ.pop(name)
+    # route_authz's enforces() (agentic_os/app_kit/route_authz.py) fail-closes a loopback TestClient request with
+    # no stated front - a production-hardening default most of this suite was never written with in mind (it
+    # predates the feature). `profile` restores the exact pre-feature posture (enforce iff AGENTIC_OS_PROFILE is
+    # production) for the whole session; a test that specifically exercises the new exposure semantics
+    # (tests/test_route_authz_exposure_gate.py, tests/test_route_authz_real_topology.py) overrides this with its
+    # own monkeypatch/subprocess env, which still wins locally. setdefault: an operator deliberately running the
+    # suite with AGENTIC_OS_ROUTE_AUTHZ_ENFORCE already set keeps their own choice.
+    os.environ.setdefault("AGENTIC_OS_ROUTE_AUTHZ_ENFORCE", "profile")
 
 
 def pytest_unconfigure(config):

@@ -262,16 +262,20 @@ def test_a_unix_socket_peer_is_unknown_provenance_and_enforces(monkeypatch):
 
 
 @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="platform without unix domain sockets")
-def test_uvicorn_over_a_unix_socket_reports_the_shape_this_gate_depends_on():
+def test_uvicorn_over_a_unix_socket_reports_the_shape_this_gate_depends_on(monkeypatch):
     """Re-captures the scope from a live uvicorn instead of asserting a remembered shape.
 
     Speaks plain HTTP over the socket with the stdlib so no extra client library is needed, and asks the
     served app to echo what its middleware saw. If uvicorn ever changes what it writes to `server`/`client`,
     this test says so here rather than the gate quietly becoming advisory again.
     """
-    pytest.importorskip("uvicorn")
     import json
+    import uvicorn  # noqa: F401  (required test dependency on this branch - tests/test_required_test_dependencies.py)
     from agentic_os.app_kit import route_authz as ra
+    # tests/conftest.py defaults AGENTIC_OS_ROUTE_AUTHZ_ENFORCE=profile for the rest of this suite (release/0.6.0
+    # ported this feature after most of the suite was written without it in mind); this test specifically
+    # exercises "auto" mode's own logic, same as its sibling above, so it needs that default out of the way.
+    monkeypatch.delenv("AGENTIC_OS_ROUTE_AUTHZ_ENFORCE", raising=False)
 
     src = textwrap.dedent("""
         import sys, uvicorn

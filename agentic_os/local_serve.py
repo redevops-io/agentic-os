@@ -104,6 +104,13 @@ def serve(env: Optional[Dict[str, str]] = None) -> None:
 
     env = dict(os.environ if env is None else env)
     host = env.get("PROJECTS_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    # This is the direct, unproxied local-capability server (route_authz.enforces(), agentic_os/app_kit/
+    # route_authz.py): nothing in this module puts a reverse proxy in front of it, so its real bind host and
+    # "nothing forwards to me" are both true statements to make here, once, rather than leaving every request
+    # to a loopback bind enforce for lack of a declaration. setdefault: a caller that already declared
+    # something (e.g. because it IS fronted by a proxy for some reason) keeps that choice.
+    os.environ.setdefault("AGENTIC_OS_BIND_HOST", host)
+    os.environ.setdefault("AGENTIC_OS_BEHIND_PROXY", "0")
     port = int(env.get("PROJECTS_PORT", "8787"))
     base = env.get("PROJECTS_BASE_PATH", "").rstrip("/")
     handoff_spec = env.get(ENV_HANDOFF, "").strip().lower()
