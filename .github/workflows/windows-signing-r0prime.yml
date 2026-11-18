@@ -260,7 +260,10 @@ jobs:
         run: |
           set -euo pipefail
           /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
-          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
+          # olefile is required for signify's MSI support: without it signify silently drops
+          # SignedMsiFile and the container stage's existing-signature check fails on the .msi.
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3" "olefile==0.47"
+          "$RUNNER_TEMP/venv-v/bin/python" -I -c "from signify.authenticode.signed_file import SignedMsiFile"
           "$RUNNER_TEMP/venv-v/bin/python" -I -c "import signify; print(signify.__version__)"
 
       - name: Build the scope file for stage inner (every value computed live on this runner)
@@ -584,7 +587,10 @@ jobs:
           GOT="$(shasum -a 256 "$TOOLS/jsign/jsign-7.6.jar" | awk '{print $1}')"
           [ "$GOT" = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5" ] || { echo "::error::jsign hash mismatch"; exit 1; }
           /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
-          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
+          # olefile is required for signify's MSI support: without it signify silently drops
+          # SignedMsiFile and the container stage's existing-signature check fails on the .msi.
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3" "olefile==0.47"
+          "$RUNNER_TEMP/venv-v/bin/python" -I -c "from signify.authenticode.signed_file import SignedMsiFile"
           # same reasoning as sign-inner's own step: the signing script's fixed PATH does not include
           # wherever this runner's az actually lives, only /usr/bin:/bin:/usr/sbin:/sbin + --tools-dir.
           ln -sf "$(command -v az)" "$TOOLS/az"
