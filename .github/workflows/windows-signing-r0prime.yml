@@ -607,7 +607,15 @@ jobs:
           MSI_SHA="$(sha "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64_en-US.msi")"
           NSIS_SHA="$(sha "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64-setup.exe")"
           SORTED_HASHES="$(printf '%s\n%s\n' "$MSI_SHA" "$NSIS_SHA" | sort | tr '\n' ',' | sed 's/,$//')"
-          echo "input_args=--input $RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64_en-US.msi --sha256 $MSI_SHA --input $RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64-setup.exe --sha256 $NSIS_SHA" >> "$GITHUB_OUTPUT"
+          # PRODUCT_SLUG ("Agentic Apps R0-prime_0.1.1") contains spaces, so these input paths do
+          # too. A single space-joined input_args string (as sign-inner's own REQUESTS.sha256 loop
+          # avoids by writing one array element per line) would get word-split back apart by the
+          # consuming step, turning "Agentic Apps ...msi" into separate bogus arguments. Emit one
+          # array element per line, same as sign-inner's input_args, so spaces survive intact.
+          INPUT_ARGS=(--input "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64_en-US.msi" --sha256 "$MSI_SHA" --input "$RUNNER_TEMP/container-inputs/${PRODUCT_SLUG}_x64-setup.exe" --sha256 "$NSIS_SHA")
+          echo "input_args<<EOF" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${INPUT_ARGS[@]}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
           LISTING_SHA="$(sha round2-dl/round2/listing/container-listing.txt)"
 
@@ -672,7 +680,8 @@ jobs:
           R0P_TOOLS_DIR: ${{ steps.scope.outputs.tools_dir }}
         run: |
           set -euo pipefail
-          ./packaging/signing/sign_windows_r0prime_v3.sh --stage container ${{ steps.scope.outputs.input_args }} \
+          INPUT_ARGS=(); while IFS= read -r line; do [ -n "$line" ] && INPUT_ARGS+=("$line"); done <<< "${{ steps.scope.outputs.input_args }}"
+          ./packaging/signing/sign_windows_r0prime_v3.sh --stage container "${INPUT_ARGS[@]}" \
             --outdir "${{ steps.scope.outputs.outdir }}" --real \
             --i-have-owner-authorization "${{ steps.scope.outputs.auth_sha }}" \
             --scope-file "$RUNNER_TEMP/scope/scope-win-container.txt" \
