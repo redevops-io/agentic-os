@@ -190,6 +190,7 @@ jobs:
             deploy/launcher/src-tauri/target/release/licenses/**
             deploy/launcher/src-tauri/target/release/build/**
             deploy/launcher/src-tauri/target/release/resources/**
+            deploy/launcher/src-tauri/binaries/**
 
   sign-inner:
     needs: collect
@@ -446,6 +447,11 @@ jobs:
           mkdir -p deploy/launcher/src-tauri/target/release
           cp -r round1-dl/deploy/launcher/src-tauri/target/release/. deploy/launcher/src-tauri/target/release/
           cp round1-dl/deploy/launcher/src-tauri/target/release/agentic-r0prime.exe.pristine deploy/launcher/src-tauri/target/release/agentic-r0prime.exe
+          # Tauri's externalBin resource (tauri.conf.json), staged by packaging/stage-sidecar.sh in
+          # the collect job and never re-run here: round 2 must bundle the SAME sidecar binary as
+          # round 1, not a freshly re-staged copy (see the upload step's own "byte-identical" naming).
+          mkdir -p deploy/launcher/src-tauri/binaries
+          cp -r round1-dl/deploy/launcher/src-tauri/binaries/. deploy/launcher/src-tauri/binaries/
 
       - name: Build requests + signed-inner folders for the handoff helper's apply mode
         shell: bash
