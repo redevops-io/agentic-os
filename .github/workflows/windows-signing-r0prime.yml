@@ -191,6 +191,7 @@ jobs:
             deploy/launcher/src-tauri/target/release/build/**
             deploy/launcher/src-tauri/target/release/resources/**
             deploy/launcher/src-tauri/binaries/**
+            deploy/launcher/src-tauri/licenses/**
 
   sign-inner:
     needs: collect
@@ -452,6 +453,11 @@ jobs:
           # round 1, not a freshly re-staged copy (see the upload step's own "byte-identical" naming).
           mkdir -p deploy/launcher/src-tauri/binaries
           cp -r round1-dl/deploy/launcher/src-tauri/binaries/. deploy/launcher/src-tauri/binaries/
+          # Tauri's bundle.resources ("licenses/": "Licenses/" in tauri.conf.json), staged at the
+          # PROJECT level (not target/release) by packaging/build-notices.sh in the collect job and
+          # never re-run here - same "never existed in this job's checkout" problem as binaries/ above.
+          mkdir -p deploy/launcher/src-tauri/licenses
+          cp -r round1-dl/deploy/launcher/src-tauri/licenses/. deploy/launcher/src-tauri/licenses/
 
       - name: Build requests + signed-inner folders for the handoff helper's apply mode
         shell: bash
