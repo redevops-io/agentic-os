@@ -1,0 +1,177 @@
+# The combined install (Projects + Sidekick, redevops-qa, Edge Sentinel + CrowdSec) as ONE publishable, pullable
+# unit: no git checkout, no local build. Published with `docker compose -f compose.bundle.yml publish --app
+# --resolve-image-digests ghcr.io/redevops-io/redevops-ts:<tag>` and run from anywhere with:
+#
+#   docker compose -f oci://ghcr.io/redevops-io/redevops-ts:<tag> --project-directory . --env-file .env up -d
+#
+# This file exists ALONGSIDE compose.yml (the file-secrets version used by bootstrap.sh/smoke.sh), not instead of
+# it: `docker compose publish` refuses any service with a bind mount, and a `secrets: file:`/`configs: file:`
+# reference still depends on a local path existing wherever the artifact is pulled — a path a published artifact
+# cannot guarantee (see bundle/README.md). So every credential here is a plain environment variable (resolved by
+# Compose from the CALLER's shell/--env-file at `up` time, never packaged into the artifact), and the one piece of
+# static configuration (products.yaml) is a `configs: ... content:` literal, not a file reference — both travel
+# safely inside the published artifact with no local-path dependency either way.
+#
+# redevops-qa and edge-sentinel are the SAME published images as the standalone installs (ghcr.io/redevops-io/
+# redevops-qa, ghcr.io/redevops-io/edge-sentinel) — this file only adds Projects/Sidekick and the wiring between
+# all three; it does not rebuild or replace either standalone image.
+name: ${COMPOSE_PROJECT_NAME:-redevops-ts}
+
+services:
+  crowdsec:
+    image: crowdsecurity/crowdsec:v1.7.8@sha256:2f527c9bb8b367120eb08b82890aa912ce96bfa1ada93dda0721700e4b4e0dde
+    restart: unless-stopped
+    environment:
+      DISABLE_ONLINE_API: "${CROWDSEC_DISABLE_ONLINE_API:-true}"
+      COLLECTIONS: "${CROWDSEC_COLLECTIONS:-}"
+    volumes:
+      - crowdsec-data:/var/lib/crowdsec/data
+      - crowdsec-config:/etc/crowdsec
+    healthcheck:
+      test: ["CMD", "cscli", "lapi", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [ts]
+    security_opt: ["no-new-privileges:true"]
+
+  edge-sentinel:
+    image: "${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel}:${EDGE_SENTINEL_IMAGE_TAG:-0.6.3}"
+    restart: unless-stopped
+    depends_on:
+      crowdsec:
+        condition: service_healthy
+    ports:
+      # long-form only: `docker compose publish`'s OCI schema decoder (v5.7.0) refuses the short "host:port:port"
+      # string form with "expected a map or struct, got string" — reproduced on the unmodified compose.yml too,
+      # so this is a `publish`-only quirk of this Compose version, not something specific to this file.
+      - target: 8203
+        published: "${EDGE_SENTINEL_PORT:-8203}"
+        host_ip: "${EDGE_SENTINEL_BIND:-127.0.0.1}"
+    environment:
+      SENTINEL_BASIC_AUTH_USER: "${SENTINEL_BASIC_AUTH_USER:-operator}"
+      SENTINEL_BASIC_AUTH_PASS: "${SENTINEL_BASIC_AUTH_PASS:?set in .env — bundle/bootstrap.sh generates one}"
+      CROWDSEC_LAPI_URL: http://crowdsec:8080
+      CROWDSEC_BOUNCER_KEY: "${CROWDSEC_BOUNCER_KEY:?set in .env — bundle/bootstrap.sh generates one}"
+      CROWDSEC_MACHINE_ID: edge-sentinel
+      CROWDSEC_MACHINE_PASSWORD: "${CROWDSEC_MACHINE_PASSWORD:?set in .env — bundle/bootstrap.sh generates one}"
+      # the SAME value Projects' products.yaml uses for this product's service_token_env — Sentinel checks it
+      # as X-Control-Token, so a mismatch here fails every Projects->Sentinel call closed, not open.
+      AGENTIC_OS_CONTROL_TOKEN: "${EDGE_SENTINEL_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
+      AGENTIC_OS_APPROVAL_SECRET: "${APPROVAL_SECRET:?set in .env — bundle/bootstrap.sh generates one}"
+      SENTINEL_BLOCK_ENABLED: "${SENTINEL_BLOCK_ENABLED:-}"
+      SENTINEL_PROTECTED_IPS: "${SENTINEL_PROTECTED_IPS:-}"
+      SENTINEL_BLOCK_ALLOW_NETWORKS: "${SENTINEL_BLOCK_ALLOW_NETWORKS:-}"
+      EDGE_SENTINEL_DEMO: "${EDGE_SENTINEL_DEMO:-}"
+    volumes:
+      - edge-sentinel-data:/data
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [ts]
+
+  redevops-qa:
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.3}"
+    platform: linux/amd64   # QA publishes linux/amd64 lanes only; Apple Silicon runs this under Rosetta/QEMU
+    restart: unless-stopped
+    ports:
+      - target: 8080
+        published: "${QA_PORT:-8080}"
+        host_ip: "${QA_BIND:-127.0.0.1}"
+    environment:
+      QA_SERVICE_TOKEN: "${QA_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
+      QA_SERVICE_RUN_TIMEOUT: "${QA_RUN_TIMEOUT:-1800}"
+      QA_SERVICE_BOOTSTRAP_ADMIN_PASSWORD: "${QA_BOOTSTRAP_ADMIN_PASSWORD:?set in .env — bundle/bootstrap.sh generates one}"
+      QA_SERVICE_APPROVAL_SECRET: "${APPROVAL_SECRET:?set in .env — bundle/bootstrap.sh generates one}"
+    volumes:
+      - qa-data:/data
+    healthcheck:
+      test: ["CMD", "redevops-qa-service", "healthcheck"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 15s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,size=512m,mode=1777
+    shm_size: 512m
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2
+    networks: [ts]
+
+  projects:
+    image: "${PROJECTS_IMAGE:-ghcr.io/redevops-io/redevops-projects}:${PROJECTS_IMAGE_TAG:?set PROJECTS_IMAGE_TAG in .env}"
+    restart: unless-stopped
+    depends_on: [redevops-qa]
+    ports:
+      - target: 8787
+        published: "${PROJECTS_PORT:-8787}"
+        host_ip: "${PROJECTS_BIND:-127.0.0.1}"
+    environment:
+      OPERATOR_BASIC_AUTH: "${OPERATOR_BASIC_AUTH:?set in .env — bundle/bootstrap.sh generates one (user:password)}"
+      AGENTIC_OS_PRODUCTS: /etc/products/products.yaml
+      PROJECTS_PROVIDER: registered
+      AGENTIC_OS_BIND_HOST: "${AGENTIC_OS_BIND_HOST:-0.0.0.0}"
+      AGENTIC_OS_BEHIND_PROXY: "${AGENTIC_OS_BEHIND_PROXY:-0}"
+      # read by products.yaml's auth.*_env entries below — the registry never carries a secret VALUE, only
+      # these variable NAMES, so the names below must match the service_token_env/approval_secret_env strings
+      # baked into the products_yaml config just below.
+      EDGE_SENTINEL_SERVICE_TOKEN: "${EDGE_SENTINEL_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
+      QA_SERVICE_TOKEN: "${QA_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
+      APPROVAL_SECRET: "${APPROVAL_SECRET:?set in .env — bundle/bootstrap.sh generates one}"
+    configs:
+      - source: products_yaml
+        target: /etc/products/products.yaml
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8787/').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    networks: [ts]
+
+configs:
+  # Static, non-secret: which two products exist and how to reach them. Credentials are named ENV VARS
+  # (auth.*_env), resolved by agentic_os.products.client at call time from this container's own environment —
+  # never a file path, so nothing here depends on a local path existing after the artifact is pulled.
+  products_yaml:
+    content: |
+      schema: aos.products/v1
+      allow_private_http: [edge-sentinel, redevops-qa]
+      products:
+        - id: edge-sentinel
+          display_name: Edge Sentinel
+          kind: security
+          api_base: http://edge-sentinel:8203
+          ui_url: http://127.0.0.1:${EDGE_SENTINEL_PORT:-8203}
+          health: {path: /readyz, interval_s: 5, timeout_s: 3}
+          contract: {api: /api/v1, info: /api/v1/info, min_version: "1"}
+          auth:
+            scheme: control_token
+            service_token_env: EDGE_SENTINEL_SERVICE_TOKEN
+            approval_secret_env: APPROVAL_SECRET
+        - id: redevops-qa
+          display_name: redevops-qa
+          kind: quality
+          api_base: http://redevops-qa:8080
+          ui_url: http://127.0.0.1:${QA_PORT:-8080}
+          health: {path: /readyz, interval_s: 5, timeout_s: 3}
+          contract: {api: /v1, info: /v1/info, min_version: "1"}
+          auth:
+            scheme: bearer
+            service_token_env: QA_SERVICE_TOKEN
+            approval_secret_env: APPROVAL_SECRET
+
+volumes:
+  qa-data:
+  edge-sentinel-data:
+  crowdsec-data:
+  crowdsec-config:
+
+networks:
+  ts:
