@@ -522,7 +522,12 @@ jobs:
           # for hours (observed: killed only by the 6h job timeout, orphaned msiexec process).
           # Disable WinTrust's publisher/revocation check for this process tree (does not touch
           # the signing scripts' own signature verification) and hard-cap the call so a stall
-          # can never again consume the whole job.
+          # can never again consume the whole job. MSYS_NO_PATHCONV stops Git Bash's automatic
+          # path conversion from mangling bare /flag arguments (reg.exe's /v /t /d /f, msiexec's
+          # own /a /qn) into bogus Windows drive paths before they ever reach the native tool -
+          # the likely real cause of the hang this is meant to fix, since we already build every
+          # actual Windows path ourselves via cygpath -w.
+          export MSYS_NO_PATHCONV=1
           reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\WinTrust\Trust Providers\Software Publishing" /v State /t REG_DWORD /d 0x023c00 /f
           timeout 180 msiexec /a "$(cygpath -w "$MSI")" /qn TARGETDIR="$(cygpath -w "$TMPX/msi-extract")" || true
           find "$TMPX/msi-extract" -type f | while read -r f; do sha256sum --text "$f" >> round2/listing/container-listing.txt; done
