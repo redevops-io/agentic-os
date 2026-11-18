@@ -516,7 +516,15 @@ jobs:
           NSIS="deploy/launcher/src-tauri/target/release/bundle/nsis/${PRODUCT_SLUG}_x64-setup.exe"
           : > round2/listing/container-listing.txt
           TMPX=$(mktemp -d)
-          msiexec /a "$(cygpath -w "$MSI")" /qn TARGETDIR="$(cygpath -w "$TMPX/msi-extract")" || true
+          # msiexec /a validates the Authenticode signature this MSI just received from real
+          # Trusted Signing, which triggers a CRL/OCSP revocation check; on this runner the
+          # network path to that check can black-hole instead of failing fast, hanging msiexec
+          # for hours (observed: killed only by the 6h job timeout, orphaned msiexec process).
+          # Disable WinTrust's publisher/revocation check for this process tree (does not touch
+          # the signing scripts' own signature verification) and hard-cap the call so a stall
+          # can never again consume the whole job.
+          reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\WinTrust\Trust Providers\Software Publishing" /v State /t REG_DWORD /d 0x023c00 /f
+          timeout 180 msiexec /a "$(cygpath -w "$MSI")" /qn TARGETDIR="$(cygpath -w "$TMPX/msi-extract")" || true
           find "$TMPX/msi-extract" -type f | while read -r f; do sha256sum --text "$f" >> round2/listing/container-listing.txt; done
           sha256sum --text "$MSI" >> round2/listing/container-listing.txt
           sha256sum --text "$NSIS" >> round2/listing/container-listing.txt
