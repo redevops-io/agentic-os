@@ -1,0 +1,20 @@
+# OPTIONAL and not part of kustomization.yaml. Replace the host and the TLS secret. The dashboard requires sign-in itself
+# (HTTP Basic); terminate TLS here so the credential never crosses the network in the clear.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: edge-sentinel
+  namespace: edge-sentinel
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [sentinel.example.com]
+      secretName: edge-sentinel-tls
+  rules:
+    - host: sentinel.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: edge-sentinel, port: {name: http}}

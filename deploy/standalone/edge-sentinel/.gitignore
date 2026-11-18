@@ -1,0 +1,3 @@
+# local deployment state: never committed
+.env
+secrets/
