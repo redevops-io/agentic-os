@@ -1,8 +1,9 @@
 """The Projects UI is a PINNED artifact (url + sha256 + source commit) vendored reproducibly into the build (convergence stage 5).
 
-Today the artifact is built locally from an UNPUBLISHED commit of the UI source and lives in this repository, so builds and tests are offline;
-the lock says so (``source_commit_published: false``, empty ``url``) and a later publication only fills in the URL. Nothing here claims a
-publication; the distribution gate decisions pins-04 / D-LIC-12 are not touched.
+As of the 2026-11-19 re-pin the artifact is built from a PUBLISHED commit of the public redevops-projects repository, but it still lives in
+this repository (``local_path``) because no GitHub Release asset has been published for it yet, so builds and tests stay offline; the lock
+says so (``source_commit_published: true``, empty ``url``) and a later release publication only fills in the URL. Decision D-LIC-12 (which
+AGPL section 6 option to use) is not touched by this.
 """
 from __future__ import annotations
 
@@ -39,12 +40,12 @@ def _members():
         return {m.name: t.extractfile(m).read() for m in t.getmembers() if m.isfile()}
 
 
-def test_the_lock_pins_the_committed_artifact_and_says_it_is_unpublished():
+def test_the_lock_pins_the_committed_artifact_and_says_it_is_published():
     assert hashlib.sha256(ART.read_bytes()).hexdigest() == LOCK["sha256"]
     assert re.fullmatch(r"[0-9a-f]{64}", LOCK["sha256"]) and re.fullmatch(r"[0-9a-f]{40}", LOCK["source_commit"])
-    assert LOCK["source_commit_published"] is False and LOCK["url"] == ""           # nothing is published; a later publication fills in the url
+    assert LOCK["source_commit_published"] is True and LOCK["url"] == ""     # source is public; no release asset exists yet, so url is still empty
     assert LOCK["source_commit"] == REC["source_commit"] and LOCK["base_commit"] == REC["base_commit"]
-    assert "NOT a source offer" in LOCK["_comment"] and "OPEN" in LOCK["_comment"]
+    assert "OPEN" in LOCK["_comment"] and "D-LIC-12" in LOCK["_comment"]
     assert not re.search(r"open[ -]source|tamper-proof|soc ?2|production-ready|certified", json.dumps(LOCK).lower())
     assert REC["artifact"]["sha256"] == LOCK["sha256"] and REC["artifact"]["path"] == LOCK["local_path"]
 
@@ -68,15 +69,23 @@ def test_the_artifact_carries_no_image_at_all():
     assert not (ROOT / "agentic_os" / "projects_ui" / "hero.jpg").exists() and not (ROOT / "scripts" / "make_neutral_hero.py").exists()
 
 
-def test_the_replaced_artifact_differs_only_by_the_hero_and_is_kept_as_history():
+def test_the_superseded_local_source_chain_is_kept_as_history():
+    """2026-11-19: this pin was rebuilt from a published public commit because the previous pin's whole local source
+    chain (down to ea9e53e5) was lost in the 2026-11-07 scratchpad wipe and could not be recovered. The superseded
+    chain's own artifacts are kept in the repository unchanged, as history, even though their content now differs
+    from the current pin (a different, later source)."""
     prev = LOCK["previous_pin"]
+    assert prev["version"] == "local+ea9e53e5-nohero" and prev["source_commit_published"] is False
     old = ROOT / prev["local_path"]
-    assert prev["version"] == "local+ea9e53e5" and hashlib.sha256(old.read_bytes()).hexdigest() == prev["sha256"]
-    with tarfile.open(old, "r:gz") as t:
-        before = {m.name: hashlib.sha256(t.extractfile(m).read()).hexdigest() for m in t.getmembers() if m.isfile()}
-    after = {n: hashlib.sha256(d).hexdigest() for n, d in _members().items()}
-    assert set(before) - set(after) == {"hero.jpg"} and set(after) <= set(before)
-    assert all(before[n] == after[n] for n in after)                                        # index.html, the JavaScript and the CSS are byte-identical
+    assert hashlib.sha256(old.read_bytes()).hexdigest() == prev["sha256"]
+    # the chain nests all the way back to the public v0.2.0 release
+    node = prev
+    seen = [node["version"]]
+    while "previous_pin" in node:
+        node = node["previous_pin"]
+        seen.append(node["version"])
+    assert seen[-1] == "v0.2.0"
+    assert LOCK["source_commit_published"] is True and LOCK["source_commit"] != prev["source_commit"]
 
 
 def test_packing_is_deterministic_and_normalised():
@@ -140,69 +149,29 @@ def test_publication_changes_only_the_url(tmp_path):
     assert fetch_mod.fetch(lock, tmp_path / "ui") == "fetched"
 
 
-# ---------------------------------------------------------------------------------------------------------------- the 2026-11-06 re-pin
-def test_the_bundle_carries_both_the_today_first_views_and_the_accessibility_series_and_the_drilldown():
-    """The previous pin lacked the Today-first views of v0.2.0 (the convergence report's material finding). A regression guard on the bytes."""
+# ---------------------------------------------------------------------------------------------------------- the 2026-11-19 re-pin
+def test_the_lost_local_only_features_are_not_in_the_current_bundle():
+    """The accessibility series, the mission drill-down, the server-driven Sample/Partly-sample chip, the plain-words
+    uncertain/stale/compensation flags, the shared keyboard focus ring, and the fixed-wording source refusal/remove
+    flows only ever existed in the local commit chain (ea9e53e5 and its ancestors) that was lost in the 2026-11-07
+    scratchpad wipe. This pin is rebuilt from the public repository instead (see packaging/projects_ui.lock.json's
+    own _comment), which does not contain that work, so none of it is in the current bundle. This is a known,
+    accepted regression (the owner chose re-pinning to public main over redoing the lost work first), not a bug:
+    this test documents it so a future re-add of this functionality is a deliberate, visible change."""
     js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
-    today_first = ("Quick capture", "Deployment inspection", "Social intelligence", "Notifications")                # v0.2.0 line
-    a11y = ("Skip to main content", "About and licences")                                                           # UIA series
-    drilldown = ("aos.drilldown.timeline/", "aos.drilldown.evidence-inspect/", "Sample data, not a record", "Access changed while you were viewing",
-                 "Approve and Reject are not available here")
-    for s in today_first + a11y + drilldown:
-        assert s in js, s
-
-
-def test_the_bundle_takes_its_data_source_from_the_running_server_not_a_build_flag():
-    """One artifact serves a sample deployment and a runtime-backed one: it asks GET /api/ui-config, and the build flag is gone."""
-    js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
-    for s in ("/api/ui-config", "aos.ui-config/v1", "Data source unknown", "Where this data comes from is not known", "Sample data",
-              "This list comes from the sample projection", "Partly sample", "partly-note", "only for missions your session has been granted access to"):
-        assert s in js, s
-    assert "VITE_PROJECTS_SAMPLE_DATA" not in js and "SAMPLE_DATA" not in js
-
-
-def test_the_bundle_flags_uncertain_stale_and_incomplete_compensation_in_plain_words():
-    """The mission views flag what the log says is uncertain, late or not cleanly undone, and never call a residual a clean rollback."""
-    js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
-    for s in ("Outcome unknown: the effect may or may not exist.", "A late result from an earlier attempt was recorded; a duplicate effect is possible.",
-              "Compensation was denied; the effect remains.", "this is not a clean rollback.", "Waiting for an operator to reconcile an uncertain step",
-              "Compensated (undone)", "State as recorded", "Needs attention: uncertain, late or incomplete steps", "Verifier kind as recorded:",
-              "the application did not enforce it as read-only", "recorded as enforced read-only by the server"):
-        assert s in js, s
-    assert "application-enforced" not in js and "rolled back cleanly" not in js
-
-
-def test_the_bundle_gives_every_focusable_element_one_visible_keyboard_focus_ring():
-    """WCAG 2.4.7: the previous pin had an inline `outline: none` on the top-bar Ask Sidekick input (found by the native accessibility harness).
-    The shipped bytes carry the one shared :focus-visible rule from a --focus token, a forced-colors rule, and no inline outline removal."""
-    m = _members()
-    js = next(v for k, v in m.items() if k.endswith(".js")).decode("utf-8")
-    css = next(v for k, v in m.items() if k.endswith(".css")).decode("utf-8")
-    assert re.search(r":focus-visible\{outline:var\(--focus-w\) solid var\(--focus\);outline-offset:var\(--focus-off\)\}", css)
-    assert "--focus:var(--accent)" in css and "forced-colors:active){:focus-visible{outline:2px solid Highlight" in css
-    assert 'outline:"none"' not in js and "outlineStyle" not in js
-
-
-def test_the_bundle_says_every_source_refusal_in_fixed_words_and_can_remove_a_registered_folder():
-    """A refused or failed Connect / Looks right / Remove was silent in the previous pin (the promise rejected and nothing was shown). The shipped
-    bytes carry one fixed sentence per server refusal code (the server's own message text is never rendered), an alert, and a Remove control with
-    an in-page question for a folder registered in this session."""
-    js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
-    for s in ("Your whole home folder can't be connected. Pick a folder inside it, for example Documents.",
-              "That folder holds credentials, browser data, system files or this app's own data, so it can't be connected.",
-              "Enter the full path of the folder, starting from the top", "Only a folder you picked in a proposal can be connected. Ask Sidekick to use it as context",
-              "The registration could not be recorded, so nothing was registered.", "That source is already gone, so there is nothing to remove.",
-              "You're signed out of this app session, so ", "This app session has ended, so ", "Can't reach the runtime, so ",
-              "/api/sources/remove", "Yes, remove", "Your files are not changed; the folder just stops being available as evidence until you add it again."):
-        assert s in js, s
-    for server_words in ("cannot be registered as a source", "A local session is required."):
-        assert server_words not in js, server_words                           # the page's words, never the server's
-    css = next(v for k, v in _members().items() if k.endswith(".css")).decode("utf-8")
-    assert ".problem{" in css and ".confirm{" in css
+    lost_strings = (
+        "Deployment inspection", "Social intelligence",                                   # v0.2.0-era cards, present in the lost build only
+        "aos.drilldown.timeline/", "aos.drilldown.evidence-inspect/",                     # mission drill-down
+        "/api/ui-config", "Partly sample",                                                # server-driven sample/runtime chip
+        "Outcome unknown: the effect may or may not exist.",                              # uncertain/stale/compensation wording
+        "Your whole home folder can't be connected. Pick a folder inside it, for example Documents.",  # fixed source-refusal wording
+    )
+    for s in lost_strings:
+        assert s not in js, f"{s!r} unexpectedly present: is this still built from a lost-work commit?"
 
 
 def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_release():
-    chain = ["local+ea9e53e5", "local+9a1788b1", "local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
+    chain = ["local+ea9e53e5-nohero", "local+ea9e53e5", "local+9a1788b1", "local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
     node = LOCK
     for want in chain:
         node = node["previous_pin"]
@@ -210,11 +179,13 @@ def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_relea
         f = ROOT / node["local_path"]
         assert f.is_file() and hashlib.sha256(f.read_bytes()).hexdigest() == node["sha256"], want          # going back is a lock edit
     assert node["previous_pin"]["version"] == "v0.2.0" and re.fullmatch(r"[0-9a-f]{64}", node["previous_pin"]["sha256"])
-    assert LOCK["merged_public_release"]["tag"] == "v0.2.0" and REC["merged_public_release"] == {"tag": "v0.2.0", "commit": LOCK["merged_public_release"]["commit"]}
-    assert LOCK["source_commit"] == LOCK["previous_pin"]["source_commit"]                     # the same UI source; only the image was dropped from the artifact
-    assert LOCK["source_commit"] != LOCK["previous_pin"]["previous_pin"]["source_commit"] and LOCK["source_commit_published"] is False and LOCK["url"] == ""
+    assert LOCK["merged_public_release"]["tag"] == "v0.2.0"
+    assert REC["merged_public_release"] == {"tag": "v0.2.0", "commit": LOCK["merged_public_release"]["commit"]}
+    # 2026-11-19: a real re-pin to a different, later, PUBLISHED source - not just an image removal from the same source
+    assert LOCK["source_commit"] != LOCK["previous_pin"]["source_commit"]
+    assert LOCK["source_commit_published"] is True and LOCK["url"] == ""
 
 
-def test_the_record_states_that_the_npm_lock_changed_only_by_the_licence_field():
-    assert REC["lock_unchanged_since_base"] is False
-    assert "no dependency was added" in REC["lock_change_since_base"]
+def test_the_record_states_that_the_npm_lock_is_unchanged_since_the_base():
+    assert REC["lock_unchanged_since_base"] is True
+    assert "byte-identical" in REC["lock_change_since_base"]

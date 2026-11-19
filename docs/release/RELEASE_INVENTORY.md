@@ -13,7 +13,10 @@ valid signatures, not open; and real Azure Trusted Signing of the Windows R0-pri
 successfully via `.github/workflows/windows-signing-r0prime.yml` (`--real`, not a rehearsal mode) - so lines below stating
 `--real`/application signatures as "not authorized" no longer reflect current state for Windows. The macOS signing lines
 remain accurate as of this correction (no real macOS signing credentials exist yet). See `docs/release/MICROSOFT_STORE.md`
-for the current, maintained status of Windows/Store readiness.
+for the current, maintained status of Windows/Store readiness. Also superseded: the Projects UI bundle's source commit
+(`ea9e53e5...`, called LOCAL/UNPUBLISHED below) was lost in the 2026-11-07 scratchpad wipe and could not be recovered;
+the bundle is now pinned to a different, PUBLISHED public commit (`2bbb9811...`), resolving pins-10/pins-04 for this
+component (D-LIC-12 stays OPEN) - see `packaging/PINS.md`'s 2026-11-19 entry and `packaging/projects_ui.lock.json`.
 
 Two provenance lines exist and are kept in two separate sections. Section 1A (desktop freeze) and section 1B (agentic-os-stack integration) never share SHAs.
 
