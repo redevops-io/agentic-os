@@ -62,3 +62,37 @@ jobs:
         if: always()
         working-directory: deploy/combined
         run: ./smoke.sh --teardown
+
+  # Proves Product B's Edge Sentinel half needs nothing from the combined bundle (Projects, Sidekick,
+  # redevops-qa) or from the agentic-os desktop build (neither of which this job's runner ever installs):
+  # the documented standalone path, run directly, not through deploy/combined's wrapper. Independent of the
+  # `combined` job above - a failure here is specifically "Edge Sentinel alone is broken", not "the bundle is".
+  standalone-edge-sentinel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap the standalone Edge Sentinel install (the documented command, no other product present)
+        working-directory: deploy/standalone/edge-sentinel
+        run: ./bootstrap.sh
+      - name: Smoke the running stack (alert -> case -> approve -> execute -> receipt -> restart-persists)
+        working-directory: deploy/standalone/edge-sentinel
+        run: ./smoke.sh
+      - name: On failure, keep the evidence
+        if: failure()
+        working-directory: deploy/standalone/edge-sentinel
+        run: |
+          mkdir -p /tmp/evidence-standalone
+          docker compose ps -a                        > /tmp/evidence-standalone/docker-ps.txt 2>&1 || true
+          docker compose logs --no-color > /tmp/evidence-standalone/sentinel.log 2>&1 || true
+          tail -c 200000 /tmp/evidence-standalone/*.log || true
+      - name: Upload the evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-edge-sentinel-evidence
+          path: /tmp/evidence-standalone/
+      - name: Teardown
+        if: always()
+        working-directory: deploy/standalone/edge-sentinel
+        run: docker compose down -v || true
