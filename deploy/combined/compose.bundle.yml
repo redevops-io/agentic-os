@@ -37,7 +37,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   edge-sentinel:
-    image: "${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel}:${EDGE_SENTINEL_IMAGE_TAG:-0.6.3}"
+    image: "${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel}:${EDGE_SENTINEL_IMAGE_TAG:-0.6.4}"
     restart: unless-stopped
     depends_on:
       crowdsec:

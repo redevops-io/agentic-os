@@ -11,7 +11,7 @@
 set -eu
 cd "$(dirname "$0")"
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.36.6-k3s1@sha256:88d3fac10eb4a429d3c5275f4868fe4b13620f6bbca5bdb5dca0627ac76ae2a0}"
-IMAGE="${1:-${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel@sha256:0650bba74539e9500d537236cf843eca407e45be99fe5b7ae2530096e0abbd72}}"
+IMAGE="${1:-${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel@sha256:a89cff83c0ceb523530bdd7ee1dbe42da46b553d885d4416969fbbc569e2b6ce}}"
 SUFFIX="$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 NAME="sentinel-k3s-$SUFFIX"
 API_PORT="${K3S_API_PORT:-$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))}"
