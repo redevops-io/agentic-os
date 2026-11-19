@@ -14,7 +14,7 @@
 # classic confinement. The launcher's optional "advanced containers" buttons run `docker compose` on the HOST; inside a
 # strict snap there is no docker binary and no docker socket, so they fail closed with "failed to launch" (documented
 # owner decision O-SNAP-2 in docs/release/SNAP_STORE.md).
-name: agentic-apps-r0-prime         # PLACEHOLDER: the store name must be registered by the owner (`snapcraft register`)
+name: raislapps                     # registered by the owner on the Snap Store under their account (`snapcraft register raislapps`)
 title: Agentic Apps R0-prime
 base: core24
 adopt-info: app
@@ -35,7 +35,7 @@ environment:
   RDO_SNAP: "1"
 
 apps:
-  agentic-apps-r0-prime:
+  raislapps:
     command: bin/agentic-apps-snap
     extensions: [gnome]
     plugs: [network, network-bind]

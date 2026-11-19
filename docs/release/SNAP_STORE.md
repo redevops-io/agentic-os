@@ -167,8 +167,9 @@ The amd64 snap, the Wayland session, a real GPU, `snap refresh` from a store cha
 ## 7. What only the owner can do (real Snap Store account; nothing here was attempted)
 
 1. Create or use the Ubuntu One account for the publisher and enable two-factor authentication.
-2. Register the snap name (`snapcraft register <name>`); `agentic-apps-r0-prime` in `snap/snapcraft.yaml` is a placeholder. Brand names
-   can need a name-claim review. Decide the public name and whether the R0-prime suffix belongs in a store name at all.
+2. Register the snap name (`snapcraft register <name>`). **UPDATE 2026-11-19: done** — the owner reserved `raislapps` under the
+   `arybach` Snap Store account; `snap/snapcraft.yaml`'s `name:` and its one `apps:` key now read `raislapps` (the section 6 run
+   below still used the earlier placeholder, `agentic-apps-r0-prime`, and is left as the historical record of that run).
 3. Request publisher verification if wanted.
 4. Create store credentials (`snapcraft login` / exported credentials) in a place only the owner controls; no agent receives them.
 5. Decide O-SNAP-1 to O-SNAP-5 (section 2), including any store request for a non-default interface.
