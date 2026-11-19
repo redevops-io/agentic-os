@@ -14,6 +14,12 @@ created=""
 for name in operator_password crowdsec_bouncer_key crowdsec_machine_password control_token approval_secret; do
   if [ ! -s "secrets/$name" ]; then gen > "secrets/$name"; created="$created $name"; fi
 done
+# Compose mounts `file:` secrets as plain bind mounts, and Edge Sentinel runs as an unprivileged uid: on a
+# real Linux host a 0600 file (this umask) owned by the creating user is unreadable inside the container and
+# the app crash-loops (SecretFileError: ..._FILE is set but the file cannot be read) - macOS virtiofs masks
+# this, and no CI ran this script directly (only via deploy/combined's wrapper, which already chmods these
+# same files) until this was caught for real on a Linux runner. Same fix as deploy/combined/bootstrap.sh.
+chmod 0444 secrets/*
 [ -f .env ] || cp .env.example .env
 
 COMPOSE="docker compose"
