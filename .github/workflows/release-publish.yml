@@ -1,0 +1,122 @@
+# Publishes the signed R0-prime Windows installers (produced by windows-signing-r0prime.yml, uploaded there as
+# the short-lived "signed-containers-final" artifact) as a GitHub Release. Manual dispatch only, from the
+# protected branch release/0.6.0: a person types the confirmation and names the exact signing run to publish
+# from. Narrow, owner-approved reversal of decision pins-05 (tests/test_workflow_no_publish.py
+# PUBLISH_ALLOWED_WORKFLOWS) - every other workflow in this tree is still refused the ability to publish.
+#
+# Hard gates, in order, any of which refuses the release outright:
+#   1. packaging/check-distribution-gate.py --platform all --distribution --about-slots must pass (every
+#      distribution-blocking legal decision DECIDED with a valid signature, every About legal slot filled).
+#   2. packaging/projects_ui.lock.json's source_commit_published must be true - the gate tool only checks that
+#      the legal DECISION is made, not that this specific UI build's source has actually been published, which
+#      is the separate, concrete fact decisions pins-04/pins-10/D-LIC-12 are about (see that file's own
+#      _comment). Owner decision (2026-11-19 session): this blocks distribution until it is.
+#   3. the named signing run must be a completed, successful windows-signing-r0prime.yml run on this exact
+#      branch, whose BUILD_COMMIT matches this workflow's own pin - the artifact must be of the commit this
+#      release claims, not an unrelated or stale run.
+name: release-publish
+on:
+  workflow_dispatch:
+    inputs:
+      signing_run_id:
+        description: "The windows-signing-r0prime.yml run ID whose signed-containers-final artifact to publish"
+        required: true
+      release_tag:
+        description: "GitHub Release tag to create, for example r0prime-v0.1.1"
+        required: true
+      confirm:
+        description: "Type exactly: PUBLISH <release_tag>"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      TAG: ${{ inputs.release_tag }}
+      CONFIRM: ${{ inputs.confirm }}
+      RUN_ID: ${{ inputs.signing_run_id }}
+      BUILD_COMMIT: 36bbab35d600d21562d7923a562f85944af8f472
+    steps:
+      - name: Check the confirmation and the branch
+        run: |
+          [ "$CONFIRM" = "PUBLISH $TAG" ] || { echo "the confirmation does not match: type PUBLISH $TAG"; exit 1; }
+          [ "$GITHUB_REF" = "refs/heads/release/0.6.0" ] || { echo "dispatch from the protected branch release/0.6.0 only (got $GITHUB_REF)"; exit 1; }
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gate 1 - the distribution gate must pass (every legal decision DECIDED and signed, every About slot filled)
+        run: python3 -I packaging/check-distribution-gate.py --platform all --distribution --about-slots
+
+      - name: Gate 2 - the Projects UI source must actually be published, not just the policy decided
+        run: |
+          python3 -I -c '
+          import json, sys
+          doc = json.load(open("packaging/projects_ui.lock.json"))
+          if not doc.get("source_commit_published"):
+              print("packaging/projects_ui.lock.json: source_commit_published is not true - the UI source has "
+                    "not actually been published yet (decisions pins-04/pins-10/D-LIC-12 are DECIDED as policy, "
+                    "but this build has not fulfilled them). Refusing to publish a distribution release.",
+                    file=sys.stderr)
+              sys.exit(1)
+          print("source_commit_published: true")
+          '
+
+      - name: Gate 3 - the named signing run is a real, completed, successful run of this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STATUS="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json status,conclusion,headBranch,workflowName -q '.status + " " + .conclusion + " " + .headBranch + " " + .workflowName')"
+          echo "run $RUN_ID: $STATUS"
+          case "$STATUS" in
+            "completed success release/0.6.0 windows-signing-r0prime") ;;
+            *) echo "run $RUN_ID is not a completed, successful windows-signing-r0prime.yml run on release/0.6.0 ($STATUS)"; exit 1 ;;
+          esac
+
+      - name: Download the signed installers from that run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: signed-containers-final
+          run-id: ${{ inputs.signing_run_id }}
+          github-token: ${{ github.token }}
+          path: signed
+
+      - name: Verify the evidence names this exact BUILD_COMMIT and the signature check passed
+        run: |
+          grep -q "build commit $BUILD_COMMIT" signed/EVIDENCE.txt || { echo "EVIDENCE.txt does not name BUILD_COMMIT=$BUILD_COMMIT"; exit 1; }
+          grep -q "RESULT: signify verification PASS" signed/EVIDENCE.txt || { echo "EVIDENCE.txt does not record a PASS verification"; exit 1; }
+          cd signed && sha256sum --check --strict SHA256SUMS
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && { echo "release $TAG already exists; tags are never moved"; exit 1; } || true
+
+      - name: Create the GitHub Release (marked prerelease - private-candidate signing, not a cleared distribution)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target release/0.6.0 \
+            --title "Agentic Apps R0-prime ($TAG)" \
+            --prerelease \
+            --notes "Signed Windows installers for Agentic Apps R0-prime, build commit \`${BUILD_COMMIT}\`. Real Azure Trusted Signing (private-candidate; see EVIDENCE.txt and docs/release/ for distribution-channel status). Source signing run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}." \
+            signed/EVIDENCE.txt \
+            signed/SHA256SUMS \
+            signed/*.msi \
+            signed/*.exe
