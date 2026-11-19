@@ -1,0 +1,148 @@
+# Publishes the single-pull combined bundle ghcr.io/redevops-io/redevops-ts (Projects + Sidekick, redevops-qa,
+# Edge Sentinel + CrowdSec - deploy/combined/compose.bundle.yml) as one OCI Compose-application artifact.
+# Manual dispatch only, from the protected branch release/0.6.0: a person types the confirmation.
+# Same shape as oci-edge-sentinel.yml / oci-release.yml (pinned actions, keyless signing, provenance, no
+# overwrite), adapted for `docker compose publish` instead of `docker build`: nothing is compiled here, the
+# artifact is the compose file plus every referenced image pinned to a digest (--resolve-image-digests);
+# redevops-qa, edge-sentinel and redevops-projects are the SAME published images as their own standalone/bundle
+# installs, never rebuilt here. Image versions are read from deploy/combined/.env.bundle.example (single
+# source of truth for "what this release's bundle pins"), not duplicated as workflow inputs.
+#
+# Consumers verify with:
+#   cosign verify ghcr.io/redevops-io/redevops-ts@sha256:<digest> \
+#     --certificate-identity 'https://github.com/redevops-io/agentic-os/.github/workflows/oci-redevops-ts-bundle.yml@refs/heads/release/0.6.0' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+name: oci-redevops-ts-bundle
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Bundle version to publish, for example 0.1.0 (its own version line, independent of agentic-os's vX.Y.Z)"
+        required: true
+      confirm:
+        description: "Type exactly: PUBLISH <tag>"
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: oci-redevops-ts-bundle
+  cancel-in-progress: false
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      NAME: redevops-ts
+      TAG: ${{ inputs.tag }}
+      CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - name: Check the confirmation, the tag, and the branch
+        run: |
+          [ "$CONFIRM" = "PUBLISH $TAG" ] || { echo "the confirmation does not match: type PUBLISH $TAG"; exit 1; }
+          case "$TAG" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "tag must look like 0.1.0"; exit 1;; esac
+          [ "$GITHUB_REF" = "refs/heads/release/0.6.0" ] || { echo "dispatch from the protected branch release/0.6.0 only (got $GITHUB_REF)"; exit 1; }
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the pinned product versions (deploy/combined/.env.bundle.example is the source of truth)
+        id: pins
+        run: |
+          get() { sed -n "s/^$1=//p" deploy/combined/.env.bundle.example | tail -1; }
+          echo "qa=$(get QA_IMAGE_TAG)" >> "$GITHUB_OUTPUT"
+          echo "edge_sentinel=$(get EDGE_SENTINEL_IMAGE_TAG)" >> "$GITHUB_OUTPUT"
+          echo "projects=$(get PROJECTS_IMAGE_TAG)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          for v in "$(get QA_IMAGE_TAG)" "$(get EDGE_SENTINEL_IMAGE_TAG)" "$(get PROJECTS_IMAGE_TAG)"; do
+            [ -n "$v" ] || { echo "a pinned product version is empty in deploy/combined/.env.bundle.example"; exit 1; }
+          done
+
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003  # v4.4.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite an existing tag
+        run: |
+          if docker buildx imagetools inspect "ghcr.io/redevops-io/${NAME}:${TAG}" >/dev/null 2>&1; then
+            echo "ghcr.io/redevops-io/${NAME}:${TAG} already exists; tags are never moved"; exit 1
+          fi
+
+      - name: Confirm the three pinned product images actually exist before packaging the bundle around them
+        run: |
+          for ref in "ghcr.io/redevops-io/redevops-qa:${{ steps.pins.outputs.qa }}" \
+                     "ghcr.io/redevops-io/edge-sentinel:${{ steps.pins.outputs.edge_sentinel }}" \
+                     "ghcr.io/redevops-io/redevops-projects:${{ steps.pins.outputs.projects }}"; do
+            docker buildx imagetools inspect "$ref" >/dev/null || { echo "missing: $ref"; exit 1; }
+          done
+
+      - name: Publish the compose application (every referenced image pinned to a digest)
+        working-directory: deploy/combined
+        run: |
+          # compose.bundle.yml's own header: "every credential... is a plain environment variable...
+          # resolved by Compose from the CALLER's shell/--env-file at `up` time, never packaged into the
+          # artifact" - confirmed: no --with-env flag below, so a published artifact carries none of these
+          # values regardless of what they are. The 8 placeholders only satisfy each ${VAR:?...} guard so
+          # `publish` can interpolate the file at all; bundle-bootstrap.sh generates the REAL per-deployment
+          # values, never at publish time.
+          cat > /tmp/publish.env <<EOF
+          QA_IMAGE_TAG=${{ steps.pins.outputs.qa }}
+          EDGE_SENTINEL_IMAGE_TAG=${{ steps.pins.outputs.edge_sentinel }}
+          PROJECTS_IMAGE_TAG=${{ steps.pins.outputs.projects }}
+          OPERATOR_BASIC_AUTH=unused-at-publish-time
+          SENTINEL_BASIC_AUTH_PASS=unused-at-publish-time
+          CROWDSEC_BOUNCER_KEY=unused-at-publish-time
+          CROWDSEC_MACHINE_PASSWORD=unused-at-publish-time
+          EDGE_SENTINEL_SERVICE_TOKEN=unused-at-publish-time
+          QA_SERVICE_TOKEN=unused-at-publish-time
+          QA_BOOTSTRAP_ADMIN_PASSWORD=unused-at-publish-time
+          APPROVAL_SECRET=unused-at-publish-time
+          EOF
+          docker compose --env-file /tmp/publish.env -f compose.bundle.yml publish --app --resolve-image-digests --yes "ghcr.io/redevops-io/${NAME}:${TAG}"
+
+      - name: Capture the published digest
+        id: publish
+        run: |
+          DIGEST="$(docker buildx imagetools inspect "ghcr.io/redevops-io/${NAME}:${TAG}" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')"
+          [ -n "$DIGEST" ] || { echo "could not read back the published digest"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+      - name: Sign by digest (index and every per-architecture manifest)
+        run: cosign sign --yes --recursive "ghcr.io/redevops-io/${NAME}@${{ steps.publish.outputs.digest }}"
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        with:
+          subject-name: ghcr.io/redevops-io/${{ env.NAME }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+
+      - name: "Smoke test: pull the published bundle, bring every service up, verify both products ready"
+        working-directory: deploy/combined
+        run: |
+          cp .env.bundle.example .env.bundle
+          sed -i "s/^BUNDLE_TAG=.*/BUNDLE_TAG=${TAG}/" .env.bundle
+          ./bundle-bootstrap.sh
+
+      - name: Teardown
+        if: always()
+        working-directory: deploy/combined
+        run: docker compose -f "oci://ghcr.io/redevops-io/${NAME}:${TAG}" --project-directory . --env-file .env.bundle down -v || true
+
+      - name: Release record
+        run: |
+          {
+            echo "### ${NAME} ${TAG}"
+            echo "- digest: \`${{ steps.publish.outputs.digest }}\`"
+            echo "- source: \`${{ steps.pins.outputs.commit }}\` (deploy/combined/ definition, release/0.6.0)"
+            echo "- pins: redevops-qa=${{ steps.pins.outputs.qa }}, edge-sentinel=${{ steps.pins.outputs.edge_sentinel }}, redevops-projects=${{ steps.pins.outputs.projects }}"
+            echo "- reference by digest: \`ghcr.io/redevops-io/${NAME}@${{ steps.publish.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
