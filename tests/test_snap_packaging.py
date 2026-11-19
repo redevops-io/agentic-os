@@ -48,7 +48,10 @@ def test_the_wrapper_and_builder_do_not_escalate():
         "disabling the WebKit sandbox is an owner decision (SNAP_STORE.md), not applied")
 
 
-def test_the_snap_builds_both_architectures_and_the_name_is_a_placeholder_until_registered():
+def test_the_snap_builds_both_architectures_and_is_named_for_the_owners_registered_store_name():
     assert set(SNAP["platforms"]) == {"amd64", "arm64"}
     assert "license" not in SNAP, "the family licence has no SPDX id; the listing licence field is an owner decision"
-    assert "PLACEHOLDER" in (ROOT / "snap" / "snapcraft.yaml").read_text(encoding="utf-8")
+    # registered by the owner on the Snap Store (2026-11-19); the app key under `apps:` matches so the
+    # installed command is plain `raislapps`, not `raislapps.<something>`
+    assert SNAP["name"] == "raislapps"
+    assert set(SNAP["apps"]) == {"raislapps"}
