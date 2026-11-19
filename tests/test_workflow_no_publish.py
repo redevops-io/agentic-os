@@ -1,4 +1,6 @@
-"""No workflow in this tree can create a release or publish anything (R0-prime, decision pins-05).
+"""No workflow in this tree can create a release or publish anything, except the few named ones below (R0-prime,
+decision pins-05; narrowly reversed 2026-11-19, owner-approved, for exactly the workflows in
+PUBLISH_ALLOWED_WORKFLOWS and OIDC_SIGNING_WORKFLOWS - everything else is still refused in full).
 
 The v0.3.2 native-packaging workflow had a `release` job that published UNSIGNED installers to a GitHub Release
 on any `v*` tag. These tests fail on that workflow (feeca065) and pass once the job is gone. They are static:
@@ -60,6 +62,21 @@ def workflows() -> list[Path]:
 # narrow: it only lifts the "uses secrets.*" finding, never the publishing/permission findings (convergence stage 2, decision F7).
 READ_ONLY_SECRET_WORKFLOWS = {"pin-currency.yml": "weekly pin-currency report; optional read-only PAT, falls back to github.token"}
 
+# id-token: write used ONLY to authenticate to a real signing service via OIDC (azure/login) - never to publish a
+# release, push an image or write any secret. The exception lifts just the one "write permission" finding; a
+# publish action, a release-shaped job name, or secrets.* usage in the same file would still fail this test.
+OIDC_SIGNING_WORKFLOWS = {"windows-signing-r0prime.yml": "Azure Trusted Signing OIDC login for the two real-signing jobs; no stored secret, no publish action"}
+
+# Owner-approved, narrow reversal of pins-05 (2026-11-19): these named workflows MAY publish - each one is
+# workflow_dispatch-only, requires a typed confirmation input (a person acts, not a push/PR/schedule), and
+# publishes only already-signed, already-gate-checked artifacts. This is still "no workflow may publish by
+# accident": every OTHER file in the tree is still held to the full, zero-exception check below.
+PUBLISH_ALLOWED_WORKFLOWS = {
+    "oci-edge-sentinel.yml": "signed GHCR publish of the Edge Sentinel standalone image",
+    "oci-redevops-ts-bundle.yml": "signed GHCR publish of the combined bundle (Projects+Sidekick, redevops-qa, Edge Sentinel) OCI artifact",
+    "release-publish.yml": "GitHub Release of the signed R0-prime Windows installers, gated on the distribution gate passing",
+}
+
 
 def test_the_tree_has_workflows_and_none_can_publish():
     wfs = workflows()
@@ -71,6 +88,16 @@ def test_the_tree_has_workflows_and_none_can_publish():
             doc = yaml.safe_load(text)
             assert doc["permissions"] == {"contents": "read"}, p.name       # the exception is only for a read-only token
             found = [v for v in found if v != "uses secrets.*"]
+        if p.name in OIDC_SIGNING_WORKFLOWS:
+            found = [v for v in found if v != "a write permission (contents/packages/id-token/... : write, or write-all)"]
+        if p.name in PUBLISH_ALLOWED_WORKFLOWS:
+            doc = yaml.safe_load(text)
+            triggers = doc.get(True, doc.get("on", {})) or {}
+            assert set(triggers) == {"workflow_dispatch"}, \
+                f"{p.name}: a publish-allowed workflow must be workflow_dispatch-only, got {sorted(triggers)}"
+            assert "confirm" in (triggers["workflow_dispatch"].get("inputs") or {}), \
+                f"{p.name}: a publish-allowed workflow must require a typed confirmation input"
+            found = []
         assert found == [], str(p.relative_to(ROOT))
 
 
