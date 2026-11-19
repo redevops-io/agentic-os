@@ -1,0 +1,135 @@
+# Builds, locally review-tools-checks and (on explicit confirmation) publishes the Ubuntu Snap Store package
+# `raislapps` (registered by the owner under their Snap Store account, 2026-11-19; see docs/release/SNAP_STORE.md).
+# Manual dispatch only, from the protected branch release/0.6.0, same shape as oci-redevops-projects.yml.
+#
+# Known, unresolved defect (SNAP-D1, docs/release/SNAP_STORE.md section 6): the launcher window has been observed
+# blank under strict confinement in local VM testing - the control plane and the store's own review-tools pass, but
+# the GUI itself may not render for an end user. This workflow verifies buildability, local review-tools acceptance
+# and installability; it does NOT verify the GUI renders (no GPU/Xvfb desktop session on a GitHub-hosted runner
+# reproduces that check meaningfully). The required confirmation phrase names this explicitly so a dispatch cannot
+# happen by accident without that context. `grade: devel` in snap/snapcraft.yaml means the Store itself refuses this
+# package on the stable/candidate channels regardless: --release is always edge here.
+#
+# Credentials: SNAPCRAFT_STORE_CREDENTIALS (an exported `snapcraft export-login` token) must exist as a GitHub
+# Actions secret on this repository, created by the owner from their own already-authenticated Snap Store session.
+# This workflow never logs it, never derives it, and the publish job is skipped entirely if it is not set.
+name: snap-raislapps
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version to publish, must equal packaging/identity.json's version on this branch, for example 0.1.1"
+        required: true
+      confirm:
+        description: 'Type exactly: PUBLISH <tag> TO EDGE DESPITE SNAP-D1'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: snap-raislapps
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.tag }}
+      CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - name: Check the confirmation, the tag, and the branch
+        run: |
+          [ "$CONFIRM" = "PUBLISH $TAG TO EDGE DESPITE SNAP-D1" ] || { echo "the confirmation does not match: type PUBLISH $TAG TO EDGE DESPITE SNAP-D1"; exit 1; }
+          [ "$GITHUB_REF" = "refs/heads/release/0.6.0" ] || { echo "dispatch from the protected branch release/0.6.0 only (got $GITHUB_REF)"; exit 1; }
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Version and distribution-gate check
+        run: |
+          IDENTITY_VERSION="$(python3 -I packaging/tools/identity.py get version)"
+          [ "$IDENTITY_VERSION" = "$TAG" ] || { echo "tag $TAG does not match packaging/identity.json's version $IDENTITY_VERSION"; exit 1; }
+          python3 -I packaging/check-distribution-gate.py --platform linux --distribution
+
+      - name: "Install snapcraft and build (destructive mode: this runner IS the build VM)"
+        run: |
+          sudo snap install snapcraft --classic
+          sudo snapcraft pack --destructive-mode
+          ls -la *.snap
+
+      - name: Local review-tools check (not a Store decision; informational, same discipline as the Lima VM run)
+        run: |
+          sudo snap install review-tools
+          review-tools.snap-review --json *.snap | tee review.json
+          python3 -I -c '
+          import json
+          d = json.load(open("review.json"))
+          errors = d.get("errors") or {}
+          assert not errors, f"review-tools reported errors: {errors}"
+          print("review-tools: 0 errors")
+          '
+
+      - name: Installability smoke test (install/remove only; the GUI itself is not exercised here - see SNAP-D1)
+        run: |
+          sudo snap install --dangerous ./*.snap
+          snap list raislapps
+          sudo snap remove --purge raislapps
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: snap-${{ matrix.arch }}
+          path: "*.snap"
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Refuse without store credentials
+        run: |
+          if [ -z "${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}" ]; then
+            echo "SNAPCRAFT_STORE_CREDENTIALS is not set on this repository; nothing to publish. Build-only run stops here."
+            echo "publish_skipped=1" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        if: env.publish_skipped != '1'
+        with:
+          pattern: snap-*
+          path: snaps
+          merge-multiple: true
+
+      - name: Install snapcraft
+        if: env.publish_skipped != '1'
+        run: sudo snap install snapcraft --classic
+
+      - name: "Upload each architecture's snap to the edge channel ONLY (grade: devel refuses stable/candidate anyway)"
+        if: env.publish_skipped != '1'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          for f in snaps/*.snap; do
+            echo "uploading $f to channel edge"
+            snapcraft upload "$f" --release=edge
+          done
+
+      - name: Release record
+        if: env.publish_skipped != '1'
+        run: |
+          {
+            echo "### raislapps $TAG"
+            echo "- channel: edge (grade: devel; stable/candidate refused by the Store)"
+            echo "- known defect at upload time: SNAP-D1, launcher window blank under strict confinement (docs/release/SNAP_STORE.md section 6) - not re-verified by this workflow"
+          } >> "$GITHUB_STEP_SUMMARY"
