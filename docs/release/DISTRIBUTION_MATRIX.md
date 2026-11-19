@@ -39,9 +39,12 @@ concrete action and who owns it.
 - `oci-redevops-ts-bundle.yml` — would create the first real, signed, smoke-tested publish of the combined bundle.
 
 **Needs your decision before it can ship:**
-- Publish the Projects UI source commit (or decide the gate should not block on it).
+- Publish the Projects UI source commit (or decide the gate should not block on it) — **in flight**: PR #698 re-pins it to a
+  published public commit (the original local commit was lost in the 2026-11-07 scratchpad wipe), not yet merged.
 - Re-confirm or supersede D-LIC-16 for the QA bundle.
-- Open a Partner Center account if you want to pursue the Microsoft Store (S-A).
+- Open a Partner Center account if you want to pursue the Microsoft Store (S-A) — see
+  `docs/release/PARTNER_CENTER_SUBMISSION_CHECKLIST.md` for what to gather first and the engineering steps (a fresh signing
+  run, dispatching `release-publish.yml`) that still have to happen before a real submission, not just the account.
 
 **Needs your action before engineering can even start:**
 - Provision real Apple Developer ID signing credentials (M5) — no macOS signing environment exists in this repo yet.
