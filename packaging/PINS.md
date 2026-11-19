@@ -205,3 +205,14 @@ Licence note: the v0.1.0 and v0.2.0 pyprojects declared plain AGPL-3.0-or-later;
 The pinned Projects UI artifact is repacked WITHOUT `hero.jpg`: `projects-ui-root-ea9e53e5-nohero.tgz` (sha256 `b4a7d83ce14967b3e4541f64380c7b1cb15fcfceb7e19fea149a3391d480534d`). `index.html`, the JavaScript and the CSS are byte-identical to the superseded
 artifact (same sha256 each); only the image member is gone. `agentic_os/projects_ui/hero.jpg` and `scripts/make_neutral_hero.py` are deleted from the repository; the API sample no longer carries a preview path; the smoke check now asserts that
 `/hero.jpg` is not served as an image. Known effect: the built UI keeps one sample item whose picture path is `/hero.jpg`, which cannot load. `docs/legal/ARTWORK_PROVENANCE.md` records the facts.
+
+## 2026-11-19: Projects UI re-pinned to a published public commit (pins-04, pins-10)
+The local redevops-projects clone that held the `ea9e53e5` source chain (and every ancestor back through `9a1788b1`/`5751e9e5`/`312a811a`/`2f24719e`/`ee958a01`/`2fdef7f5`) was lost in the 2026-11-07 scratchpad wipe; an exhaustive search of this
+machine (every `.git` directory, `git fsck --unreachable --dangling`, every reflog) found no surviving copy, so that work cannot be republished or rebuilt from source. Per the owner's 2026-11-19 decision, the pin now builds instead from
+`redevops-io/redevops-projects`'s own public `main` tip, commit `2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c` (two commits past the v0.2.0 base this repository had built on): `projects-ui-root-2bbb9811.tgz` (sha256
+`55711fbd9c68dd97988d2fe1f6e557ae2d1abbab917dbc3c7380dbb2f27f86ab`), reproduced byte-identical across three clean builds. `packaging/projects_ui.lock.json`'s `source_commit_published` is now **true**: the pinned source is a real, public
+commit, executing pins-04's already-DECIDED option (a) ("publish the commit") for this component. This resolves the UI-source portion of pins-04 and pins-10 by fact, not by a new decision; D-LIC-12 (which AGPL section 6 option to use for the
+Corresponding Source) is untouched and stays OPEN. Known, accepted regression: this re-pin drops every feature that only existed in the lost local commits (the accessibility series UIA-01..12, the mission drill-down views, the server-driven
+"Partly sample" chip, the fixed-wording connect/propose/remove-source flows) — none of that work is on the public repository, so none of it ships until it is redone and, this time, actually pushed. The superseded local-only chain's artifacts
+are kept in the repository as history (`packaging/projects_ui.lock.json`'s `previous_pin`).
+Tests: `tests/test_projects_ui_pin.py`, `tests/test_ui_bundle_source_record.py`, `tests/test_fetch_projects_ui.py`.

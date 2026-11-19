@@ -78,10 +78,11 @@ FLAGS = [
      "These paths hold other parties' texts or list other parties' packages. ReDevOps licensing does not apply to them and cannot be "
      "applied to them; they are collected, not relicensed. Their notices are preserved in `THIRD_PARTY_NOTICES.txt`."),
     ("F4", "Separate repository, licence statement not re-read here",
-     "The Projects UI bundle is built from the separate `redevops-projects` repository. The pinned source commit is a local, unpublished "
-     "commit (`packaging/ui-bundle-source.json`), and the repository's own licence statement was not re-read for this inventory "
-     "(D-LIC-2). The core statement lists the Projects UI as a core component on the owner's decision; the bundle also contains React, "
-     "ReactDOM and scheduler (MIT), which stay MIT."),
+     "The Projects UI bundle is built from the separate `redevops-projects` repository. Update 2026-11-19: the pinned source commit is now "
+     "a published commit of that public repository (`packaging/ui-bundle-source.json`, `packaging/PINS.md`); its own `LICENSE.md` "
+     "(re-read 2026-11-19) declares itself source-available, AGPL-3.0-or-later with the Commons Clause - the same family licence as this "
+     "repository's own core statement, so no inconsistency arises (D-LIC-2). The core statement lists the Projects UI as a core component "
+     "on the owner's decision; the bundle also contains React, ReactDOM and scheduler (MIT), which stay MIT."),
     ("F5", "Applications wrap third-party cores",
      "Several applications are an agent layer over a third-party self-hosted core (for example Lago, Chatwoot, Umami, Listmonk, "
      "changedetection.io, Metabase). The app code is category 2; the wrapped core, its images and its data stay under the core's own licence "

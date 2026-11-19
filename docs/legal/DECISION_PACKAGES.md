@@ -152,6 +152,8 @@ Licences present in the shipped binaries (from the 405-component notices of the 
 <a id="d-lic-7"></a>
 ## D-LIC-7 React and other JavaScript in the UI bundle (non-blocking)
 
+**Update 2026-11-19 (pins-10 re-pin).** The local, unpublished `ea9e53e5` commit named in the evidence below was lost in the 2026-11-07 scratchpad wipe and could not be recovered (exhaustive search of this machine). The bundle is now built from a PUBLISHED commit instead, `2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c` on `redevops-io/redevops-projects`'s public `main` (`packaging/ui-bundle-source.json`, `packaging/PINS.md`); the `package.json`/`package-lock.json` git blob ids are unchanged from the evidence below (byte-identical to the v0.2.0 base). Option (b) is now materially easier (the tag/commit is already public); it is still the owner's choice, not made by this update. The evidence paragraph is otherwise history.
+
 **Evidence (OBSERVED).** `agentic_os/projects_ui/assets/index-76LJRJ18.js` (400961 bytes): the only `@license` and `Copyright` strings are four React banners (“Copyright (c) Facebook, Inc. and its affiliates.” x4); the MIT text of React 18.3.1 (identical bytes in react-dom and scheduler 0.23.2) is printed. The bundle is built from the LOCAL, UNPUBLISHED `redevops-projects` commit `ea9e53e56b4cbaa1afb22404a6468695e49c24fa` (recorded with the git blob id and sha256 of its `package-lock.json` in `packaging/ui-bundle-source.json`; the lock file itself is not in this repository), so other bundled packages that carry no banner cannot be listed (UNVERIFIED). **Options:** (a) accept React-only; (b) record the redevops-projects tag/commit and lock and generate the UI notices from it. **Recommended default:** (b). **Decides:** owner.
 
 ---

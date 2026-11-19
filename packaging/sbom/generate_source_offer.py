@@ -100,11 +100,18 @@ def main() -> int:
         if ui_rec_path.exists():
             u = json.loads(ui_rec_path.read_text(encoding="utf-8"))
             published = "published" if u.get("source_commit_published") else "NOT PUBLISHED"
+            obtain = (
+                f"{published}: `git clone {u['repository']} && git checkout {u['source_commit']}`; "
+                f"npm lock git blob `{u['package_lock_git_blob'][:8]}`; rebuild: `{'` then `'.join(u['build']['commands'])}` "
+                f"(record packaging/ui-bundle-source.json; decision D-LIC-12 stays OPEN: which AGPL section 6 option to use)"
+                if u.get("source_commit_published") else
+                f"{published}: this commit exists only in a local clone, the public repository holds the base `{u['base_commit'][:8]}` only; "
+                f"npm lock git blob `{u['package_lock_git_blob'][:8]}`; rebuild: `{'` then `'.join(u['build']['commands'])}` "
+                f"(record packaging/ui-bundle-source.json; decisions pins-10, pins-04 and D-LIC-12 stay OPEN)"
+            )
             fp.append(md_row(["Projects UI bundle (agentic_os/projects_ui, minified JavaScript + CSS)", "see agentic-os", u["repository"],
                               "(none: local, unpublished commit)" if not u.get("source_commit_published") else "see record", "-", f"`{u['source_commit']}`",
-                              f"{published}: this commit exists only in a local clone, the public repository holds the base `{u['base_commit'][:8]}` only; "
-                              f"npm lock git blob `{u['package_lock_git_blob'][:8]}`; rebuild: `{'` then `'.join(u['build']['commands'])}` "
-                              f"(record packaging/ui-bundle-source.json; decisions pins-10, pins-04 and D-LIC-12 stay OPEN)"]))
+                              obtain]))
         else:
             fp.append(md_row(["Projects UI bundle (agentic_os/projects_ui, minified JavaScript + CSS)", "see agentic-os", "https://github.com/redevops-io/redevops-projects",
                               "NOT RECORDED", "-", "NOT RECORDED", "the bundle is vendored into agentic_os; the redevops-projects tag/commit and npm lock that produced it are not recorded in this repository (decision pins-10)"]))
