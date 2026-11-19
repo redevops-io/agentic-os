@@ -10,6 +10,15 @@ services:
     environment:
       - AGENTIC_OS_CONFIG=/app/config.yaml
       - AGENTIC_OS_HOME=/data
+      # What fronts this service, stated rather than assumed (docs/SECURITY_MODEL.md, "Route-policy
+      # enforcement does not wait for the profile"). Tracks the same AOS_BIND_ADDR that controls the actual
+      # published port above (line 9), so the declaration stays true as an operator changes it: the default
+      # 127.0.0.1 is unpublished and advisory-eligible; setting AOS_BIND_ADDR=0.0.0.0 publishes it and this
+      # value follows, forcing enforcement. `AGENTIC_OS_BEHIND_PROXY=0` records that nothing forwards to this
+      # container as shipped; put a reverse proxy in front of it and set FORWARDED_ALLOW_IPS=<proxy address>
+      # instead, so forwarded requests are read as forwarded and not as machine-local.
+      - AGENTIC_OS_BIND_HOST=${AOS_BIND_ADDR:-127.0.0.1}
+      - AGENTIC_OS_BEHIND_PROXY=0
       # The fleet routes (dispatch, up/down, approvals, jobs, fleet, status) answer 503 until one of these is set (both empty by default).
       - AGENTIC_OS_CONTROL_TOKEN=${AGENTIC_OS_CONTROL_TOKEN:-}
       - AGENTIC_OS_API_KEY=${AGENTIC_OS_API_KEY:-}

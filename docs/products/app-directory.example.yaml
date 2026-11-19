@@ -1,0 +1,24 @@
+# Application-directory entries ("Open app / Open record") for the Projects line that ships agentic_os/app_directory.py
+# (release/0.6.x, the desktop bundle). Set AGENTIC_OS_APP_DIRECTORY to a copy. Record links are PATH routes: the product
+# UIs serve /ui/<kind>/<id>. Not loaded by default.
+policy:
+  allowed_schemes: [https]
+  allow_loopback_http: true
+  allowed_hosts: ["localhost", "127.0.0.1"]
+apps:
+  - id: edge-sentinel
+    module: edge-sentinel
+    ui: public-to-user
+    auth: app-login
+    ui_url: http://127.0.0.1:8203/ui
+    records:
+      case:
+        label: Security case
+        template: /ui/cases/{case_id}
+        params: { case_id: '^case-[0-9a-f]{16}$' }
+        ref_pattern: '^case:(?P<case_id>case-[0-9a-f]{16})$'
+      action:
+        label: Proposed action
+        template: /ui/actions/{request_id}
+        params: { request_id: '^act-[0-9a-f]{16}$' }
+        ref_pattern: '^action:(?P<request_id>act-[0-9a-f]{16})$'

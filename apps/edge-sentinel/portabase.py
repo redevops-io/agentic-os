@@ -18,6 +18,8 @@ from pathlib import Path
 
 import httpx
 
+from . import fixture_mode     # demo-mode boundary: no external read, and no side effect at all
+
 # Idempotent .env load (mirrors core.py) so the module is self-sufficient when imported standalone.
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
 if _ENV_FILE.exists():
@@ -33,6 +35,8 @@ PORTABASE_FRONT_URL = os.environ.get("PORTABASE_FRONT_URL", PORTABASE_API_URL).r
 
 
 def _pb_get(path: str):
+    if fixture_mode.read_refusal("Portabase backup coverage"):     # demo mode reads nothing outside the process
+        return None
     if not PORTABASE_API_TOKEN:
         return None
     try:
@@ -120,7 +124,8 @@ def panel() -> str:
                      "<span style='color:#4fd1c5'>yes</span>" if d.get("encrypted") else "<span style='color:#ff6b6b'>no</span>",
                      "<span style='color:#4fd1c5'>offsite (S3)</span>" if off else ("<span style='color:#e0b000'>local only</span>" if d.get("destinations") else "<span style='color:#ff6b6b'>none</span>")])
     body = (_app._card(f"Database backups &nbsp; {_app._live_badge(snap['live'], 'set PORTABASE_API_TOKEN')}",
-                       _app._tbl(["Database", "Engine", "Last backup", "Status", "Size", "Encrypted", "Destination"], rows))
+                       _app._tbl(["Database", "Engine", "Last backup", "Status", "Size", "Encrypted", "Destination"], rows,
+                                 label="Portabase backup coverage: database, engine, last backup, status, size, encryption and destination"))
             + _app._card(f"Continuity posture &nbsp; {_app._live_badge(snap['live'], 'set PORTABASE_API_TOKEN')}",
                          "<p style='color:#9b99a1;font-size:13px;margin:0'>In real deployments every core's dump is encrypted and fanned out to an <b>S3-compatible offsite</b> destination (AWS S3 / MinIO), so a lost host is recoverable. "
                          "Ask the agent for <b>backup coverage</b> to list the gaps — databases with no backup, no offsite copy, or no encryption.</p>"))

@@ -1,0 +1,64 @@
+name: combined-install-e2e
+
+# The release gate for the combined install claim (deploy/combined). It runs the documented path verbatim:
+# bootstrap.sh -> smoke.sh -> teardown, on a clean Linux runner, against the published product images pinned
+# in the example .env and a Projects image built from this commit. If this is red, the combined-install
+# documentation must not be cited.
+on:
+  pull_request:
+    paths:
+      - deploy/combined/**
+      - deploy/standalone/edge-sentinel/**
+      - agentic_os/products/**
+      - agentic_os/projects_api.py
+      - Dockerfile.projects
+      - .github/workflows/combined-install-e2e.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/combined/**
+      - deploy/standalone/edge-sentinel/**
+      - agentic_os/products/**
+      - agentic_os/projects_api.py
+      - Dockerfile.projects
+  schedule:
+    - cron: '17 4 * * *'   # daily: the published images can move under us
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: combined-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  combined:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap the combined install (the documented command)
+        working-directory: deploy/combined
+        run: ./bootstrap.sh
+      - name: Smoke the running stack (the documented command)
+        working-directory: deploy/combined
+        run: ./smoke.sh
+      - name: On failure, keep the evidence
+        if: failure()
+        run: |
+          mkdir -p /tmp/evidence
+          docker ps -a                       > /tmp/evidence/docker-ps.txt 2>&1 || true
+          docker compose -p aos-combined logs --no-color > /tmp/evidence/combined.log 2>&1 || true
+          docker compose -p edge-sentinel logs --no-color > /tmp/evidence/sentinel.log 2>&1 || true
+          tail -c 200000 /tmp/evidence/*.log || true
+      - name: Upload the evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-install-evidence
+          path: /tmp/evidence/
+      - name: Teardown
+        if: always()
+        working-directory: deploy/combined
+        run: ./smoke.sh --teardown

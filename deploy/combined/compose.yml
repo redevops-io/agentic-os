@@ -1,0 +1,94 @@
+name: aos-combined
+# Projects + redevops-qa + Edge Sentinel on one Docker host, wired through the supported product registry
+# (AGENTIC_OS_PRODUCTS). This file adds the two consumers; the Sentinel + CrowdSec services are the published
+# standalone stack (../standalone/edge-sentinel/docker-compose.yml), brought up by bootstrap.sh with the same
+# project name, and joined here by network name — no copy of its service definitions.
+#
+#   ./bootstrap.sh     # one time: secrets, .env, the Sentinel stack, this stack, the actor link, a health pass
+#   docker compose up -d   # afterwards (the Sentinel stack must be up: ../standalone/edge-sentinel)
+#
+# Nothing is published beyond loopback. Ports and image pins live in .env.
+
+services:
+  projects:
+    image: ${PROJECTS_IMAGE:-rails-projects:combined}
+    build:
+      context: ../..
+      dockerfile: Dockerfile.projects
+    restart: unless-stopped
+    ports:
+      - "${PROJECTS_BIND:-127.0.0.1}:${PROJECTS_PORT:-8787}:8787"
+    environment:
+      # the supported activation: a registry file, mounted read-only; the app registers only what this file lists
+      - AGENTIC_OS_PRODUCTS=/etc/products/products.yaml
+      - PROJECTS_PROVIDER=registered
+      # what fronts this service (docs/SECURITY_MODEL.md, same declaration as deploy/projects-sidekick):
+      # the port is published, so the bind inside the container is routable and every peer address is
+      # enforced; BEHIND_PROXY=0 states that as shipped nothing forwards to it. The host-side publish stays
+      # loopback (PROJECTS_BIND), which limits who can connect — it does not soften the route posture.
+      - AGENTIC_OS_BIND_HOST=${AGENTIC_OS_BIND_HOST:-0.0.0.0}
+      - AGENTIC_OS_BEHIND_PROXY=${AGENTIC_OS_BEHIND_PROXY:-0}
+      # This hosted, multi-container install authenticates with OPERATOR_BASIC_AUTH (below), not the
+      # single-user desktop's one-time local-capability session - Dockerfile.projects' own documented
+      # opt-out case ("a deployment that sits behind its own control-plane token gating").
+      - AGENTIC_OS_LOCAL_CAPABILITY=off
+    # the browser credential this install asks for, read from a file at start (never pasted into a shell history)
+    command: ["sh", "-c", "OPERATOR_BASIC_AUTH=\"$$(cat /run/products/operator_basic)\" exec agentic-os-projects"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8787/').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    volumes:
+      - ./products.yaml:/etc/products/products.yaml:ro
+      - ./secrets/edge-sentinel.service_token:/run/products/edge-sentinel.service_token:ro
+      - ./secrets/redevops-qa.service_token:/run/products/redevops-qa.service_token:ro
+      - ./secrets/approval_secret:/run/products/approval_secret:ro
+      - ./secrets/operator_basic:/run/products/operator_basic:ro
+    depends_on: [redevops-qa]
+    networks: [sentinel]
+
+  redevops-qa:
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:?set QA_IMAGE_TAG in .env}"
+    # QA 0.6.3 publishes linux/amd64 lanes only and refuses aarch64 hosts with ARCHITECTURE_UNSUPPORTED —
+    # even one emulated by Docker. Pinning the platform is what makes the lanes available on Apple Silicon
+    # Docker Desktop (Rosetta/QEMU). This is emulated x86_64: slower, and NOT native-ARM64 evidence.
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - "${QA_BIND:-127.0.0.1}:${QA_PORT:-8080}:8080"
+    environment:
+      QA_SERVICE_TOKEN: "${QA_SERVICE_TOKEN:?bootstrap.sh generates this in .env}"
+      QA_SERVICE_RUN_TIMEOUT: "${QA_RUN_TIMEOUT:-1800}"
+      # the first admin of the QA interface, created once while no user exists (its published contract); remove from .env afterwards if you prefer
+      QA_SERVICE_BOOTSTRAP_ADMIN_PASSWORD: "${QA_BOOTSTRAP_ADMIN_PASSWORD:-}"
+      # the secret shared with Projects and Sentinel for signed approvals; empty = cross-product approvals are never accepted
+      QA_SERVICE_APPROVAL_SECRET: "${QA_APPROVAL_SECRET:?bootstrap.sh generates this in .env}"
+    volumes:
+      - qa-data:/data
+    healthcheck:
+      test: ["CMD", "redevops-qa-service", "healthcheck"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 15s
+    # the published standalone compose's hardening, unchanged: unprivileged, read-only root, two tmpfs scratch dirs
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,size=512m,mode=1777
+    shm_size: 512m
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2
+    networks: [sentinel]
+
+volumes:
+  qa-data:
+
+networks:
+  sentinel:
+    external: true
+    name: ${SENTINEL_NETWORK:-edge-sentinel_sentinel}
