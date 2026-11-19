@@ -6,6 +6,15 @@ inventory), RECORDED (stated in a named record, not re-run here), STATIC (read f
 S = `/private/tmp/claude-501/-Users-arybach-agentic-os/30e85532-95c8-480d-aadc-1f976c943ab3/scratchpad`.
 Licence wording used throughout: source-available (family licence: AGPL-3.0-or-later with the Commons Clause).
 
+**CORRECTION (2026-11-19), added without altering the facts above**: this remains a point-in-time snapshot of 2026-11-05 and
+is not updated to match current state. Specifically superseded since: `packaging/legal-allowed-signers` (section mentioning
+it, below) now carries a real signer key, not empty; all 21 `packaging/distribution-gate.json` decisions are DECIDED with
+valid signatures, not open; and real Azure Trusted Signing of the Windows R0-prime installers has run repeatedly and
+successfully via `.github/workflows/windows-signing-r0prime.yml` (`--real`, not a rehearsal mode) - so lines below stating
+`--real`/application signatures as "not authorized" no longer reflect current state for Windows. The macOS signing lines
+remain accurate as of this correction (no real macOS signing credentials exist yet). See `docs/release/MICROSOFT_STORE.md`
+for the current, maintained status of Windows/Store readiness.
+
 Two provenance lines exist and are kept in two separate sections. Section 1A (desktop freeze) and section 1B (agentic-os-stack integration) never share SHAs.
 
 ## 1A. Provenance line A: the RC3 desktop freeze (repo `/Users/arybach/agentic-os`)
