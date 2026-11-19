@@ -114,10 +114,13 @@ jobs:
       - name: "Smoke test the pushed digest (amd64): unauthenticated UI shell at /, /api refuses anonymously"
         run: |
           IMG="ghcr.io/redevops-io/${NAME}@${{ steps.build.outputs.digest }}"
-          docker run -d --name smoke -p 127.0.0.1:18787:8787 --read-only --tmpfs /tmp --tmpfs /home/app "$IMG"
-          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18787/ >/dev/null && break; sleep 2; done
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18787/)" = 200 ]
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18787/api/projects)" = 401 ]
+          # Same host and container port (8787, not remapped): the app checks the incoming Host header against
+          # an allowlist keyed on its own configured port, so a remapped host port (e.g. 18787) is refused as
+          # invalid_host even though the image itself is fine - confirmed by reproducing this exact run locally.
+          docker run -d --name smoke -p 127.0.0.1:8787:8787 --read-only --tmpfs /tmp --tmpfs /home/app "$IMG"
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8787/ >/dev/null && break; sleep 2; done
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/)" = 200 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/projects)" = 401 ]
           docker rm -f smoke >/dev/null
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
