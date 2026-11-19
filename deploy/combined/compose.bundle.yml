@@ -118,6 +118,10 @@ services:
       PROJECTS_PROVIDER: registered
       AGENTIC_OS_BIND_HOST: "${AGENTIC_OS_BIND_HOST:-0.0.0.0}"
       AGENTIC_OS_BEHIND_PROXY: "${AGENTIC_OS_BEHIND_PROXY:-0}"
+      # This hosted, multi-container install authenticates with OPERATOR_BASIC_AUTH (above), not the
+      # single-user desktop's one-time local-capability session - Dockerfile.projects' own documented
+      # opt-out case ("a deployment that sits behind its own control-plane token gating").
+      AGENTIC_OS_LOCAL_CAPABILITY: "off"
       # read by products.yaml's auth.*_env entries below — the registry never carries a secret VALUE, only
       # these variable NAMES, so the names below must match the service_token_env/approval_secret_env strings
       # baked into the products_yaml config just below.

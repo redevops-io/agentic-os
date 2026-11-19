@@ -28,6 +28,10 @@ services:
       # loopback (PROJECTS_BIND), which limits who can connect — it does not soften the route posture.
       - AGENTIC_OS_BIND_HOST=${AGENTIC_OS_BIND_HOST:-0.0.0.0}
       - AGENTIC_OS_BEHIND_PROXY=${AGENTIC_OS_BEHIND_PROXY:-0}
+      # This hosted, multi-container install authenticates with OPERATOR_BASIC_AUTH (below), not the
+      # single-user desktop's one-time local-capability session - Dockerfile.projects' own documented
+      # opt-out case ("a deployment that sits behind its own control-plane token gating").
+      - AGENTIC_OS_LOCAL_CAPABILITY=off
     # the browser credential this install asks for, read from a file at start (never pasted into a shell history)
     command: ["sh", "-c", "OPERATOR_BASIC_AUTH=\"$$(cat /run/products/operator_basic)\" exec agentic-os-projects"]
     healthcheck:
