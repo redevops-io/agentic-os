@@ -8,6 +8,12 @@ recalled facts that were not verified in this work. Developer ID and notarizatio
 Licence wording: source-available (family licence: AGPL-3.0-or-later with the Commons Clause). 21 decisions in
 `packaging/distribution-gate.json` are OPEN (18 block distribution); they apply to EVERY row below and are not repeated per row.
 
+**Update 2026-11-19**: all 21 decisions in `packaging/distribution-gate.json` are now `DECIDED` with valid signatures (verified
+directly, `packaging/check-distribution-gate.py --distribution --about-slots`), and real Authenticode signing of the Windows
+installers has since run for real (`windows-signing-r0prime.yml`) — see `docs/release/MICROSOFT_STORE.md`'s own 2026-11-19
+update and `docs/release/DISTRIBUTION_MATRIX.md` for the current, non-aspirational state. The row-by-row architecture/conflict
+analysis below is otherwise unchanged from 2026-11-05.
+
 ## 1. Facts about our app that drive every row
 
 * Two executables: a Tauri launcher (control-panel window, 560x640) and a frozen Python sidecar (PyInstaller onefile).
