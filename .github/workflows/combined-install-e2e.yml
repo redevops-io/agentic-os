@@ -75,6 +75,15 @@ jobs:
       - name: Bootstrap the standalone Edge Sentinel install (the documented command, no other product present)
         working-directory: deploy/standalone/edge-sentinel
         run: ./bootstrap.sh
+      - name: Wait for Edge Sentinel's own readiness (bootstrap.sh only waits for CrowdSec's)
+        working-directory: deploy/standalone/edge-sentinel
+        run: |
+          PORT="$(sed -n 's/^EDGE_SENTINEL_PORT=//p' .env 2>/dev/null | tail -1)"; PORT="${PORT:-8203}"
+          for i in $(seq 1 30); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/health")" = 200 ] && exit 0
+            sleep 2
+          done
+          echo "Edge Sentinel did not answer /health in time"; docker compose logs --no-color edge-sentinel | tail -100; exit 1
       - name: Smoke the running stack (alert -> case -> approve -> execute -> receipt -> restart-persists)
         working-directory: deploy/standalone/edge-sentinel
         run: ./smoke.sh
