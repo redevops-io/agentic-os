@@ -44,19 +44,6 @@ jobs:
       - name: Smoke the running stack (the documented command)
         working-directory: deploy/combined
         run: ./smoke.sh
-      - name: TEMP DEBUG - uncensored products.yaml load diagnostic
-        if: failure()
-        working-directory: deploy/combined
-        run: |
-          echo "--- docker images ---"
-          docker images
-          echo "--- uncensored load_registry ---"
-          docker run --rm -v "$PWD/products.yaml:/p.yaml:ro" rails-projects:combined \
-            python3 -c 'from agentic_os.products.registry import load_registry as l; r=l("/p.yaml"); print("errors:", r.errors); print("products:", [p.id for p in r.products])' || true
-          echo "--- pip show / import check ---"
-          docker run --rm rails-projects:combined python3 -c "import agentic_os.products, yaml; print(agentic_os.products.__file__); print('yaml', yaml.__version__)" || true
-          echo "--- ls inside image ---"
-          docker run --rm rails-projects:combined ls -la /app/agentic_os/products/ || true
       - name: On failure, keep the evidence
         if: failure()
         run: |

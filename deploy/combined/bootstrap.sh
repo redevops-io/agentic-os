@@ -70,8 +70,12 @@ chmod 0444 "$SD"/secrets/* secrets/* 2>/dev/null || true
 ok "shared credentials staged (approval secret identical in Projects, QA and Sentinel)"
 
 # 3. the registry: the supported activation of the product layer. Copy once, then validate it INSIDE the projects
-#    image — an operator must not learn about a bad registry from a degraded UI.
+#    image — an operator must not learn about a bad registry from a degraded UI. Same reasoning as the secrets
+#    chmod above: umask 077 (set at the top of this script) makes the copy mode 0600, unreadable by the
+#    projects container's unprivileged uid (bind-mounted, not copied into the image) on a real Linux host
+#    (observed 2026-11-18: masked on macOS, where Docker Desktop's virtiofs doesn't enforce this).
 [ -f products.yaml ] || cp products.yaml.example products.yaml
+chmod 0444 products.yaml
 PIMG="$(get PROJECTS_IMAGE)"; PIMG="${PIMG:-rails-projects:combined}"
 echo "== building the projects image ($PIMG)"
 docker compose build projects >/dev/null || bad "the projects image failed to build"
