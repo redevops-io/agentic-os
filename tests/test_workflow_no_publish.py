@@ -74,6 +74,7 @@ OIDC_SIGNING_WORKFLOWS = {"windows-signing-r0prime.yml": "Azure Trusted Signing 
 PUBLISH_ALLOWED_WORKFLOWS = {
     "oci-edge-sentinel.yml": "signed GHCR publish of the Edge Sentinel standalone image",
     "oci-redevops-ts-bundle.yml": "signed GHCR publish of the combined bundle (Projects+Sidekick, redevops-qa, Edge Sentinel) OCI artifact",
+    "oci-redevops-projects.yml": "signed GHCR publish of the Projects UI standalone image (redevops-projects), gated on the UI source actually being published",
     "release-publish.yml": "GitHub Release of the signed R0-prime Windows installers, gated on the distribution gate passing",
 }
 
