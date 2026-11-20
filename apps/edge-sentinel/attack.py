@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .authorization import Authorization, AuthorizationContext, NO_AUTHORIZATION
+from .authorization import DENY_NO_ENTRY, Authorization, AuthorizationContext, NO_AUTHORIZATION
 from .stix import Provenance, StixObject
 
 # Pinned identity so a case records which ATT&CK version its mapping came from (acceptance: version identity).
@@ -180,10 +180,13 @@ _KINDS = KINDS                                # internal alias; KINDS is the pub
 
 @dataclass(frozen=True)
 class ScenarioMatch:
-    """One technique the name suggests, plus the authorization that stands it down (None = none applies)."""
+    """One technique the name suggests, plus the authorization that stands it down (None = none applies).
+    `denial` is why a declared authorization did NOT apply (`authorization.DENY_*`) — empty when none was
+    declared at all."""
     technique_id: str
     token: str
     authorization: Authorization | None = None
+    denial: str = ""
 
     @property
     def suppressed(self) -> bool:
@@ -236,6 +239,21 @@ class ScenarioVerdict:
                                 match.authorization.record())
         return tuple(seen.values())
 
+    @property
+    def denials(self) -> tuple[dict, ...]:
+        """Declared authorizations that did not apply, and why. An operator who tightens an allowlist and
+        sees nothing at all happen concludes the rule is broken and loosens it; this is the difference
+        between "your grant expired on the 31st" and a silent stand-down that never came."""
+        seen: dict[tuple[str, str], dict] = {}
+        for match in self.matches:
+            # `no_entry` is excluded: that is "nothing was ever declared about this token", which is the
+            # normal state of every detection and not a denial an operator has to read past to find the
+            # one grant that stopped applying.
+            if match.denial and match.denial != DENY_NO_ENTRY:
+                seen.setdefault((match.token, match.denial),
+                                {"token": match.token, "reason": match.denial})
+        return tuple(seen.values())
+
     def to_dict(self) -> dict:
         return {"scenario": self.scenario, "kind": self.kind, "advisory": self.advisory,
                 "techniques": [{"technique_id": m.technique_id, "basis": m.token,
@@ -243,22 +261,35 @@ class ScenarioVerdict:
                                 "authorized_by": m.authorization.record() if m.authorization else None}
                                for m in self.matches],
                 "claimable_techniques": list(self.tags),
+                "denials": [dict(d) for d in self.denials],
                 "attack_version": ATTACK_VERSION}
 
 
 def adjudicate_scenario(scenario: str, *, kind: str = KIND_OBSERVATION,
-                        authorization: AuthorizationContext | None = None) -> ScenarioVerdict:
+                        authorization: AuthorizationContext | None = None,
+                        source_ip: str | None = None, now=None) -> ScenarioVerdict:
     """Deterministic scenario → verdict. Same table as `map_scenario_to_techniques`; two things added, and
     neither of them reads the scanned string for permission slips:
 
     * `kind` — is this an observation, or a label about one? Labels are advisory.
     * `authorization` — the operator's declarations, passed IN. An empty context (the default) authorizes
       nothing, so an unconfigured deployment keeps every detection it has always made.
+
+    `source_ip` is where the two kinds part company. For an OBSERVATION — something that happened, at an
+    address — an authorization only stands it down if the address falls inside the authorized scope, and
+    not knowing the address is a reason NOT to stand down. `kind=observation` therefore implies
+    `require_scope`: without it, one inventory entry for `nmap-allowlist-internal` would stand down that
+    scenario for every source on earth, which is a larger hole than the false positives the mechanism
+    removes. A LABEL has no source address — a hub feed name is a document — so scope cannot apply to it
+    and is not demanded of it.
     """
     if kind not in _KINDS:
         raise ValueError(f"unknown scenario kind {kind!r}: expected one of {_KINDS}")
     ctx = authorization if authorization is not None else NO_AUTHORIZATION
-    return ScenarioVerdict(
-        scenario=scenario, kind=kind,
-        matches=tuple(ScenarioMatch(technique_id, token, ctx.cover(observable=scenario, token=token))
-                      for technique_id, token in map_scenario_to_techniques(scenario)))
+    require_scope = kind == KIND_OBSERVATION
+    matches = []
+    for technique_id, token in map_scenario_to_techniques(scenario):
+        auth, denial = ctx.check(observable=scenario, token=token, source_ip=source_ip,
+                                 require_scope=require_scope, now=now)
+        matches.append(ScenarioMatch(technique_id, token, auth, denial if auth is None else ""))
+    return ScenarioVerdict(scenario=scenario, kind=kind, matches=tuple(matches))

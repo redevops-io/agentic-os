@@ -17,6 +17,7 @@
     { "name": "EDGE_SENTINEL_DEMO", "owner": "edge-sentinel", "default": "", "purpose": "Opt-in fixture core (P4): reads come from synthetic RFC 5737 data, and no external side effect is performed - block_ip/unblock_ip/cscli refuse at core and NetBird, Portabase, deploy-scan, Wazuh, ClamAV and the model are held back too, so demo mode reads no external service and changes none. /health reports the scope as demo.scopes. Grants no exposure and no exemption from the bind, exposure and credential rules." },
     { "name": "EDGE_SENTINEL_DEMO_SCENARIO", "owner": "edge-sentinel", "default": "mixed", "purpose": "Which fixture story to serve: mixed, or unavailable so LAPI reads fail and KPIs report 'not read'; an unknown value falls back to mixed." },
     { "name": "SENTINEL_PROTECTED_IPS", "owner": "edge-sentinel", "default": "", "purpose": "Addresses/CIDRs that are never banned." },
+    { "name": "SENTINEL_AUTHORIZATIONS_FILE", "owner": "edge-sentinel", "default": "", "purpose": "Path to the operator's authorization file (authorization.load_authorization): the only input allowed to stand a scenario match down. Unset, unreadable or invalid yields an empty context, so nothing is authorized and every detection stands; /api/v1/info reports the status and reason. An entry needs an accountable principal, a sourced source and, to cover a live alert, a source_scope containing the alert's source address." },
     { "name": "SENTINEL_HOST_IPS", "owner": "edge-sentinel", "default": "", "purpose": "This host's own addresses, treated as protected." },
     { "name": "SENTINEL_BLOCK_ALLOW_NETWORKS", "owner": "edge-sentinel", "default": "", "purpose": "CIDRs inside which private/reserved space may be banned; loopback, link-local, multicast and unspecified are never bannable." },
     { "name": "SENTINEL_BLOCK_ALLOW_WIDE_CIDR", "owner": "edge-sentinel", "default": "off", "purpose": "Allow ranges wider than /24 (IPv4) or /64 (IPv6)." },
@@ -49,5 +50,23 @@
     "fail_closed": "no endpoint, a host the kernel will not treat as in-boundary, a refused route or a transport error all return None and the deterministic summary stands",
     "content_sent": "a one-sentence instruction plus up to six active decision values with their scenario and severity",
     "absent": ["ANTHROPIC_API_KEY", "anthropic", "claude"]
+  },
+  "authorization_contract": {
+    "doc": "The shape SENTINEL_AUTHORIZATIONS_FILE must have, and what the loader does when it does not. Checked by apps/edge-sentinel/test_authorization_enforcement.py, so a README claim and the loader cannot drift apart.",
+    "entry_point": "load_authorization in apps/edge-sentinel/authorization.py",
+    "readers": ["incident.ingest_crowdsec_alert (via live.sync_cases)", "cti.seed_ioc", "api_v1 GET /api/v1/info (health counts only)"],
+    "never_read_from": "the scanned string or the alert payload: an event cannot bring its own permission slip, and a scenario named nmap-allowlist-internal is the attack, not the exception",
+    "top_level_fields": ["version", "authorizations"],
+    "version": 1,
+    "entry_fields": ["observable", "token", "principal", "source", "note", "expires_at", "source_scope"],
+    "required_per_entry": ["observable", "token", "principal", "source"],
+    "source_prefixes": ["manual:", "observed:", "imported:"],
+    "identity": "exact match on normalised (observable, token) - no substring, no fuzzy match, no wildcards",
+    "source_scope": "addresses the activity is authorized from; an observation is only stood down when its source is inside. A scope covering every address is refused. kind=label inputs have no source address and are exempt",
+    "expires_at": "an ISO-8601 instant; a bare date is 00:00:00Z of the date named; unparseable is an error, never a permanent grant",
+    "unknown_keys": "rejected - a lenient read turns expire_at for expires_at into a grant that never expires",
+    "fail_closed": "missing, unreadable, invalid JSON, wrong version, unknown key or unusable entry all yield an empty context: nothing is suppressed, every detection stands",
+    "failure_visibility": "/api/v1/info authorization.status is unconfigured|unreadable|invalid with authorization.detail, plus expired and without_source_scope counts, so a grant that can never apply is not mistaken for a rule that stopped working",
+    "not_exposed": "the observables and principals themselves - which sanctioned activity is allowlisted is a map of what may be sent without being stood down"
   }
 }

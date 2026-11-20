@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from . import auth, core, fixture_mode, history_store, identity, ipguard, live, ratelimit
+from . import auth, authorization as _authorization, core, fixture_mode, history_store, identity, ipguard, live, ratelimit
 from .evidence import canonical_json
 from .identity import IdentityError, Principal
 from .incident import stable_alert
@@ -219,6 +219,10 @@ def info(request: Request, p: Principal = Depends(viewer)):
                      "require_two_person": live.two_person_required()},
             "core": {"name": "crowdsec", "connected": bool(activity.get("connected")), "watcher": core.watcher_configured()},
             "store": hs.health(),
+            # What the deployment's authorization configuration currently contributes. Counts and failure
+            # reasons only: which sanctioned activity has been allowlisted is a map of what an attacker
+            # could send without being stood down, and a read role is not the audience for that.
+            "authorization": _authorization.authorization_config().health(),
             "features": {"cases": True, "actions": True, "events": True, "hunt": True, "attack": True, "ioc": True, "detections": True,
                          "agent_events": True, "soc2": True, "users": True},
             "unavailable": unavailable,

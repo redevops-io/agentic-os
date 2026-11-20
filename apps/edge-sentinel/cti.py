@@ -14,7 +14,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from .attack import attack_pattern, map_scenario_to_techniques
+from .attack import KIND_OBSERVATION, adjudicate_scenario, attack_pattern
+from .authorization import AuthorizationContext, deployment_authorization
 from .stix import Provenance, Relationship, StixObject, normalize_ioc
 
 
@@ -88,19 +89,38 @@ def ingest_bundle(graph: CtiGraph, bundle: dict, *, source: str) -> int:
 # ──────────────────────────── the acceptance path ────────────────────────────
 
 def seed_ioc(graph: CtiGraph, value: str, *, scenario: str = "", source: str = "analyst",
-             evidence_refs: tuple[str, ...] = ()) -> StixObject:
+             evidence_refs: tuple[str, ...] = (), authorization: AuthorizationContext | None = None,
+             source_ip: str | None = None, now=None) -> StixObject:
     """Seed an IOC into the graph: normalize → add SCO + Indicator (+ an 'indicator-observes' edge), and,
     if a scenario is supplied, map ATT&CK techniques and add 'indicates' edges. Returns the Indicator.
-    Every edge is provenanced with the supplied evidence_refs."""
+    Every edge is provenanced with the supplied evidence_refs.
+
+    The technique edges are the claim this function makes, so they go through the same adjudication an
+    alert does — an `indicates` edge on a graph is a statement that this observable participates in that
+    technique, and a sanctioned scanner's port sweep must not put T1046 on a graph. The SCO and the
+    Indicator are still created: standing a claim down is not deleting the observable, and a graph that
+    quietly lacks the node is indistinguishable from one that never saw it.
+
+    `source_ip` defaults to the seeded value when the value IS an address, which is the case that matters:
+    the IOC and the source of the activity are the same thing. Any other observable type has no source, so
+    nothing can be scoped and no authorization applies."""
     sco, indicator = normalize_ioc(value, source=source, evidence_refs=evidence_refs)
     graph.add_object(sco)
     graph.add_object(indicator)
     prov = Provenance(source=source, method="ioc-seed", evidence_refs=tuple(evidence_refs))
     graph.relate("based-on", indicator.id, sco.id, prov, confidence=90)
-    for technique_id, token in map_scenario_to_techniques(scenario):
-        ap = graph.add_object(attack_pattern(technique_id, evidence_refs=evidence_refs))
+    if source_ip is None and sco.type in ("ipv4-addr", "ipv6-addr"):
+        source_ip = sco.key
+    verdict = adjudicate_scenario(
+        scenario, kind=KIND_OBSERVATION,
+        authorization=authorization if authorization is not None else deployment_authorization(),
+        source_ip=source_ip, now=now)
+    for match in verdict.matches:
+        if match.suppressed:
+            continue                       # the technique is not claimed; the observable above still is
+        ap = graph.add_object(attack_pattern(match.technique_id, evidence_refs=evidence_refs))
         graph.relate("indicates", indicator.id, ap.id,
-                     Provenance(source=source, method=f"attack-map:{token}", evidence_refs=tuple(evidence_refs)),
+                     Provenance(source=source, method=f"attack-map:{match.token}", evidence_refs=tuple(evidence_refs)),
                      confidence=70)
     return indicator
 
