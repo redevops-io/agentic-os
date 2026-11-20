@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .attack import map_scenario_to_techniques
+from .evidence import canonical_json, sha256_hex
 
 
 # ──────────────────────────── evaluation (first) ────────────────────────────
@@ -121,6 +122,382 @@ def evaluate_attack_mapping(corpus=ATTACK_CORPUS) -> Metrics:
 #: entries are explicit table rows and the `acme/*` entries exercise the token fallback.
 #: Recompute deliberately when the mapper changes.
 ATTACK_BASELINE = {"n": 48, "precision": 1.0, "recall": 1.0, "accuracy": 1.0, "abstention_rate": 0.083}
+
+
+# ────────── negative controls + false-positive regression (dev-time measurement) ──────────
+
+#: Bump deliberately, in the same commit as any corpus change. A metric without a corpus version is not
+#: comparable across runs: without it, "recall improved" and "someone deleted the hard cases" look the
+#: same in the artifact. (PyRIT or any other generator may PRODUCE cases, offline; the corpus and the
+#: gates below stay stdlib-only — the detector under test must not inherit a red-team framework's
+#: dependency tree, and a generated case is worth exactly its recorded provenance.)
+CORPUS_VERSION = "1"
+
+#: Allowed provenance prefixes for a control. `manual:` = a human wrote it and says why; `observed:` = a
+#: trace from a real case/ticket/seed; `generated:` = produced offline by a named tool + version.
+_PROVENANCE_PREFIXES = ("manual:", "observed:", "generated:")
+
+
+@dataclass(frozen=True)
+class NegativeControl:
+    """Something the system must NOT flag: benign behaviour shaped like something malicious.
+
+    Positive cases only prove the detector fires; a detector that fires on everything scores 100% recall
+    and is worth nothing. `source` is provenance and is load-bearing: :func:`assert_quality_gates`
+    refuses to let an unsourced case count toward a green gate, because a control nobody can trace is a
+    control someone will delete the first time it fails.
+    """
+    input: str
+    why_benign: str
+    source: str
+    split: str = "test"
+
+
+# Benign scenario names chosen to be NEAR misses against the token fallback — each one contains a token
+# the mapper keys on, in a name whose meaning is the opposite of an attack. Written from the mapper's
+# token table, not from what it currently returns (otherwise this file would be a screenshot of the code).
+NEGATIVE_CONTROLS: tuple[NegativeControl, ...] = (
+    NegativeControl("crowdsecurity/internal-vulnscanner-allowed",
+                    "sanctioned internal vulnerability scanner on an allowlist", "manual:near-miss-token-scan"),
+    NegativeControl("crowdsecurity/backup-agent-port-scan-benign",
+                    "backup appliance enumerating its own targets; 'port-scan' is in the name",
+                    "manual:near-miss-token-port-scan"),
+    NegativeControl("crowdsecurity/nmap-allowlist-internal",
+                    "explicit allowlist entry naming the scanner it permits", "manual:near-miss-token-nmap"),
+    NegativeControl("crowdsecurity/ssh-bf-allowlist-bastion",
+                    "allowlist for the bastion that legitimately retries keys; contains 'ssh-bf'",
+                    "manual:near-miss-token-ssh-bf"),
+    NegativeControl("crowdsecurity/modsec2-rule-updates",
+                    "WAF ruleset feed traffic; 'c2' appears inside 'modsec2'", "manual:near-miss-substring-c2"),
+    NegativeControl("crowdsecurity/source-view-access-log",
+                    "read-only source browser; 'rce' appears inside 'source'", "manual:near-miss-substring-rce"),
+    NegativeControl("crowdsecurity/http-do-not-crawl-policy",
+                    "policy enforcement telemetry; contains 'crawl'", "manual:near-miss-token-crawl"),
+    NegativeControl("crowdsecurity/passcvemgr-service",
+                    "password CVE-reporting daemon name; not an exploit attempt", "manual:near-miss-adjacent-cve"),
+    NegativeControl("crowdsecurity/postfix-spam",
+                    "no honest ATT&CK analogue — the mapper must abstain, not guess",
+                    "observed:evaluation.ATTACK_CORPUS abstention case"),
+)
+
+#: Benign RUNTIME PAYLOADS for the prompt-injection marker scan (the AI-security half). Same near-miss
+#: rule: each carries a marker word in its ordinary, non-hostile meaning.
+INJECTION_NEGATIVE_CONTROLS: tuple[NegativeControl, ...] = (
+    NegativeControl('{"cache_bypass": true}', "config key for a cache-bypass toggle",
+                    "manual:over-broad-marker-bypass"),
+    NegativeControl('{"summary": "vendor patched a memory leak in the driver"}',
+                    "release-note text about a resource leak", "manual:over-broad-marker-leak"),
+    NegativeControl('{"note": "use a class override in the theme"}',
+                    "front-end development note", "manual:over-broad-marker-override"),
+    NegativeControl('{"feature": "developer mode toggle for QA"}',
+                    "an app's own QA affordance, not a jailbreak", "manual:over-broad-marker-developer-mode"),
+    NegativeControl('{"text": "the layout disregards the aspect ratio"}',
+                    "ordinary English use of 'disregard'", "manual:over-broad-marker-disregard"),
+    NegativeControl('{"route": "/api/v1/health", "method": "GET"}',
+                    "an ordinary tool call with none of the markers", "manual:clean-baseline"),
+)
+
+
+def _scenario_tags(name: str) -> tuple[str, ...]:
+    return tuple(t for t, _token in map_scenario_to_techniques(name))
+
+
+def _scenario_basis(name: str) -> tuple[str, ...]:
+    """The matched TOKENS behind a mapping — the actionable half of a false positive. `T1595` is what was
+    claimed; `scan` is the rule to go and tighten."""
+    return tuple(token for _t, token in map_scenario_to_techniques(name))
+
+
+def _marker_tags(payload_json: str) -> tuple[str, ...]:
+    """Which injection markers fire on a JSON payload string. Kept as tags so a false positive names the
+    responsible marker — 'this control was flagged' is not actionable, 'marker `leak` flagged it' is."""
+    # Same compiled patterns the detector itself uses — this function must never re-implement the match,
+    # or the FP measurement would be measuring a copy of the detector instead of the detector.
+    from .ai_security import _INJECTION_MARKERS, _INJECTION_RES   # local import: keeps the graph flat
+    low = payload_json.lower()
+    return tuple(m for m, rx in zip(_INJECTION_MARKERS, _INJECTION_RES) if rx.search(low))
+
+
+#: Recorded false positives, as `control input -> token/marker responsible`. A LEDGER, not an approval
+#: list: a false positive that is not named here FAILS the gate, and a ledger entry that no longer fires
+#: fails too (a stale ledger hides a detector that got sharper than its paperwork). Each entry names the
+#: responsible token, because "known false positive" without a token is not a thing anyone can go fix.
+#:
+#: Why these are carried instead of silenced: every one is an ordinary-English use of a real injection
+#: verb. Removing the verb to silence them would drop recall on genuine jailbreak phrasings, and the
+#: finding they produce is a 0.7-confidence human-reviewed finding, not an auto-mitigation. The ledger is
+#: the honest middle: the number is measured, the token is named, the cost is visible.
+FP_LEDGER: dict[str, str] = {
+    '{"summary": "vendor patched a memory leak in the driver"}': "leak",
+    '{"note": "use a class override in the theme"}': "override",
+    '{"feature": "developer mode toggle for QA"}': "developer mode",
+    "crowdsecurity/backup-agent-port-scan-benign": "port-scan",
+    "crowdsecurity/nmap-allowlist-internal": "nmap",
+    "crowdsecurity/ssh-bf-allowlist-bastion": "ssh-bf",
+    "crowdsecurity/http-do-not-crawl-policy": "crawl",
+}
+
+#: The ledger is a RATCHET THAT ONLY TURNS ONE WAY. Every entry in it is a detection that fires on benign
+#: input, so an improvement is measured by the ledger getting shorter — and a new acknowledged false
+#: positive must be a visible line in the diff (bumping this constant), never the quiet cost of a rule that
+#: got broader. Fixing one of these means deleting its entry AND lowering this number in the same change;
+#: CI then proves the shrink instead of taking it on trust. It is a ceiling, not a target: the target is 0.
+FP_LEDGER_CEILING = 7
+
+
+def corpus_digest() -> str:
+    """Content hash of the measured corpus (positives + controls + version). The artifact carries it so a
+    changed number can be traced to a changed corpus instead of argued about."""
+    payload = {
+        "corpus_version": CORPUS_VERSION,
+        "positives": [[e.input, list(e.expected), e.rationale] for e in ATTACK_CORPUS],
+        "controls": [[c.input, c.why_benign, c.source] for c in NEGATIVE_CONTROLS],
+        "injection_controls": [[c.input, c.why_benign, c.source] for c in INJECTION_NEGATIVE_CONTROLS],
+        # The ledger is part of the claim: "0 unaccounted" means nothing without saying what was accounted.
+        "fp_ledger": dict(sorted(FP_LEDGER.items())),
+    }
+    return sha256_hex(canonical_json(payload))
+
+
+def evaluate_negative_controls(controls=None, detector=_scenario_tags, basis_of=None) -> dict:
+    """Flag-rate over negative controls. `detector(input) -> tags` — anything that returns a non-empty
+    result on a benign control is a false positive, and the record names both the tags it produced and the
+    tokens responsible (`basis_of`; the tags are their own basis when none is given)."""
+    # Resolved at call time, not bound as a default: a default captures the list as it was at import, so a
+    # test that patches NEGATIVE_CONTROLS to add a hard case would measure the OLD corpus and pass anyway.
+    controls = NEGATIVE_CONTROLS if controls is None else controls
+    cases = []
+    for c in controls:
+        tags = tuple(detector(c.input))
+        basis = tuple(basis_of(c.input)) if basis_of else tags
+        if tags:
+            cases.append({"input": c.input, "fired": list(tags), "source": c.source,
+                          "why_benign": c.why_benign, "basis": list(basis or tags)})
+    n = len(controls)
+    return {"n": n, "false_positives": len(cases),
+            "fp_rate": round(len(cases) / n, 3) if n else 0.0, "cases": cases}
+
+
+class QualityGateError(Exception):
+    """Raised when a measurement would be promoted without meeting its gates."""
+
+
+def _provenance_failures(controls) -> list[str]:
+    bad = []
+    for c in controls:
+        if not c.source.startswith(_PROVENANCE_PREFIXES):
+            bad.append(f"control {c.input!r} has no traceable provenance (source={c.source!r})")
+        if not c.why_benign.strip():
+            bad.append(f"control {c.input!r} does not say why it is benign")
+    return bad
+
+
+def _ledger_check(block: dict, ledger: dict, controls) -> tuple[list[str], int]:
+    """Split one lane's false positives into ledger-covered and unaccounted, and catch that lane's stale
+    entries. `controls` is the lane's OWN control list: checking a lane against the whole ledger would
+    report every other lane's entry as stale."""
+    failures, unaccounted = [], 0
+    for case in block["cases"]:
+        if ledger.get(case["input"]) not in case["basis"]:
+            unaccounted += 1
+            failures.append(
+                f"unaccounted false positive on benign control {case['input']!r} "
+                f"(fired: {case['fired']}, responsible tokens: {case['basis']}); name the token in "
+                f"FP_LEDGER or fix the rule")
+    firing = {case["input"] for case in block["cases"]}
+    for control in controls:
+        if control.input in ledger and control.input not in firing:
+            failures.append(f"stale FP_LEDGER entry for {control.input!r}: it no longer fires — "
+                            f"remove it, the detector got sharper than the paperwork")
+    return failures, unaccounted
+
+
+def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
+                   max_unaccounted_fp: int = 0, fp_ledger: dict | None = None) -> dict:
+    """The gate a detector change has to pass before its numbers mean anything — as data, without raising.
+
+    Split from `assert_quality_gates` on purpose: CI has to publish the artifact on a RED build, and a
+    gate that only exists as an exception cannot be reported. Checks, in order of how they get missed:
+    (1) a control without traceable provenance, (2) any movement in the frozen ATT&CK mapping baseline,
+    (3) a false positive FP_LEDGER does not name, (4) a ledger entry that no longer fires, (5) an
+    FP_LEDGER key that matches no control (renamed control = silently un-accounted), (6) more unaccounted
+    false positives than `max_unaccounted_fp`. A known false positive is allowed only as a named token
+    with a reason; an unaccounted one is a broken measurement, not a pass with a note.
+
+    A seventh check is a ratchet rather than a correctness test: the ledger may not grow past
+    `FP_LEDGER_CEILING`. It is here because the honest-looking failure mode of this whole apparatus is a
+    PR that broadens a rule, adds a ledger line for the fallout, and reports gate PASS.
+    """
+    ledger = FP_LEDGER if fp_ledger is None else fp_ledger
+    failures: list[str] = []
+
+    controls = list(NEGATIVE_CONTROLS) + list(INJECTION_NEGATIVE_CONTROLS)
+    failures += _provenance_failures(controls)
+    known = {c.input for c in controls}
+    failures += [f"FP_LEDGER key matches no control: {k!r} — a renamed or mistyped control silently "
+                 f"stops being accounted for" for k in ledger if k not in known]
+
+    mapping = evaluate_attack_mapping().to_dict()
+    if mapping != mapping_baseline:
+        failures.append(f"ATT&CK mapping moved off the frozen baseline: {mapping} != {mapping_baseline}")
+
+    scenario_fp = evaluate_negative_controls(basis_of=_scenario_basis)
+    injection_fp = evaluate_negative_controls(INJECTION_NEGATIVE_CONTROLS, _marker_tags)
+    for block, lane_controls in ((scenario_fp, NEGATIVE_CONTROLS),
+                                 (injection_fp, INJECTION_NEGATIVE_CONTROLS)):
+        block_failures, block_unaccounted = _ledger_check(block, ledger, lane_controls)
+        failures += block_failures
+        block["unaccounted"] = block_unaccounted
+
+    total_n = scenario_fp["n"] + injection_fp["n"]
+    total_fp = scenario_fp["false_positives"] + injection_fp["false_positives"]
+    unaccounted = scenario_fp["unaccounted"] + injection_fp["unaccounted"]
+    fp_rate = round(total_fp / total_n, 3) if total_n else 0.0
+    unaccounted_rate = round(unaccounted / total_n, 3) if total_n else 0.0
+    if unaccounted > max_unaccounted_fp:
+        failures.append(f"{unaccounted} unaccounted false positive(s) over {total_n} benign controls "
+                        f"(unaccounted fp rate {unaccounted_rate}) — bound is {max_unaccounted_fp}")
+    if len(ledger) > FP_LEDGER_CEILING:
+        failures.append(f"FP_LEDGER holds {len(ledger)} acknowledged false positive(s), over its ceiling "
+                        f"of {FP_LEDGER_CEILING}: the ledger only shrinks. A new acknowledged false "
+                        f"positive has to be argued into FP_LEDGER_CEILING in the same diff, next to the "
+                        f"rule that caused it.")
+
+    report = {"passed": not failures, "fp_rate": fp_rate, "unaccounted": unaccounted,
+              "unaccounted_fp_rate": unaccounted_rate,
+              "acknowledged": total_fp - unaccounted, "total_false_positives": total_fp,
+              "controls": total_n, "ledger_size": len(ledger), "ledger_ceiling": FP_LEDGER_CEILING,
+              "scenario": scenario_fp, "injection": injection_fp, "failures": failures}
+    return report
+
+
+def assert_quality_gates(**kw) -> dict:
+    """`quality_report` as a gate. Deliberately not a mitigation: it blocks a claim, never takes an action."""
+    report = quality_report(**kw)
+    if not report["passed"]:
+        raise QualityGateError("; ".join(report["failures"]))
+    return report
+
+
+def metrics_artifact(*, recorded_utc: str = "", baseline: dict = ATTACK_BASELINE) -> dict:
+    """The versioned artifact a CI run publishes so the next run can diff it. Deterministic unless a
+    timestamp is supplied — a metrics file that changes when nothing changed cannot carry a delta."""
+    # One measurement, reported twice: the metrics and the gate come from the SAME run, so the artifact
+    # cannot show a green number beside a red gate (or the reverse) because two code paths drifted.
+    gate = quality_report(mapping_baseline=baseline)
+    scenario_fp, injection_fp = gate["scenario"], gate["injection"]
+    mapping = evaluate_attack_mapping().to_dict()
+    total_controls = scenario_fp["n"] + injection_fp["n"]
+    firing_rate = round(gate["total_false_positives"] / total_controls, 3) if total_controls else 0.0
+    on_baseline = mapping == baseline
+    return {
+        "schema": "aos.edge-sentinel.evaluation/v1",
+        "corpus_version": CORPUS_VERSION,
+        "corpus_digest": corpus_digest(),
+        "recorded_utc": recorded_utc,
+        "mapping": {"metrics": mapping, "baseline": baseline, "on_baseline": on_baseline},
+        "negative_controls": {"scenario": scenario_fp, "injection": injection_fp},
+        # Named for its denominator on purpose. A bare "false_positive_rate" beside a 1.0 recall invites
+        # "46.7% of detection is wrong", which is not what this says: the denominator is 15 adversarial
+        # near-misses chosen BECAUSE they resemble a trigger, not observed traffic.
+        "adversarial_control_firing_rate": firing_rate,
+        "fp_ledger": dict(sorted(FP_LEDGER.items())),
+        "gate": {"passed": gate["passed"], "failures": gate["failures"]},
+        # THREE NUMBERS, NEVER ONE. A green gate proves the MEASUREMENT is honest — nothing fires on benign
+        # input without being named, the corpus is sourced, the mapping has not drifted. It says nothing
+        # about whether the DETECTOR is good, and one PASS is exactly how those two get confused. `harness`
+        # is what the gate defends; `detector` is the open backlog. Read the second block as the work
+        # remaining, never as an approval.
+        "claims": {
+            "harness": {                                    # does the measurement mean anything?
+                "positive_recall": mapping["recall"],
+                "positive_precision": mapping["precision"],
+                "positive_cases": mapping["n"],
+                "unaccounted_false_positives": gate["unaccounted"],
+                "mapping_on_baseline": on_baseline,
+            },
+            "detector": {                                   # is the detector any good?
+                "acknowledged_false_positives": gate["acknowledged"],
+                "of_adversarial_controls": total_controls,
+                "adversarial_control_firing_rate": firing_rate,
+                "fp_ledger_size": len(FP_LEDGER),
+                "fp_ledger_ceiling": FP_LEDGER_CEILING,     # fix one: delete its entry AND lower this
+            },
+        },
+        "counts": {"positives": len(ATTACK_CORPUS),
+                   "controls": len(NEGATIVE_CONTROLS) + len(INJECTION_NEGATIVE_CONTROLS),
+                   "false_positives": gate["total_false_positives"],
+                   "acknowledged_false_positives": gate["acknowledged"],
+                   "unaccounted_false_positives": gate["unaccounted"]},
+        # Framing, because a rate whose denominator's shape is unstated is a lie waiting to be quoted:
+        # these controls are adversarial near-misses BY CONSTRUCTION (benign input chosen because it
+        # resembles a trigger). A 0.467 here is "how much of the look-alike surface fires", not a
+        # production false-positive estimate, and anyone pasting this number must paste that sentence too.
+        "controls_are": ("adversarial benign near-misses, deliberately shaped to resemble a detection "
+                         "trigger; adversarial_control_firing_rate measures the look-alike surface, not "
+                         "production traffic"),
+        "read_as": ("harness: recall " + str(mapping["recall"]) + f" on {mapping['n']} positives, "
+                    + f"{gate['unaccounted']} unaccounted false positives, mapping "
+                    + ("on baseline; " if on_baseline else "OFF baseline; ")
+                    + "detector: " + str(gate["acknowledged"]) + f" of {total_controls} near-miss "
+                    + "controls flagged "
+                    + f"(ledger {len(FP_LEDGER)}/{FP_LEDGER_CEILING}); gate "
+                    + ("PASS" if gate["passed"] else f"FAIL ({len(gate['failures'])})")),
+    }
+
+def write_metrics_artifact(path, **kw) -> dict:
+    """Write the artifact (creating parent dirs). Returns it so the caller can assert on what landed."""
+    import json
+    import pathlib
+    art = metrics_artifact(**kw)
+    p = pathlib.Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(art, indent=2, sort_keys=True) + "\n")
+    return art
+
+
+def main(argv=None) -> int:
+    """CI entry point: `python -m edge-sentinel.evaluation --out artifacts/edge-sentinel-evaluation.json`.
+
+    Two deliberate choices. The artifact is written EVEN WHEN THE GATE FAILS — that is exactly when the
+    numbers are needed, and a red build that also hides its metrics is a build nobody can triage. And the
+    summary goes to stdout: a green check that does not show its numbers gets ignored by the next reader,
+    which is how a coverage claim turns into folklore.
+    """
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(prog="python -m edge-sentinel.evaluation",
+                                 description="Score the ATT&CK mapping and the negative-control "
+                                             "false-positive gates; write the metrics artifact.")
+    ap.add_argument("--out", default="artifacts/edge-sentinel-evaluation.json")
+    args = ap.parse_args(argv)
+
+    art = write_metrics_artifact(args.out)
+    mapping, gate = art["mapping"]["metrics"], art["gate"]
+    harness, detector = art["claims"]["harness"], art["claims"]["detector"]
+    print(f"edge-sentinel evaluation [{art['corpus_version']}] digest={art['corpus_digest'][:12]} "
+          f"controls={art['counts']['controls']}")
+    # Two lines, never merged into one verdict: the first is the measurement, the second is the detector.
+    print(f"  harness:  recall={harness['positive_recall']} (n={harness['positive_cases']}) "
+          f"precision={harness['positive_precision']} abstain={mapping['abstention_rate']} "
+          f"unaccounted_fp={harness['unaccounted_false_positives']}")
+    print(f"  detector: acknowledged_fp={detector['acknowledged_false_positives']}"
+          f"/{detector['of_adversarial_controls']} "
+          f"adversarial_firing_rate={detector['adversarial_control_firing_rate']} "
+          f"ledger={detector['fp_ledger_size']}/{detector['fp_ledger_ceiling']}")
+    print(f"gate: {'PASS' if gate['passed'] else 'FAIL'}  "
+          f"(PASS = the measurement is honest, not that the detector is precise)")
+    for failure in gate["failures"]:
+        print(f"  - {failure}", file=sys.stderr)
+    print(f"wrote {args.out}")
+    return 0 if gate["passed"] else 1
+
+
+if __name__ == "__main__":
+    import sys as _sys
+
+    _sys.exit(main())
 
 
 # ──────────────────────────── bounded Learn (second) ────────────────────────────

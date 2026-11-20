@@ -75,3 +75,22 @@ jobs:
         run: |
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=all)" || { git status --short; echo "untracked files left by tests"; exit 1; }
+      - name: edge-sentinel evaluation metrics (publish the numbers, not just the check)
+        # The evaluation also runs as a test, and a passing test hides its numbers. This step publishes them
+        # so a coverage claim can be checked against a file instead of argued about -- and it exits non-zero
+        # when a quality gate fails, including on the FALSE-POSITIVE side, which is the half a recall number
+        # structurally cannot see. Written to RUNNER_TEMP on purpose: an artifact inside the workspace would
+        # be caught by the dirty-tree check above (a metrics file is not source).
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
+        run: python -m edge-sentinel.evaluation --out "$RUNNER_TEMP/artifacts/edge-sentinel-evaluation.json"
+      - name: Upload the evaluation artifact
+        # !cancelled() so a RED run still uploads: the artifact embeds which gate failed, which is exactly
+        # what a failing run needs to be triable. `if-no-files-found: error` -- a metrics step that silently
+        # produced nothing is how a measurement disappears without anyone noticing.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-sentinel-evaluation
+          path: ${{ runner.temp }}/artifacts/edge-sentinel-evaluation.json
+          if-no-files-found: error
