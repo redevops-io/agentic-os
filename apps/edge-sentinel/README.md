@@ -53,14 +53,14 @@ PYTHONPATH=.:apps python -m edge-sentinel.evaluation --out /tmp/es.json   # exit
 | Claim | Measured (corpus v1, `corpus_digest` in the artifact) | What it does NOT mean |
 |-------|--------------------------------------------------------|------------------------|
 | ATT&CK scenario mapping: precision 1.0, recall 1.0, accuracy 1.0 over 48 labelled cases; 8.3% abstain | Frozen as `ATTACK_BASELINE`; any movement fails the gate | Not detection over real traffic — it scores name→technique mapping on a curated corpus |
-| 7 of 15 benign near-miss controls are flagged (`adversarial_control_firing_rate` 0.467: 4/9 scenario, 3/6 injection) | Every one is named in `FP_LEDGER` with the responsible token (`port-scan`, `nmap`, `ssh-bf`, `crawl`, `leak`, `override`, `developer mode`) | Not a production false-positive rate: the controls are **adversarial near-misses by construction** — benign input chosen because it looks like a trigger |
+| 0 of 15 benign near-miss controls are flagged (`adversarial_control_firing_rate` 0.0), from a **raw rule surface of 0.467** (4/9 scenario, 3/6 injection) | The distance between the two is counted per mechanism: 4 suppressed by operator authorization, 3 read as prose mentions. `FP_LEDGER` is empty and `FP_LEDGER_CEILING` is 0 | Not a production false-positive rate, and not "detection is perfect": the controls are **adversarial near-misses by construction**, and the clean number is conditional on context the deployment must actually supply |
 
 The artifact splits this into two claims under `claims`, because one `gate: PASS` invites the wrong read:
 
 | Block | Numbers | What it proves |
 |-------|---------|----------------|
 | `claims.harness` | `positive_recall` 1.0 (n=48), `unaccounted_false_positives` 0, `mapping_on_baseline` true | The **measurement** is honest: nothing fires on benign input without being named, the corpus is sourced, the mapping has not drifted |
-| `claims.detector` | `acknowledged_false_positives` 7 of 15, `adversarial_control_firing_rate` 0.467, `fp_ledger_size`/`fp_ledger_ceiling` 7/7 | The **detector** still fires on half its own look-alike surface. Read it as the backlog, never as an approval |
+| `claims.detector` | `adversarial_control_firing_rate` 0.0, `raw_adversarial_firing_rate` 0.467, `suppressed_by_authorization` 4, `downgraded_to_mention` 3, `fp_ledger_size`/`fp_ledger_ceiling` 0/0 | What the rules do to look-alikes **before** adjudication, and which mechanism accounted for each one. A 0.0 that cannot show its mechanism is indistinguishable from a scan that stopped looking |
 
 Four rules make the number hard to fake, and they are enforced by
 `test_evaluation_negative_controls.py`, not by discipline:
@@ -69,31 +69,40 @@ Four rules make the number hard to fake, and they are enforced by
    contribute to a green gate;
 2. a false positive that `FP_LEDGER` does not name fails the gate, and so does a ledger entry that stops
    firing (a stale ledger means the detector outgrew its paperwork);
-3. `FP_LEDGER` is a ratchet that only shrinks: `FP_LEDGER_CEILING` (7) fails the gate if the ledger grows,
+3. `FP_LEDGER` is a ratchet that only shrinks: `FP_LEDGER_CEILING` (0) fails the gate if the ledger grows,
    so "broadened a rule, papered over the fallout" cannot report PASS. Fixing a false positive means
    deleting its entry **and** lowering the ceiling in the same change — CI then proves the shrink;
 4. the artifact carries `corpus_version` + `corpus_digest`, so "the numbers improved" is traceable to
    "the corpus changed" — including to a deleted hard case.
 
-CI runs this on every push and PR (`tests.yml`) and uploads `edge-sentinel-evaluation.json`, including on
-a red run — a gate that destroys its own metrics on failure is a gate nobody can triage. Nothing here
-mitigates anything: a failed gate blocks a *claim*, never takes an action.
+### How the 7 were closed — and the trap each fix avoided
 
-### Where the 7 go (and the rule the fixes must not break)
+No marker and no scenario token was removed, and recall on the 48 positives is still 1.0. Three
+distinctions did the work, each one chosen so that the string under inspection cannot grant itself a pass.
 
-None of them get fixed by deleting a word or adding a stop-list: each word is a real attack verb, and a
-"benign words" list is an evasion grant. Each gets a distinction that is *structural*, and the fix has to
-delete its ledger entry and lower `FP_LEDGER_CEILING` in the same change, with the positive-case recall
-still pinned at 1.0.
+| Was | Mechanism | The trap it avoids |
+|-----|-----------|--------------------|
+| `nmap-allowlist-internal`, `backup-agent-port-scan-benign`, `ssh-bf-allowlist-bastion`, `http-do-not-crawl-policy` (tokens `nmap`, `port-scan`, `ssh-bf`, `crawl`) | **`authorization.py`** — an operator `AuthorizationContext` passed *into* `adjudicate_scenario()`, matched on exact `(observable, token)` identity, every entry naming a `principal` and a sourced `source` | Reading `allowlist` / `benign` / `internal` out of the scanned name. An attacker who wants a scan to pass names it `nmap-allowlist-internal`, because that is what the inventory would call it — so the name is the one place authorization may never be looked up. `test_an_allowlist_word_in_the_name_grants_nothing` pins it |
+| `{"summary": "vendor patched a memory leak in the driver"}`, `{"note": "use a class override in the theme"}`, `{"feature": "developer mode toggle for QA"}` | **Position + grammar** in `ai_security.injection_hits()` — the payload is walked by path; instruction-reachable fields (`prompt`, `messages[].content`, `tool_input`…) fire on any marker, prose fields (`summary`, `note`, `changelog`…) require the verb to carry its attack object or an addressee | A stop-list of exempt words. The same sentence in `prompt` still fires, and an unrecognised field is always treated as instruction input — only adding to the *descriptive* list lowers what a scan demands, which makes it a reviewable act |
+| all seven | **One signal, one claim** in `map_scenario_to_techniques()` — a generic token inside an already-matched longer token no longer adds a second technique (`port-scan` is not also a bare `scan`) | Inflating the technique list off one observation, which reads as detection breadth and is duplication |
 
-| Control | Token | The distinction that is actually missing |
-|---------|-------|------------------------------------------|
-| `nmap-allowlist-internal`, `backup-agent-port-scan-benign`, `ssh-bf-allowlist-bastion`, `http-do-not-crawl-policy` | `nmap`, `port-scan`, `ssh-bf`, `crawl` | These fire on a **label**, not an **observation**: a hub feed name is a document about a detection, not evidence that a scan happened. Input needs a declared kind; a label-derived technique is advisory (recorded, under the finding threshold), a finding needs observation-backed evidence. Authorization comes from an operator-supplied allowlist passed *in* — never parsed out of the scanned string, because `nmap-allowlist-internal` is precisely what an unauthorized scan would be called. |
-| `{"summary": "vendor patched a memory leak in the driver"}` | `leak` | The attack grammar is transitive toward a secret: *leak the / your instructions, secrets, keys*. "a memory leak" is a compound noun. Requiring the object narrows the marker toward the attack phrase instead of loosening it. |
-| `{"note": "use a class override in the theme"}` | `override` | Same shape: `override` counts when what is overridden is an instruction / policy / guard / filter. A class override in a theme is not an instruction-override attempt. |
-| `{"feature": "developer mode toggle for QA"}` | `developer mode` | Position in the payload. Scan by JSON path and classify the container: a directive-bearing field (`prompt`, `instruction`, `messages[].content`) is attacker-reachable model input; `feature` / `note` / `summary` are telemetry prose. Unknown fields stay detections — the downgrade must never widen the hole. |
+Three properties keep the clean number honest, all of them tested:
 
-## CrowdSec bootstrap method (the one that worked)
+- **Suppressions are audited, not silent.** `claims.detector.suppressions` names who authorized each one
+  and where the declaration came from; `quality_report` fails if an authorization stands *nothing* down
+  (stale paperwork is a hole with paperwork attached), and `corpus_digest` covers the authorizations, so
+  deleting the allowlist moves the digest instead of quietly improving the rate.
+- **A downgraded mention is still evidence.** The event is ingested as an evidence-backed observation
+  before the marker scan decides anything — the case is not opened, the timeline still has the payload.
+- **`kind=label` cannot launder the rate.** Marking an input a label makes its verdict advisory for the
+  product; the evaluation still counts its tags, so relabelling controls is not a path to a green gate.
+
+**What this is conditional on:** a deployment that supplies no `AuthorizationContext` gets no suppressions,
+and those four controls fire as before — with the ledger at zero, they are unaccounted and the gate fails
+loudly rather than reporting a clean run (`test_an_unaccounted_false_positive_fails_the_gate`). The
+residual risk is inventory integrity: whoever can edit the inventory can authorize a scan. That is the
+correct threat model for an allowlist and it is why every suppression carries a principal.
+
 ## CrowdSec bootstrap method (the one that worked)
 
 CrowdSec has **no rich web UI** and is **CLI-managed** via `cscli`. There are two read

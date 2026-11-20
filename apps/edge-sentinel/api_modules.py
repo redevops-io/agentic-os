@@ -39,15 +39,31 @@ async def hunt_validate(request: Request, p: Principal = Depends(api_v1.viewer),
 
 
 @router.get("/attack/map")
-def attack_map(scenario: str = "", p: Principal = Depends(api_v1.viewer)):
+def attack_map(scenario: str = "", kind: str = attack.KIND_OBSERVATION,
+               p: Principal = Depends(api_v1.viewer)):
+    """Which ATT&CK techniques a scenario NAME suggests, and what that claim is worth.
+
+    `kind=label` says the input is a document about a detection (a hub feed name, an allowlist entry) rather
+    than an observation of one, which makes the mapping advisory. No operator authorization context is applied
+    here: this endpoint maps, it does not adjudicate against a deployment's inventory — an anonymous caller
+    must not be able to produce a suppressed view of the rules by asking for one."""
     if not scenario or len(scenario) > 200:
         raise api_v1._err(422, "invalid_query", "scenario is required (at most 200 characters)")
+    if kind not in attack.KINDS:
+        raise api_v1._err(422, "invalid_query", f"kind must be one of {list(attack.KINDS)}")
     items = []
     for tid, token in attack.map_scenario_to_techniques(scenario):
         obj = attack.attack_pattern(tid)
         items.append({"technique_id": tid, "name": obj.props["name"], "tactic": obj.props["kill_chain_phases"][0]["phase_name"], "basis": token,
                       "url": obj.props["external_references"][0]["url"]})
-    return {"scenario": scenario, "techniques": items, "attack_version": attack.ATTACK_VERSION, "method": "deterministic scenario-name table, not a model"}
+    verdict = attack.adjudicate_scenario(scenario, kind=kind)
+    return {"scenario": scenario, "techniques": items, "attack_version": attack.ATTACK_VERSION,
+            "method": "deterministic scenario-name table, not a model",
+            "kind": verdict.kind, "advisory": verdict.advisory,
+            # What survives adjudication — identical to `techniques` here, because no operator context is
+            # supplied to this endpoint. Present so a client can never silently read a label-derived
+            # hypothesis as an evidenced finding.
+            "claimable_techniques": list(verdict.tags)}
 
 
 @router.post("/ioc/normalize")

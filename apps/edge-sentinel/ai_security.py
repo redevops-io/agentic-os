@@ -17,7 +17,9 @@ AI_SECURITY case; any response goes through the same governed path as everything
 """
 from __future__ import annotations
 
+import json
 import re
+from dataclasses import dataclass
 
 from agentic_os.mission.events import EventType, ResultStatus, RuntimeEvent
 
@@ -31,7 +33,6 @@ from .evidence import (
     SecurityObservation,
     Severity,
     _now,
-    canonical_json,
 )
 
 # Substring markers of prompt-injection / instruction-override attempts (whole-payload scan; deterministic).
@@ -47,9 +48,124 @@ _INJECTION_MARKERS = (
 # prompt-injection attempts. A marker that fires on ordinary config keys and ordinary English produces
 # findings that open cases and train humans to dismiss them, so the list is only usable because it is
 # bounded: `_` counts as part of a word (snake_case keys are one token), so `cache_bypass` is not
-# `bypass`. Residual false positives on ordinary English remain — named, in evaluation.FP_LEDGER.
+# `bypass`. What the boundary cannot decide — whether a verb is being USED on the model or merely MENTIONED
+# about something — is decided by position and grammar below, not by a longer exempt-word list.
 _INJECTION_RES = tuple(re.compile(r"(?<!\w)" + re.escape(m) + r"(?!\w)", re.ASCII)
                        for m in _INJECTION_MARKERS)
+
+#: Keys whose value the model can be induced to read as instruction input. Not a blocklist of bad words:
+#: it names WHERE text reaches a model. Anything not recognised is treated as directive — the unknown-field
+#: default is detection, so this list can only ever narrow the downgrade, never widen the hole.
+_DIRECTIVE_KEYS = frozenset({
+    "prompt", "instruction", "instructions", "system", "system_prompt", "system_prompt_patch",
+    "message", "messages", "content", "content_parts", "input", "inputs", "query", "text", "user",
+    "user_input", "user_message", "human_input", "completion", "output", "response", "body", "payload",
+    "args", "arguments", "parameters", "tool_input", "tool_arguments", "data", "value",
+})
+
+#: Keys whose value is prose ABOUT something — release notes, labels, changelogs, tickets. Text here is not
+#: instruction input, so a marker in it has to earn a finding with grammar instead of getting one for free.
+#: Adding to this list is a visible, reviewable act precisely because it lowers what a scan demands.
+_DESCRIPTIVE_KEYS = frozenset({
+    "summary", "note", "notes", "feature", "features", "title", "subject", "headline", "description",
+    "desc", "details", "comment", "comments", "discussion", "changelog", "commit_message", "release_note",
+    "label", "labels", "tag", "tags", "category", "name", "display_name", "reason", "why", "purpose",
+    "rationale", "doc", "docs", "readme", "filename", "source_file",
+})
+
+#: What an injection verb acts ON when it is being used rather than mentioned.
+_ATTACK_OBJECT_RX = re.compile(
+    r"\b(?:prompt|prompts|instruction|instructions|secret|secrets|credential|credentials|password|"
+    r"passwords|token|tokens|database|databases|data|guard|guards|filter|filters|policy|rules?|safety)\b"
+    r"|\bapi[\s_-]keys?\b|\bsystem\s+prompt\b", re.ASCII)
+
+#: Second-person / addressee tells: text aimed AT an assistant, wherever it sits.
+_ADDRESSEE_RX = re.compile(r"\b(?:you|your|yours|assistant|chatgpt|claude|llm)\b", re.ASCII)
+
+#: How far past the marker to look for the object it acts on (one clause, same line).
+_CLAUSE_CHARS = 60
+
+
+@dataclass(frozen=True)
+class InjectionHit:
+    """One marker occurrence, where in the payload it happened, and what it earns.
+
+    `position` is the whole argument in one word: `directive` = the text sits where a model reads commands,
+    `mention` = it sits in prose about something and carries no attack grammar. Only `finding_worthy` hits
+    open a case; a mention still lands in the forensic timeline, because the event was ingested as an
+    evidence-backed observation before any of this ran.
+    """
+    marker: str
+    path: tuple[str, ...]
+    position: str
+    finding_worthy: bool
+
+    def record(self) -> dict:
+        return {"marker": self.marker, "path": "$." + ".".join(self.path),
+                "position": self.position, "finding_worthy": self.finding_worthy}
+
+
+def _iter_strings(node, path: tuple[str, ...] = ()):
+    """(path, keys-ancestor-chain, text) for every string in a payload, structurally. Paths matter: the
+    same sentence in `prompt` and in `summary` is two different security facts, and a flat blob scan is
+    blind to that — which is exactly how "memory leak" became a prompt-injection finding."""
+    if isinstance(node, str):
+        yield path, tuple(k for k in path if not k.startswith("[")), node
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield from _iter_strings(value, path + (str(key).lower(),))
+    elif isinstance(node, (list, tuple)):
+        for i, value in enumerate(node):
+            yield from _iter_strings(value, path + (f"[{i}]",))
+
+
+def _position(ancestors: tuple[str, ...]) -> str:
+    """The OUTERMOST recognised classification wins. A descriptive key nested inside `messages[].content`
+    is still model-reachable, so `content` decides it; a directive key inside `summary` does not get
+    rescued by its parent."""
+    if any(k in _DIRECTIVE_KEYS for k in ancestors):
+        return "directive"
+    if any(k in _DESCRIPTIVE_KEYS for k in ancestors):
+        return "mention"
+    return "directive"                       # unrecognised field: attacker-reachable until proven otherwise
+
+
+def _attack_grammar(text: str, rx: re.Pattern) -> bool:
+    """In prose, a verb needs its object: *leak the system prompt*, *override the guardrails*. Look at the
+    clause after the marker, or at whether the text is addressed to a model at all."""
+    match = rx.search(text)
+    if match is None:
+        return False
+    tail = text[match.end():match.end() + _CLAUSE_CHARS].split("\n")[0]
+    return bool(_ATTACK_OBJECT_RX.search(tail) or _ADDRESSEE_RX.search(text))
+
+
+def injection_hits(payload) -> tuple[InjectionHit, ...]:
+    """Every marker occurrence in a payload, with its position and whether it earns a finding. Deterministic,
+    no model in the loop, and the single source of truth for `evaluation._marker_tags` — the measurement must
+    not keep its own copy of the match."""
+    hits: list[InjectionHit] = []
+    for path, ancestors, text in _iter_strings(payload):
+        low, position = text.lower(), _position(ancestors)
+        for marker, rx in zip(_INJECTION_MARKERS, _INJECTION_RES):
+            if not rx.search(low):
+                continue
+            worthy = True if position == "directive" else _attack_grammar(low, rx)
+            hits.append(InjectionHit(marker=marker, path=path, position=position, finding_worthy=worthy))
+    return tuple(hits)
+
+
+def _as_payload(payload):
+    """Accept a mapping, a list, or the JSON text of either. A payload that is not JSON at all is treated as
+    bare text — the directive reading, because refusing to parse is not a licence to stop looking."""
+    if isinstance(payload, (dict, list, tuple)):
+        return payload
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except ValueError:
+            return payload
+    return payload
 
 
 def security_projection(evt: RuntimeEvent) -> dict:
@@ -66,8 +182,10 @@ def security_projection(evt: RuntimeEvent) -> dict:
 
 
 def _has_injection(payload: dict) -> bool:
-    blob = canonical_json(payload).lower()
-    return any(rx.search(blob) for rx in _INJECTION_RES)
+    """Does this payload carry an injection attempt rather than a word that looks like one? See
+    `injection_hits`: markers in instruction-reachable fields fire as before; markers in prose about
+    something have to show attack grammar to earn a finding."""
+    return any(h.finding_worthy for h in injection_hits(_as_payload(payload)))
 
 
 def observation_from_runtime_event(store, evt: RuntimeEvent) -> SecurityObservation:
