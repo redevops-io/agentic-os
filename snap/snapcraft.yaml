@@ -1,5 +1,5 @@
-# Ubuntu Snap Store packaging of Agentic Apps R0-prime (PRIVATE, UNSUBMITTED draft: nothing here has been
-# registered, uploaded or reviewed by the Snap Store; see docs/release/SNAP_STORE.md for every decision it needs).
+# Ubuntu Snap Store packaging of Agentic Apps R0-prime. Registered and published by the owner to the `railsapps`
+# Store listing's edge channel (public, 2026-11-19/20); see docs/release/SNAP_STORE.md for every decision it needed.
 #
 # Design: the snap carries EXACTLY the payload of the .deb that `cargo tauri build --bundles deb` produces from the
 # pinned pipeline (packaging/build-wheelhouse.sh -> build-sidecar.sh -> build-notices.sh -> build-sidecar.sh ->
@@ -34,13 +34,33 @@ name: railsapps                     # registered by the owner on the Snap Store 
 title: Agentic Apps R0-prime
 base: core24
 adopt-info: app
-summary: Governed AI control plane - your apps as one system (private R0-prime build)
+summary: Local AI automation for business apps - you stay in control
 description: |
-  Agentic Apps R0-prime runs a small control plane on your own computer (127.0.0.1 only) and shows its pages in
-  your web browser. Connect apps, run missions across them, approve the consequential steps. Bring your own model.
-  Docker is not required for the control plane itself; an optional Apps screen can pull and run the tested
-  business-apps suite via a bundled Docker CLI, once you grant the docker interface. Private, unsigned build for
-  testing; not a release.
+  ## rAIls Apps — Local AI Automation for Business Applications
+
+  rAIls Apps brings AI-powered business automation to your own computer. Connect applications, coordinate
+  workflows across them, and run intelligent agents while retaining control over important decisions.
+
+  Built on the Runtime Agentic Intelligence (rAIls) stack, it provides a local control plane accessible through
+  your web browser. The control plane listens only on 127.0.0.1, keeping its interface local to your machine.
+  Bring your own AI model and choose how your workflows operate.
+
+  **What you can do:**
+
+  - Connect business applications and coordinate cross-application workflows.
+  - Run AI-assisted missions with human approval for consequential actions.
+  - Use your own AI models rather than depending on a single provider.
+  - Manage workflows through a browser-based local control plane.
+  - Optionally deploy a tested suite of business applications, including Twenty CRM, Metabase and Postiz, alongside
+    specialized agents for revenue, intelligence, content, finance, customer success, and security and compliance.
+
+  **Docker is optional.** The control plane runs without Docker. Deploying the additional business applications
+  requires Docker and access to the Snap's Docker interface, subject to Snap Store approval.
+
+  rAIls Apps is designed to make agentic automation practical, transparent and controllable, connecting AI
+  reasoning with real business operations.
+
+  Private, unsigned build for testing; not yet a stable release.
 grade: devel                        # `stable` only when the owner decides to release; the store refuses devel on stable/candidate
 confinement: strict
 platforms:
