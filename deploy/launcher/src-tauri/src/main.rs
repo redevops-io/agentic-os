@@ -316,12 +316,28 @@ fn apps_compose_path() -> Result<String, String> {
     Err("the Apps screen needs RDO_APPS_COMPOSE (dev) or SNAP (the packaged snap build) set".to_string())
 }
 
+/// The `docker compose` plugin binary is not discovered as a `docker` subcommand inside the snap's confinement
+/// (the CLI's plugin search paths do not include $SNAP's own - confirmed by reproducing the exact failure in a
+/// real confined run: `docker compose ...` fails with "unknown shorthand flag: 'f' in -f" because `compose`
+/// itself is never recognised as a subcommand). Invoke the bundled plugin binary directly instead - it accepts
+/// identical arguments. In dev (no SNAP), fall back to the ordinary `docker compose` dispatch.
+fn compose_cli() -> (String, Vec<String>) {
+    if let Ok(snap) = std::env::var("SNAP") {
+        (format!("{snap}/usr/libexec/docker/cli-plugins/docker-compose"), vec![])
+    } else {
+        ("docker".to_string(), vec!["compose".to_string()])
+    }
+}
+
 /// Which profiles are currently up, decided by whether each profile's own domain-agent service is running
 /// (not its shared OSS cores, which may be running for a different, still-active profile).
 #[tauri::command]
 fn apps_status() -> Result<String, String> {
     let compose = apps_compose_path()?;
-    let out = run_wait(Command::new("docker").args(["compose", "-f", &compose, "ps", "--services", "--status", "running"]))?;
+    let (prog, lead) = compose_cli();
+    let mut args = lead;
+    args.extend(["-f".to_string(), compose.clone(), "ps".to_string(), "--services".to_string(), "--status".to_string(), "running".to_string()]);
+    let out = run_wait(Command::new(&prog).args(&args))?;
     let running: HashSet<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     let active: Vec<&str> = INSTALLABLE_APPS
         .iter()
@@ -348,16 +364,18 @@ fn apply_selected_apps(profiles: Vec<String>) -> Result<String, String> {
     }
     let currently: Vec<String> = serde_json::from_str(&apps_status()?).map_err(|e| e.to_string())?;
 
+    let (prog, lead) = compose_cli();
     let mut up_out = String::new();
     if !profiles.is_empty() {
-        let mut up_args: Vec<String> = vec!["compose".into(), "-f".into(), compose.clone()];
+        let mut up_args: Vec<String> = lead.clone();
+        up_args.extend(["-f".to_string(), compose.clone()]);
         for p in &profiles {
             up_args.push("--profile".into());
             up_args.push(p.clone());
         }
         up_args.push("up".into());
         up_args.push("-d".into());
-        up_out = run_wait(Command::new("docker").args(&up_args))?;
+        up_out = run_wait(Command::new(&prog).args(&up_args))?;
     }
 
     let mut stop_out = String::new();
@@ -365,7 +383,9 @@ fn apply_selected_apps(profiles: Vec<String>) -> Result<String, String> {
         if !profiles.contains(p) {
             let svc = agent_service_name(p);
             if !svc.is_empty() {
-                stop_out += &run_wait(Command::new("docker").args(["compose", "-f", &compose, "stop", svc]))?;
+                let mut stop_args = lead.clone();
+                stop_args.extend(["-f".to_string(), compose.clone(), "stop".to_string(), svc.to_string()]);
+                stop_out += &run_wait(Command::new(&prog).args(&stop_args))?;
             }
         }
     }
