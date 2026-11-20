@@ -171,3 +171,29 @@ def test_cli_prints_the_numbers_and_writes_the_artifact_even_when_red(tmp_path, 
     art = json.loads(out.read_text())
     assert art["gate"]["passed"] is False and art["gate"]["failures"]
     assert "unaccounted false positive" in capsys.readouterr().err
+
+
+def test_the_ci_invocation_is_a_module_run_not_a_script_run(tmp_path):
+    """Pins the exact command CI runs, because it is not the obvious one.
+
+    `python apps/edge-sentinel/evaluation.py` fails here for a reason no reader would guess: this
+    directory holds `operator.py`, which shadows the stdlib `operator`, and the stdlib's own import
+    chain (`dataclasses` -> `re` -> `enum` -> `from operator import or_`) resolves that against the
+    script directory first, reaching the app module and then `agentic_os.registry`, which is importing
+    `dataclasses` at that moment. Relative imports (`from .attack import …`) would fail anyway. The
+    `-m` form puts the repository and `apps/` on the path without making this directory the search
+    root. If either side drifts, this fails instead of CI.
+    """
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    root = pathlib.Path(evaluation.__file__).resolve().parents[2]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root / "apps"), str(root))))
+    out = tmp_path / "artifacts" / "edge-sentinel-evaluation.json"      # parents must be created
+    run = subprocess.run([sys.executable, "-m", "edge-sentinel.evaluation", "--out", str(out)],
+                         cwd=str(root), env=env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert "gate: PASS" in run.stdout
+    assert json.loads(out.read_text())["gate"]["passed"] is True
