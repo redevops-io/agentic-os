@@ -52,6 +52,6 @@ def test_the_snap_builds_both_architectures_and_is_named_for_the_owners_register
     assert set(SNAP["platforms"]) == {"amd64", "arm64"}
     assert "license" not in SNAP, "the family licence has no SPDX id; the listing licence field is an owner decision"
     # registered by the owner on the Snap Store (2026-11-19); the app key under `apps:` matches so the
-    # installed command is plain `raislapps`, not `raislapps.<something>`
-    assert SNAP["name"] == "raislapps"
-    assert set(SNAP["apps"]) == {"raislapps"}
+    # installed command is plain `railsapps`, not `railsapps.<something>`
+    assert SNAP["name"] == "railsapps"
+    assert set(SNAP["apps"]) == {"railsapps"}
