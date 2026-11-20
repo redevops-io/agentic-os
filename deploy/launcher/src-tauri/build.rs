@@ -13,6 +13,9 @@ const APP_COMMANDS: &[&str] = &[
     "advanced_docker_up",
     "advanced_docker_down",
     "advanced_docker_purge",
+    "list_installable_apps",
+    "apps_status",
+    "apply_selected_apps",
     "about_info",
     "about_text",
 ];

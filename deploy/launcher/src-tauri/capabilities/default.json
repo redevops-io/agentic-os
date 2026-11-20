@@ -14,6 +14,9 @@
     "allow-advanced-docker-up",
     "allow-advanced-docker-down",
     "allow-advanced-docker-purge",
+    "allow-list-installable-apps",
+    "allow-apps-status",
+    "allow-apply-selected-apps",
     "allow-about-info",
     "allow-about-text"
   ]
