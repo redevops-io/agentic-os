@@ -58,7 +58,7 @@ jobs:
         if: env.push_skipped != '1'
         run: |
           set -eux
-          sudo snap download railsapps --channel=edge --basename=current-edge
+          snap download railsapps --channel=edge --basename=current-edge
           unsquashfs -d extracted current-edge.snap
           python3 -I - <<'PY'
           import yaml
