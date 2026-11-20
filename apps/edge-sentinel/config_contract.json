@@ -63,9 +63,16 @@
     "source_prefixes": ["manual:", "observed:", "imported:"],
     "identity": "exact match on normalised (observable, token) - no substring, no fuzzy match, no wildcards",
     "source_scope": "addresses the activity is authorized from; an observation is only stood down when its source is inside. A scope covering every address is refused. kind=label inputs have no source address and are exempt",
+    "scope_identity": "source_scope and an alert's source are parsed by ipguard.parse_target, the function that canonicalises a ban target, so the address stood down and the address a ban would name are decided by one reader; texts it refuses (host bits in a CIDR, non-canonical IPv6, dotted netmasks) are refused at declaration",
+    "coverage_direction": "a grant covers an alert only if the grant contains the address the alert names - a grant for one host does not speak for the range that contains it, and a range alert needs a grant for the range",
+    "source_provenance": "alert source.value comes from the CrowdSec LAPI over TLS; no route in this app accepts a CrowdSec alert, and nothing an alert carries can widen a grant - the identity that selects a grant is alert.scenario, never a field the alert claims about itself",
     "expires_at": "an ISO-8601 instant; a bare date is 00:00:00Z of the date named; unparseable is an error, never a permanent grant",
     "unknown_keys": "rejected - a lenient read turns expire_at for expires_at into a grant that never expires",
     "fail_closed": "missing, unreadable, invalid JSON, wrong version, unknown key or unusable entry all yield an empty context: nothing is suppressed, every detection stands",
+    "max_bytes": 1048576,
+    "unreadable_means": "no such file, a file that cannot be read, over max_bytes, or not UTF-8 text - each yields an empty context and a reason, and none of them raise into the ingestion path",
+    "cache_key": "sha256 of the file's bytes, not (mtime, size): an equal-length edit with the timestamp restored - a configuration management apply, cp -p, an image rebuilt from a layer cache - leaves a stat-based key identical, and a revoked grant would keep suppressing",
+    "permissions": "a world-writable file or directory holding it is loaded but reported in authorization.warnings - a suppression list anyone local can write is a suppression anyone local can order",
     "failure_visibility": "/api/v1/info authorization.status is unconfigured|unreadable|invalid with authorization.detail, plus expired and without_source_scope counts, so a grant that can never apply is not mistaken for a rule that stopped working",
     "not_exposed": "the observables and principals themselves - which sanctioned activity is allowlisted is a map of what may be sent without being stood down"
   }

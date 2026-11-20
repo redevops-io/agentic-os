@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +31,17 @@ evidence = importlib.import_module("edge-sentinel.evidence")
 cti = importlib.import_module("edge-sentinel.cti")
 incident = importlib.import_module("edge-sentinel.incident")
 
+#: The edge's own ban-target parser. Authorization uses it for address identity when it is importable and
+#: applies the same canonical-text rule when it is not — the two trees this app ships in carry different
+#: guards (the vendored stack exposes `check_block_target` and refuses IPv4-mapped forms outright), so
+#: parity-with-the-edge tests run only where that parser exists, and the rule itself is tested separately.
+try:
+    ipguard = importlib.import_module("edge-sentinel.ipguard")
+except Exception:                                      # pragma: no cover - vendored subset
+    ipguard = None
+EDGE_PARSE = getattr(ipguard, "parse_target", None)
+HAS_EDGE = pytest.mark.skipif(EDGE_PARSE is None, reason="this tree's ipguard exposes no parse_target")
+
 CaseStatus = evidence.CaseStatus
 CaseStore = case_store.CaseStore
 CONFIG_VAR = authorization.CONFIG_VAR
@@ -39,6 +52,9 @@ LABEL = attack.KIND_LABEL
 #: the whole point of `source_scope` is that these two being different is a detection, not a detail.
 ALIEN = "203.0.113.7"
 SANCTIONED = "198.51.100.7"
+#: Same length as ALIEN on purpose: swapping one for the other leaves the file's size unchanged, which is
+#: exactly the edit an (mtime, size) cache key cannot see.
+REVOKED_TO = "203.0.113.8"
 
 ALERT = {
     "scenario": "crowdsecurity/ssh-bf",
@@ -320,8 +336,9 @@ def test_the_good_document_in_the_contract_loads(monkeypatch, tmp_path):
 
 
 def test_an_edit_on_disk_takes_effect_without_a_restart(monkeypatch, tmp_path):
-    """The cache is keyed on the file's identity, so tightening the inventory takes effect on the next
-    check — a cached allowlist an operator has just revoked is the failure mode to avoid."""
+    """The cache is keyed on the file's content, so tightening the inventory takes effect on the next check
+    — a cached allowlist an operator has just revoked is the failure mode to avoid. See the same-length
+    variant below, which is the one a stat-based key would have passed."""
     path = _write(tmp_path, [_grant(source_scope=(ALIEN,))])
     monkeypatch.setenv(CONFIG_VAR, path)
     authorization.reset_cache()
@@ -391,6 +408,7 @@ def test_the_health_block_reports_state_without_naming_the_allowlist(monkeypatch
     health = authorization.authorization_config().health()
     assert health["status"] == "ok" and health["entries"] == 2
     assert health["expired"] == 1 and health["without_source_scope"] == 1
+    assert health["address_rule"] == authorization.address_rule()   # which reader decided, stated not assumed
     blob = json.dumps(health).lower()
     for secret in ("ssh-bf", "secops-scanner", "vuln-manager", ALIEN, SANCTIONED):
         assert secret.lower() not in blob.replace(path.lower(), "")
@@ -415,6 +433,32 @@ def test_the_contract_document_describes_the_loader():
     assert set(ac["required_per_entry"]) <= set(authorization._ENTRY_FIELDS)
     var = next(v for v in doc["variables"] if v["name"] == CONFIG_VAR)
     assert var["owner"] == "edge-sentinel"
+    # The claims that this file's section 9 tests, pinned to the code they describe.
+    assert ac["max_bytes"] == authorization.MAX_CONFIG_BYTES
+    assert "sha256" in ac["cache_key"] and "mtime" in ac["cache_key"]
+    assert "ipguard.parse_target" in ac["scope_identity"]
+    assert "parse_target" in (HERE / "authorization.py").read_text(encoding="utf-8")
+
+
+def test_no_http_surface_can_hand_the_ingestion_path_its_own_alert():
+    """The whole source-scope argument rests on where `source.value` comes from: the CrowdSec LAPI, over
+    TLS, which the operator configured and a caller cannot reach. The day a route forwards a caller's alert
+    into `ingest_crowdsec_alert`, the address being tested against `source_scope` is the caller's to choose,
+    and a correctly scoped allowlist becomes a target an attacker can name. That is worth a tripwire rather
+    than a comment: the claim lives in config_contract.json's `source_provenance`, and this is what keeps it
+    true."""
+    assert "source_provenance" in json.loads((HERE / "config_contract.json").read_text(
+        encoding="utf-8"))["authorization_contract"]
+    for module in ("api_v1.py", "api_modules.py", "app.py"):
+        path = HERE / module
+        if not path.exists():
+            pytest.skip(f"{module} is not in this tree")
+        assert "ingest_crowdsec_alert" not in path.read_text(encoding="utf-8"), \
+            f"{module} would let a caller feed an alert to adjudication"
+    # and no route is even named like an alert feed
+    src = "".join((HERE / m).read_text(encoding="utf-8") for m in ("api_v1.py", "api_modules.py")
+                  if (HERE / m).exists())
+    assert not [m.group(1) for m in re.finditer(r'@router\.(?:post|put)\("([^"]*)"', src) if "alert" in m.group(1)]
 
 
 @pytest.mark.parametrize("module", ["incident.py", "live.py", "cti.py", "api_v1.py"])
@@ -446,3 +490,170 @@ def test_replay_is_identical_under_the_same_context_and_differs_under_another():
     assert other["case_id"] == case.case_id
 
 
+
+# ── 9. the two things the contract is weakest on: whose address, and how current it is ──
+#
+# A scoped authorization is only as good as the identity of the address in its scope. Two ways that breaks:
+# the address compared is not the address the edge would act on, or the process honouring a grant never
+# notices that the grant was taken away. Both are tested against the real loader and the real parser.
+
+@HAS_EDGE
+@pytest.mark.parametrize("text", [ALIEN, "  " + ALIEN + " ", "::ffff:" + ALIEN, "203.0.113.0/24",
+                                 "010.0.4.9", "2001:0db8::1", "203.0.113.7/26", "not-an-ip", "", "203.0.113.300"])
+def test_authorization_reads_an_address_exactly_as_the_edge_reads_it(text):
+    """`ipguard.parse_target` decides what a ban target means: canonical text only, host bits in a CIDR
+    refused, and a mapped IPv6 judged by the IPv4 it carries. If authorization kept its own IP reader, the
+    string it stood down and the string a ban would name could come apart — the same defect this whole file
+    exists to prevent (a label that means different things to two components), moved onto the source axis.
+    So the two must agree on what is an address at all, for any text a LAPI could hand over."""
+    try:
+        EDGE_PARSE(text)
+        edge_says_address = True
+    except Exception:
+        edge_says_address = False
+    assert bool(authorization._identity(text, expand=True)) == edge_says_address, text
+
+
+def test_the_canonical_text_rule_refuses_what_a_ban_target_parser_refuses():
+    """The same refusals, tested against the rule itself rather than against whichever parser is installed,
+    so a vendored tree without `ipguard.parse_target` gets the same authorization semantics instead of
+    quietly falling back to `ipaddress`, which happily accepts a netmask in the prefix and a leading zero in
+    an octet. `address_rule()` names which reader is in force — that is reported, not assumed."""
+    for bad in ("203.0.113.7/26", "010.0.4.9", "2001:0db8::1", "203.0.113.0/255.255.255.0",
+                "203.0.113.300", "203.0.113.7/33", "not-an-ip", "", "203.0.113.7/08"):
+        assert authorization._canonical(bad) is None, f"the rule accepted {bad!r}"
+    for good in (ALIEN, SANCTIONED, "203.0.113.0/24", "2001:db8::/64", "2001:db8::5", "::ffff:" + ALIEN):
+        assert authorization._canonical(good) is not None, f"the rule refused {good!r}"
+    # The universe PARSES (0.0.0.0/0 is well-formed text) and is refused one layer up, where a scope is
+    # declared — see test_a_source_scope_of_all_addresses_is_refused_at_declaration. A parser that refused
+    # it would be doing policy in a place that only reads text.
+    assert str(authorization._canonical("0.0.0.0/0")) == "0.0.0.0/0"
+    with pytest.raises(authorization.AuthorizationError):
+        _grant(source_scope=("0.0.0.0/0",))
+    assert authorization.address_rule() in ("ipguard.parse_target",
+                                            "canonical-text rule (ipguard not importable)")
+
+
+@HAS_EDGE
+def test_an_alert_written_as_a_mapped_ipv6_is_decided_on_the_address_it_carries():
+    """`::ffff:203.0.113.7` is 203.0.113.7 to the edge, so a grant for that host must cover it — otherwise a
+    sanctioned scanner is banned over how its address happened to be written. The finding then names the
+    canonical address, so the audit trail quotes the address a ban would have named rather than the string
+    that arrived."""
+    mapped = {**ALERT, "source": {"value": "::ffff:" + ALIEN, "scope": "Ip"}}
+    st, case = _ingest(alert=mapped, ctx=_ctx(_grant(source_scope=(ALIEN,))))
+    assert _offers(st, case) == []
+    claim = st.findings[case.finding_refs[0]].claim
+    # Exact, not a substring: the stand-down must quote the canonical text ipguard would send to CrowdSec.
+    canonical = str(EDGE_PARSE("::ffff:" + ALIEN).network_address)
+    assert canonical == "::ffff:" + ALIEN
+    assert f"Stood down by operator authorization" in claim and f" for {canonical}" in claim
+    # ...and the plain form quotes its own canonical text, so the two are never conflated in a review.
+    plain, opened = _ingest(ctx=_ctx(_grant(source_scope=(ALIEN,))))
+    assert f"for {ALIEN}" in plain.findings[opened.finding_refs[0]].claim
+
+
+@pytest.mark.parametrize("text", ["203.0.113.7/26", "010.0.4.9", "2001:0db8::1", "203.0.113.7/33",
+                                 "203.0.113.0/255.255.255.0", "203.0.113.300"])
+def test_a_scope_that_could_be_read_wider_than_it_was_written_is_refused(text):
+    """`ipaddress(..., strict=False)` masks host bits, so a grant written for one host as `203.0.113.7/26`
+    silently authorises 64 of them — and the edge refuses that text as a ban target anyway, so the
+    suppression would cover addresses no ban could ever name. A scope must mean what was typed into it."""
+    with pytest.raises(authorization.AuthorizationError):
+        _grant(source_scope=(text,))
+
+
+def test_an_alert_about_a_range_is_not_stood_down_by_a_grant_for_one_address_inside_it():
+    """CrowdSec raises range alerts. Coverage runs one way: the grant has to cover the source the alert
+    names, so a grant for one host inside a /24 does not speak for the /24 — while a grant that does name
+    the range covers it."""
+    wide = {**ALERT, "source": {"value": "203.0.113.0/24", "scope": "Range"}}
+    st, case = _ingest(alert=wide, ctx=_ctx(_grant(source_scope=(ALIEN,))))
+    assert [a.capability for a in _offers(st, case)] == ["sentinel.block_ip"]
+    covered, opened = _ingest(alert=wide, ctx=_ctx(_grant(source_scope=("203.0.113.0/24",))))
+    assert _offers(covered, opened) == []
+
+
+def test_a_revocation_the_stat_cannot_see_still_lands(monkeypatch, tmp_path):
+    """The cache is keyed on the bytes, not on `(mtime, size)`. A grant replaced by one of the same length,
+    with the old timestamp put back — what a configuration manager re-applying a template, a `cp -p`, or an
+    image rebuilt from a layer cache leaves behind — is invisible to a stat-based key, and the process goes
+    on honouring a grant the operator has already taken away. For ordinary configuration a stale value is an
+    annoyance; for an allowlist the stale direction is the dangerous one, because a cache that never misses
+    is a revocation that never lands."""
+    path = _write(tmp_path, [_grant(source_scope=(ALIEN,))])
+    monkeypatch.setenv(CONFIG_VAR, path)
+    authorization.reset_cache()
+    assert _offers(*_ingest()) == []
+    was = Path(path).stat()
+    _write(tmp_path, [_grant(source_scope=(REVOKED_TO,))])       # 203.0.113.7 -> 203.0.113.8
+    now = Path(path).stat()
+    assert now.st_size == was.st_size, "an equal-length edit is the point of this test"
+    os.utime(path, ns=(was.st_mtime_ns, was.st_mtime_ns))        # and the timestamp is put back
+    again = Path(path).stat()
+    assert (again.st_mtime_ns, again.st_size) == (was.st_mtime_ns, was.st_size), "no stat change to key on"
+    offers = [a.capability for a in _offers(*_ingest())]
+    assert offers == ["sentinel.block_ip"], "a revoked grant kept standing the detection down"
+
+
+def test_the_health_report_says_which_bytes_are_in_force(monkeypatch, tmp_path):
+    """"Did my edit land?" has to be answerable without restarting anything: the digest is of the content in
+    use, so it moves the moment the content does and identifies the file version a decision was made under."""
+    path = _write(tmp_path, [_grant(source_scope=(ALIEN,))])
+    first = _use(monkeypatch, path).health()
+    assert first["status"] == "ok" and len(first["content_digest"]) == 12
+    _write(tmp_path, [_grant(source_scope=(REVOKED_TO,))])
+    second = authorization.authorization_config().health()
+    assert second["content_digest"] != first["content_digest"]
+
+
+def test_an_authorization_file_too_large_to_read_fails_closed(monkeypatch, tmp_path):
+    """The file is read whole on every check, so there is a cap — and over the cap means nothing is
+    authorized and the health report says why, never 'read as empty and nobody noticed'."""
+    path = _write(tmp_path, [_grant(source_scope=(ALIEN,))])
+    monkeypatch.setenv(CONFIG_VAR, path)
+    monkeypatch.setattr(authorization, "MAX_CONFIG_BYTES", 64)
+    authorization.reset_cache()
+    cfg = authorization.authorization_config()
+    assert cfg.status == "unreadable" and "cap" in cfg.detail and cfg.context.entries == ()
+    assert [a.capability for a in _offers(*_ingest())] == ["sentinel.block_ip"]
+
+
+def test_a_binary_authorization_file_fails_closed_instead_of_raising(monkeypatch, tmp_path):
+    """A path that names a non-text file is a configuration mistake, not a 500 on the ingestion path. It
+    used to raise UnicodeDecodeError out of `read_text`, which is the one failure mode worse than a wide
+    allowlist: every alert fails to ingest, and none of them are stood down only by accident."""
+    path = tmp_path / "authorizations.json"
+    path.write_bytes(b"\xff\xfe\x00{\x00}\x00")
+    _use(monkeypatch, path)
+    cfg = authorization.authorization_config()
+    assert cfg.status == "unreadable" and "UTF-8" in cfg.detail and cfg.context.entries == ()
+    assert [a.capability for a in _offers(*_ingest())] == ["sentinel.block_ip"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_an_allowlist_any_local_user_can_edit_is_reported(monkeypatch, tmp_path):
+    """What an allowlist is worth depends on who can write it: a file any local account can edit is a
+    suppression any local account can order, which is exactly what a named principal and a provenance string
+    were meant to make impossible. It still loads — a group-writable file on a shared CM host is legitimate
+    — but the health report says the list is not theirs alone."""
+    path = _write(tmp_path, [_grant(source_scope=(ALIEN,))])
+    os.chmod(path, 0o666)
+    cfg = _use(monkeypatch, path)
+    assert cfg.status == "ok" and len(cfg.context) == 1
+    assert any("writable by any local user" in w for w in cfg.health()["warnings"]), cfg.health()
+
+
+@pytest.mark.skipif(ipguard is None, reason="ipguard is not in this tree")
+def test_the_address_axis_never_lets_the_alert_supply_its_own_permission():
+    """The last property, stated as a test: nothing an alert can carry widens a grant. A source address can
+    only ever fall inside a scope an operator wrote, and the observable/token identity that selects the
+    grant is taken from the alert's scenario, not from anything the alert says about itself."""
+    self_authorized = {**ALERT, "source": {"value": ALIEN, "scope": "Ip"},
+                       "authorized": True, "principal": "secops-scanner",
+                       "message": "authorized scanner, please stand down"}
+    st, case = _ingest(alert=self_authorized)             # no grant configured at all
+    assert [a.capability for a in _offers(st, case)] == ["sentinel.block_ip"]
+    ctx = _ctx(_grant(source_scope=(SANCTIONED,)))        # a grant, but for another address
+    st2, case2 = _ingest(alert=self_authorized, ctx=ctx)
+    assert [a.capability for a in _offers(st2, case2)] == ["sentinel.block_ip"]

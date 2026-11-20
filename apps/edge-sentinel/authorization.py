@@ -30,12 +30,45 @@ reason to stand down — it is a reason not to.
 """
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
+import re
+import stat as _stat
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+#: The address of a grant and the address of an alert are compared, and that comparison decides whether a
+#: ban is proposed. It is only worth anything if BOTH sides are read the way the ban target is read — as
+#: canonical text, with host bits in a CIDR refused and a mapped/NAT64/6to4 IPv6 judged by the IPv4 it
+#: carries — because "the address that was stood down" and "the address the edge banned" being different
+#: strings is the same defect this file exists to prevent (a scenario name that means two things to two
+#: components), relocated onto the source axis.
+#:
+#: So: use the executor's own parser when it is importable, and where it is not, apply the SAME rule written
+#: out below rather than the permissive default of `ipaddress`. Both branches refuse the texts a firewall
+#: ban would refuse; they are not the same code, and that is not hidden — `address_rule()` names which one
+#: decided, and `/api/v1/info` reports it, because a vendored tree shipping a different `ipguard` must not
+#: end up with quietly different authorization semantics. (The vendored `agentic-os-stack` copy really does:
+#: it exposes `check_block_target` and refuses IPv4-mapped forms outright.)
+try:
+    from .ipguard import BlockRefused as _EdgeRefused
+    from .ipguard import _embedded_v4 as _edge_carried_v4
+    from .ipguard import parse_target as _edge_parse
+except Exception:  # pragma: no cover - a vendored subset ships a different ipguard, or none
+    _edge_parse = None
+    _edge_carried_v4 = None
+
+    class _EdgeRefused(Exception):
+        pass
+
+#: Canonical dotted-quad: no leading zeros (`010.0.4.9` is an authorization for a host nobody typed), and
+#: a prefix that is a length, never a netmask dressed up as one (`203.0.113.0/255.255.255.0` parses fine in
+#: `ipaddress` and is not text a ban target parser accepts).
+_V4_CANON = r"(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}"
+_PREFIX = r"(?:[0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])"
 
 #: Same discipline as evaluation._PROVENANCE_PREFIXES, on purpose: an authorization is evidence.
 SOURCE_PREFIXES = ("manual:", "observed:", "imported:")
@@ -47,6 +80,13 @@ CONFIG_VAR = "SENTINEL_AUTHORIZATIONS_FILE"
 CONFIG_VERSION = 1
 _TOP_FIELDS = ("version", "authorizations")
 _ENTRY_FIELDS = ("observable", "token", "principal", "source", "note", "expires_at", "source_scope")
+
+#: A cap, not a tuning knob. An authorization list is a handful of reviewed inventory rows; a file large
+#: enough to be a problem is not an allowlist anyone read. Read in full on every check (see
+#: `authorization_config`), so the cap is what keeps a mistake on disk from becoming a stall on the path
+#: that ingests alerts — and exceeding it fails CLOSED, because "too big to read" must never mean "read as
+#: empty and nobody noticed".
+MAX_CONFIG_BYTES = 1 << 20
 
 #: Why a declared authorization did NOT apply. Reported, never silent: an authorization that silently fails
 #: to apply reads as a rule that refuses to fire, and the operator goes and loosens the rule.
@@ -97,10 +137,116 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def address_rule() -> str:
+    """Which reader decided an address identity in this process. Reported, not assumed: the two trees this
+    app ships in carry different ban-target guards, and an authorization model whose address semantics
+    depend on which one is installed has to say so out loud."""
+    return "ipguard.parse_target" if _edge_parse is not None else "canonical-text rule (ipguard not importable)"
+
+
+def _canonical(text: str):
+    """`ipguard.parse_target`'s discipline, spelled out for the case where that parser is not importable.
+
+    Strict where `ipaddress` is permissive, and permissive about nothing: canonical dotted-quad, canonical
+    compressed IPv6, a prefix that is a length rather than a netmask, and host bits refused. The failure it
+    is guarding against is `ipaddress`'s leniency: `strict=False` masks a CIDR down over a block of
+    addresses, and a dotted netmask or a leading-zero octet parses happily there and nowhere else."""
+    s = text
+    if not s or len(s) > 64:
+        return None
+    addr, sep, plen = s.partition("/")
+    if ":" not in addr:
+        if not re.fullmatch(_V4_CANON, addr):      # 010.0.4.9 is not an address anyone meant to type
+            return None
+        try:
+            ip = ipaddress.IPv4Address(addr)       # the pattern allows 999.999.999.999; the range does not
+        except ValueError:
+            return None
+        width = 32
+    else:
+        try:
+            ip = ipaddress.IPv6Address(addr)
+        except ValueError:
+            return None
+        if addr != str(ip):                        # 2001:0db8::1 is not how that address writes itself
+            return None
+        width = 128
+    bits = width
+    if sep:
+        if not re.fullmatch(_PREFIX, plen):        # /255.255.255.0 is a netmask, not a length
+            return None
+        bits = int(plen)
+    try:
+        return ipaddress.ip_network(f"{ip}/{bits}", strict=True)
+    except ValueError:
+        return None                                # host bits set: the scope would read wider than written
+
+
+def _identity(raw, *, expand: bool = False) -> tuple:
+    """The canonical network(s) a piece of address text denotes, read the way a ban target is read.
+
+    Empty tuple means the text is not an address the edge would act on — which is always an answer that
+    suppresses nothing, never an unknown that gets the benefit of the doubt.
+
+    `expand` is set for the OBSERVATION's source and not for a declared scope, and that asymmetry is the
+    safe direction: an alert seen as `::ffff:203.0.113.7` is the same host to the edge as `203.0.113.7`, so
+    a grant for the address it carries must apply (otherwise a sanctioned scanner gets banned for the
+    accident of how its address was written). Expanding a *grant* instead would let one odd spelling cover
+    addresses under a second identity, which is widening, and widening is not what the observation needs.
+    """
+    s = str(raw if raw is not None else "").strip().split("%")[0].strip()   # %zone is interface scope, not identity
+    if not s:
+        return ()
+    if _edge_parse is not None:
+        try:
+            net = _edge_parse(s)
+        except (_EdgeRefused, ValueError):
+            return ()
+    else:
+        net = _canonical(s)
+        if net is None:
+            return ()
+    forms = [net]
+    if expand and net.version == 6 and net.prefixlen == net.max_prefixlen:
+        carried = _carried_v4(net.network_address)
+        if carried is not None:
+            forms.append(ipaddress.ip_network(carried))
+    return tuple(forms)
+
+
+#: The IPv6 forms that carry an IPv4 address, mirrored from ipguard for the same reason as the rule above:
+#: the comparison must not depend on which ban-target guard happens to be installed.
+_MAPPED = ipaddress.ip_network("::ffff:0:0/96")
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+_SIXTOFOUR = ipaddress.ip_network("2002::/16")
+
+
+def _carried_v4(addr: ipaddress.IPv6Address):
+    if _edge_carried_v4 is not None:
+        return _edge_carried_v4(addr)
+    if addr in _MAPPED or addr in _NAT64:
+        return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    if addr in _SIXTOFOUR:
+        return ipaddress.IPv4Address((int(addr) >> 80) & 0xFFFFFFFF)
+    return None
+
+
+def canonical_source(source_ip) -> str:
+    """The address a stand-down was decided on, in the form a ban would name. For the audit trail: a
+    suppression that quotes a string the edge would never have recognised is not attributable."""
+    forms = _identity(source_ip)
+    return str(forms[0].network_address) if forms else ""
+
+
 def _nets(values, what: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
-    """The addresses an activity is authorized from. A bare address is its own /32 (or /128). The universe
-    is not a scope: `0.0.0.0/0` is the source-side version of principal "anyone" and is refused for the
-    same reason."""
+    """The addresses an activity is authorized from. A bare address is its own /32 (or /128).
+
+    Two refusals, both about a scope meaning more than the operator wrote:
+    * `0.0.0.0/0` — the universe is the source-side version of principal "anyone".
+    * a CIDR with host bits set, e.g. `203.0.113.7/26`. `ipaddress(..., strict=False)` silently masks it to
+      `203.0.113.0/26`, so a grant written for one host quietly authorises 64 of them. The edge refuses that
+      text as a ban target, so authorising it would mean standing down addresses no ban could ever name.
+    """
     if isinstance(values, str):
         values = [v for v in values.replace(",", " ").split() if v]
     nets = []
@@ -108,11 +254,11 @@ def _nets(values, what: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Netw
         s = str(v).strip()
         if not s:
             continue
-        try:
-            net = ipaddress.ip_network(s if "/" in s else f"{s}/32" if ":" not in s else f"{s}/128",
-                                       strict=False)
-        except ValueError:
-            raise AuthorizationError(f"{what} has an address scope that is not an IP or CIDR: {s!r}") from None
+        forms = _identity(s)
+        if not forms:
+            raise AuthorizationError(f"{what} has an address scope that is not a canonical IP or CIDR: {s!r} "
+                                     "(written as the edge would accept it: dotted-quad, no host bits in a CIDR)")
+        net = forms[0]
         if net.prefixlen == 0:
             raise AuthorizationError(f"{what} scopes to {net}, which is every address: an authorization that "
                                      "covers all sources is a rule deletion, not an authorization")
@@ -174,11 +320,14 @@ class Authorization:
             return DENY_NO_SCOPE          # nothing is asserted about where this activity comes from
         if source_ip is None:
             return DENY_NO_SCOPE          # an observation whose source we cannot name is not covered
-        try:
-            addr = ipaddress.ip_address(str(source_ip).split("%")[0])
-        except ValueError:
+        forms = _identity(source_ip, expand=True)
+        if not forms:
             return DENY_OUT_OF_SCOPE      # an unparseable source is an unauthorized source, never an unknown one
-        return DENY_NONE if any(addr.version == n.version and addr in n for n in nets) else DENY_OUT_OF_SCOPE
+        # subnet_of, not `in`: the thing being authorized is the address the alert names, and a grant covers
+        # it only if every address in the alert's own network is inside the grant. An alert whose source is a
+        # /24 is therefore not stood down by a grant for one address inside that /24.
+        covered = any(f.version == n.version and f.subnet_of(n) for f in forms for n in nets)
+        return DENY_NONE if covered else DENY_OUT_OF_SCOPE
 
     def record(self) -> dict:
         """The auditable form. A suppression has to be reportable with who signed for it and where the
@@ -260,6 +409,8 @@ class AuthorizationConfig:
     detail: str = ""
     path: str = ""
     context: AuthorizationContext = field(default=NO_AUTHORIZATION)
+    warnings: tuple[str, ...] = ()                   # usable-but-unsafe things, e.g. who may write the file
+    digest: str = ""                                 # the exact bytes in force, so "did my edit land?" has an answer
 
     @property
     def usable(self) -> bool:
@@ -271,82 +422,131 @@ class AuthorizationConfig:
         ignore, and a read role is not the audience for that. Counts and failure reasons are."""
         out = {"status": self.status, "source": f"env:{CONFIG_VAR}", "file": self.path,
                **self.context.stats()}
+        out["address_rule"] = address_rule()          # which reader decided identities in this process
         if self.detail:
             out["detail"] = self.detail
+        if self.digest:
+            out["content_digest"] = self.digest[:12]
+        if self.warnings:
+            out["warnings"] = list(self.warnings)
         return out
 
 
-def _invalid(path: str, status: str, detail: str) -> AuthorizationConfig:
-    return AuthorizationConfig(status=status, detail=detail, path=path, context=NO_AUTHORIZATION)
+def _invalid(path: str, status: str, detail: str, warnings: tuple[str, ...] = ()) -> AuthorizationConfig:
+    return AuthorizationConfig(status=status, detail=detail, path=path, context=NO_AUTHORIZATION,
+                               warnings=tuple(warnings))
+
+
+def _parse(raw: str, path: str, warnings: tuple[str, ...] = (), digest: str = "") -> AuthorizationConfig:
+    """The document, validated. Every failure mode returns an EMPTY context: a broken, missing or unreadable
+    configuration may only ever make the detector louder, never quieter — and it says so in `status`/`detail`,
+    because a silently ignored allowlist is an operator whose sanctioned scanners start getting banned with
+    nothing in the health report to explain it."""
+    try:
+        doc = json.loads(raw)
+    except ValueError as e:
+        return _invalid(path, "invalid", f"authorization file is not valid JSON ({e}): nothing is authorized", warnings)
+    if not isinstance(doc, dict) or set(doc) - set(_TOP_FIELDS):
+        return _invalid(path, "invalid",
+                        f"authorization file must be an object with only these keys {list(_TOP_FIELDS)}: "
+                        "nothing is authorized", warnings)
+    if doc.get("version") != CONFIG_VERSION:
+        return _invalid(path, "invalid",
+                        f"unsupported authorization version {doc.get('version')!r} (expected {CONFIG_VERSION}): "
+                        "nothing is authorized", warnings)
+    rows = doc.get("authorizations")
+    if not isinstance(rows, list):
+        return _invalid(path, "invalid", "authorizations must be a list: nothing is authorized", warnings)
+    entries: list[Authorization] = []
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            return _invalid(path, "invalid", f"authorization #{i} is not an object: nothing is authorized", warnings)
+        if set(row) - set(_ENTRY_FIELDS):
+            return _invalid(path, "invalid",
+                            f"authorization #{i} has unknown keys {sorted(set(row) - set(_ENTRY_FIELDS))} "
+                            f"(allowed: {list(_ENTRY_FIELDS)}): nothing is authorized", warnings)
+        try:
+            entries.append(Authorization(**{k: v for k, v in row.items() if k in _ENTRY_FIELDS}))
+        except (AuthorizationError, TypeError) as e:
+            return _invalid(path, "invalid", f"authorization #{i} is unusable ({e}): nothing is authorized", warnings)
+    return AuthorizationConfig(status="ok", path=path, context=AuthorizationContext(tuple(entries)),
+                               warnings=tuple(warnings), digest=digest)
+
+
+def _permissions_warnings(path: str) -> tuple[str, ...]:
+    """What an allowlist is worth depends on who can write it. A file any local account can edit is a
+    suppression any local account can order — which is precisely what requiring a named principal and a
+    provenance string was supposed to make impossible. Nothing here refuses to load in that case (the file
+    may legitimately be group-writable on a shared CM host), but the health report says it, because an
+    operator who believes the list is theirs alone is making decisions on a false premise."""
+    out: list[str] = []
+    target = Path(path)
+    for label, p in (("the authorization file", target), ("the directory holding it", target.parent)):
+        try:
+            mode = _stat.S_IMODE(os.stat(p).st_mode)
+        except OSError:
+            continue
+        if mode & 0o022:
+            out.append(f"{label} is writable by any local user (mode {mode:o}): anyone local can add a suppression")
+    return tuple(out)
+
+
+def _slurp(path: str) -> tuple[str | None, str, tuple[str, ...]]:
+    """(the text, why-not, warnings). Read whole and decoded here so that the bytes that were hashed are the
+    bytes that were parsed — a re-read further down could see a different file than the one digested."""
+    warns = _permissions_warnings(path)
+    try:
+        data = Path(path).read_bytes()
+    except OSError as e:
+        return None, f"names a file that cannot be read ({e.strerror or type(e).__name__})", warns
+    if len(data) > MAX_CONFIG_BYTES:
+        return None, f"is {len(data)} bytes, over the {MAX_CONFIG_BYTES}-byte cap", warns
+    try:
+        return data.decode("utf-8"), "", warns
+    except UnicodeDecodeError as e:
+        return None, f"is not UTF-8 text ({e.reason})", warns
 
 
 def load_authorization(env=None) -> AuthorizationConfig:
-    """Read the operator's authorization file. Every failure mode returns an EMPTY context: a broken,
-    missing or unreadable configuration may only ever make the detector louder, never quieter — and it says
-    so in `status`/`detail`, because a silently ignored allowlist is an operator whose sanctioned scanners
-    start getting banned with nothing in the health report to explain it."""
+    """Read the operator's authorization file, now, uncached. See `_parse` for what it refuses."""
     env = os.environ if env is None else env
     path = str(env.get(CONFIG_VAR, "") or "").strip()
     if not path:
         return _invalid("", "unconfigured", f"{CONFIG_VAR} is not set: nothing is authorized, every detection stands")
-    try:
-        raw = Path(path).read_text(encoding="utf-8")
-    except OSError as e:
-        return _invalid(path, "unreadable",
-                        f"{CONFIG_VAR} names a file that cannot be read ({e.strerror or type(e).__name__}): "
-                        "nothing is authorized")
-    try:
-        doc = json.loads(raw)
-    except ValueError as e:
-        return _invalid(path, "invalid", f"authorization file is not valid JSON ({e}): nothing is authorized")
-    if not isinstance(doc, dict) or set(doc) - set(_TOP_FIELDS):
-        return _invalid(path, "invalid",
-                        f"authorization file must be an object with only these keys {list(_TOP_FIELDS)}: "
-                        "nothing is authorized")
-    if doc.get("version") != CONFIG_VERSION:
-        return _invalid(path, "invalid",
-                        f"unsupported authorization version {doc.get('version')!r} (expected {CONFIG_VERSION}): "
-                        "nothing is authorized")
-    rows = doc.get("authorizations")
-    if not isinstance(rows, list):
-        return _invalid(path, "invalid", "authorizations must be a list: nothing is authorized")
-    entries: list[Authorization] = []
-    for i, row in enumerate(rows):
-        if not isinstance(row, dict):
-            return _invalid(path, "invalid", f"authorization #{i} is not an object: nothing is authorized")
-        if set(row) - set(_ENTRY_FIELDS):
-            return _invalid(path, "invalid",
-                            f"authorization #{i} has unknown keys {sorted(set(row) - set(_ENTRY_FIELDS))} "
-                            f"(allowed: {list(_ENTRY_FIELDS)}): nothing is authorized")
-        try:
-            entries.append(Authorization(**{k: v for k, v in row.items() if k in _ENTRY_FIELDS}))
-        except (AuthorizationError, TypeError) as e:
-            return _invalid(path, "invalid", f"authorization #{i} is unusable ({e}): nothing is authorized")
-    return AuthorizationConfig(status="ok", path=path, context=AuthorizationContext(tuple(entries)))
+    raw, why, warns = _slurp(path)
+    if raw is None:
+        return _invalid(path, "unreadable", f"{CONFIG_VAR} {why}: nothing is authorized", warns)
+    return _parse(raw, path, warns)
 
 
-_CACHE: dict[str, tuple[tuple, AuthorizationConfig]] = {}
+_CACHE: dict[str, tuple[str, AuthorizationConfig]] = {}
 
 
 def authorization_config(env=None) -> AuthorizationConfig:
-    """`load_authorization` with the file's identity as the cache key, so a request path does not re-read
-    and re-parse the inventory on every alert while an edit on disk still takes effect on the next check.
-    Statting a small file per check is cheap; caching a stale allowlist after an operator tightened it is
-    not."""
-    path = str((os.environ if env is None else env).get(CONFIG_VAR, "") or "").strip()
+    """`load_authorization` with the file's CONTENT digest as the cache key.
+
+    Deliberately not `(mtime, size)`, which is the efficient answer and not a complete one. An edit that
+    leaves the length unchanged — one allowlisted address replaced by another of the same length — keeps the
+    size, and a tool that restores the old timestamp (a configuration-management apply, `cp -p`, an image
+    rebuild from a layer cache) keeps the mtime. The key would match, and the process would carry on
+    honouring a grant the operator had just revoked. For ordinary configuration a stale value is an
+    annoyance; here the stale direction is the dangerous one — a cache that never misses is a revocation
+    that never lands. So the key is sha256 of the bytes, and the bytes are read on every check: a file
+    bounded by MAX_CONFIG_BYTES costs less than being wrong about who is still authorized."""
+    env = os.environ if env is None else env
+    path = str(env.get(CONFIG_VAR, "") or "").strip()
     if not path:
         return load_authorization(env)
-    try:
-        st = Path(path).stat()
-        identity: tuple = (st.st_mtime_ns, st.st_size)
-    except OSError:
+    raw, why, warns = _slurp(path)
+    if raw is None:
         _CACHE.pop(path, None)
-        return load_authorization(env)
+        return _invalid(path, "unreadable", f"{CONFIG_VAR} {why}: nothing is authorized", warns)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     hit = _CACHE.get(path)
-    if hit is not None and hit[0] == identity:
+    if hit is not None and hit[0] == digest and hit[1].warnings == warns:
         return hit[1]
-    cfg = load_authorization(env)
-    _CACHE[path] = (identity, cfg)
+    cfg = _parse(raw, path, warns, digest)
+    _CACHE[path] = (digest, cfg)
     return cfg
 
 

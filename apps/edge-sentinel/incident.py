@@ -11,7 +11,7 @@ case model and the UI agree. Nothing here talks to CrowdSec; it consumes the dic
 from __future__ import annotations
 
 from . import attack
-from .authorization import AuthorizationContext, deployment_authorization
+from .authorization import AuthorizationContext, canonical_source, deployment_authorization
 from .evidence import (
     ActionReceipt,
     ActionRequest,
@@ -79,7 +79,12 @@ def _finding_from_observation(obs: SecurityObservation, evidence: EvidenceArtifa
     claim = f"Source {ip} matched CrowdSec scenario '{scenario}' (severity {sev})."
     if stood_down:
         rec = verdict.suppressions[0]
-        claim += (f" Stood down by operator authorization: {rec['principal']} ({rec['source']})"
+        # The address the decision actually covered, in the form a ban would have named it. The alert's own
+        # text stays quoted above — that is what was observed — but a stand-down that names no address is not
+        # attributable: `::ffff:203.0.113.7` and `203.0.113.7` are one host to the edge and two strings to
+        # whoever reads this finding in six weeks, so the claim carries the canonical one.
+        decided_on = canonical_source(ip) or ", ".join(rec.get("source_scope") or []) or "no address recorded"
+        claim += (f" Stood down by operator authorization: {rec['principal']} ({rec['source']}) for {decided_on}"
                   + (f", valid until {rec['expires_at']}" if rec.get("expires_at") else ", no expiry recorded")
                   + ".")
     return Finding(
