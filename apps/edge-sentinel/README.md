@@ -42,6 +42,33 @@ CrowdSec (OSS core, LAPI :8086) ──GET /v1/decisions (X-Api-Key)──┐
 | `Dockerfile` | slim-python image running `uvicorn app:app --port 8203`. |
 | `.env` | Written by `seed.py`: `CROWDSEC_LAPI_URL`, `CROWDSEC_BOUNCER_KEY`, `CROWDSEC_CONTAINER`, `CROWDSEC_FRONT_URL`. |
 
+## Detection claims, and their false positives
+
+`evaluation.py` scores the detection layer two ways, and the second half is the reason it exists:
+
+```bash
+PYTHONPATH=.:apps python -m edge-sentinel.evaluation --out /tmp/es.json   # exit 1 = a gate failed
+```
+
+| Claim | Measured (corpus v1, `corpus_digest` in the artifact) | What it does NOT mean |
+|-------|--------------------------------------------------------|------------------------|
+| ATT&CK scenario mapping: precision 1.0, recall 1.0, accuracy 1.0 over 48 labelled cases; 8.3% abstain | Frozen as `ATTACK_BASELINE`; any movement fails the gate | Not detection over real traffic — it scores name→technique mapping on a curated corpus |
+| 7 of 15 benign near-miss controls are flagged (fp_rate 0.467: 4/9 scenario, 3/6 injection) | Every one is named in `FP_LEDGER` with the responsible token (`scan`, `nmap`, `ssh-bf`, `crawl`, `leak`, `override`, `developer mode`) | Not a production false-positive rate: the controls are **adversarial near-misses by construction** — benign input chosen because it looks like a trigger |
+
+Three rules make the number hard to fake, and they are enforced by
+`test_evaluation_negative_controls.py`, not by discipline:
+
+1. every control carries provenance (`manual:` / `observed:` / `generated:`) — an unsourced case cannot
+   contribute to a green gate;
+2. a false positive that `FP_LEDGER` does not name fails the gate, and so does a ledger entry that stops
+   firing (a stale ledger means the detector outgrew its paperwork);
+3. the artifact carries `corpus_version` + `corpus_digest`, so "the numbers improved" is traceable to
+   "the corpus changed" — including to a deleted hard case.
+
+CI runs this on every push and PR (`tests.yml`) and uploads `edge-sentinel-evaluation.json`, including on
+a red run — a gate that destroys its own metrics on failure is a gate nobody can triage. Nothing here
+mitigates anything: a failed gate blocks a *claim*, never takes an action.
+
 ## CrowdSec bootstrap method (the one that worked)
 
 CrowdSec has **no rich web UI** and is **CLI-managed** via `cscli`. There are two read
