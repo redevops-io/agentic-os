@@ -19,6 +19,7 @@ mod signals;
 
 use launch::Running;
 use lifecycle::StopOutcome;
+use std::collections::HashSet;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use tauri::{Manager, State};
@@ -236,6 +237,204 @@ fn advanced_docker_purge() -> Result<String, String> {
     )
 }
 
+// ── Apps: checkable business-apps suite (opt-in; needs the docker plug + the bundled CLI) ─────
+//
+// Wired to deploy/apps/compose.yml's Compose profiles (one per domain agent; see that file's own
+// "PROFILES" header comment and tests/test_apps_compose_profiles.py for the invariant this relies on).
+// `docker_available()` above already gates whether the UI shows this section at all - the same bundled
+// `docker` binary serves both the pre-existing sidekick-devops buttons and this one.
+
+/// Static listing for the Apps screen's checkboxes. Labels and "tested against" paths are taken from
+/// deploy/apps/compose.yml's own descriptive comments next to each domain agent, not re-derived here.
+#[derive(serde::Serialize)]
+struct InstallableApp {
+    profile: &'static str,
+    label: &'static str,
+    tested_against: &'static [&'static str],
+}
+
+const INSTALLABLE_APPS: &[InstallableApp] = &[
+    InstallableApp {
+        profile: "revenue",
+        label: "Revenue — prospecting + next-best-action over Twenty CRM",
+        tested_against: &["apps/outreach-engine"],
+    },
+    InstallableApp {
+        profile: "intelligence",
+        label: "Intelligence — growth + BI + market-radar over Metabase",
+        tested_against: &["apps/growth-engine", "apps/market-radar"],
+    },
+    InstallableApp {
+        profile: "content",
+        label: "Content — content engine over Postiz",
+        tested_against: &["apps/social-autopilot"],
+    },
+    InstallableApp {
+        profile: "finance",
+        label: "Finance — billing + books financial-ops loop",
+        tested_against: &["apps/billing", "apps/books"],
+    },
+    InstallableApp {
+        profile: "customer-success",
+        label: "Customer Success — support + guide + lifecycle missions",
+        tested_against: &["apps/support", "apps/guide", "apps/lifecycle"],
+    },
+    InstallableApp {
+        profile: "security-compliance",
+        label: "Security & Compliance — multi-representation KYC + controls",
+        tested_against: &["apps/compliance", "apps/control-tower"],
+    },
+];
+
+fn agent_service_name(profile: &str) -> &'static str {
+    match profile {
+        "revenue" => "revenue-agent",
+        "intelligence" => "intelligence-agent",
+        "content" => "content-agent",
+        "finance" => "finance-agent",
+        "customer-success" => "customer-success",
+        "security-compliance" => "security-compliance",
+        _ => "",
+    }
+}
+
+#[tauri::command]
+fn list_installable_apps() -> Result<String, String> {
+    serde_json::to_string(INSTALLABLE_APPS).map_err(|e| e.to_string())
+}
+
+/// Resolves to the compose file staged inside the snap ($SNAP/apps/compose.yml); RDO_APPS_COMPOSE overrides
+/// for local dev. This feature is wired for the snap build only today (the user's own scoping decision) - a
+/// clear error here, not a guess, is the right failure mode for the non-snap builds.
+fn apps_compose_path() -> Result<String, String> {
+    if let Ok(p) = std::env::var("RDO_APPS_COMPOSE") {
+        return Ok(p);
+    }
+    if let Ok(snap) = std::env::var("SNAP") {
+        return Ok(format!("{snap}/apps/compose.yml"));
+    }
+    Err("the Apps screen needs RDO_APPS_COMPOSE (dev) or SNAP (the packaged snap build) set".to_string())
+}
+
+/// A writable `.env` for deploy/apps/compose.yml, generated once. The staged `.env.example` is a template with
+/// two required, no-default secrets (TWENTY_APP_SECRET, POSTIZ_JWT_SECRET) that Compose refuses to even
+/// interpolate without - confirmed: this breaks a plain `ps`, not just `up`. There is no terminal here for a
+/// user to `cp .env.example .env && edit`, so this generates them once into $SNAP_USER_COMMON (writable, kept
+/// across snap revisions), the same way bundle-bootstrap.sh generates the combined bundle's own credentials.
+fn apps_env_file() -> Result<String, String> {
+    let common = std::env::var("SNAP_USER_COMMON").map_err(|_| "SNAP_USER_COMMON is not set".to_string())?;
+    let env_path = std::path::Path::new(&common).join("apps").join(".env");
+    if env_path.exists() {
+        return Ok(env_path.to_string_lossy().into_owned());
+    }
+    let snap = std::env::var("SNAP").map_err(|_| "SNAP is not set".to_string())?;
+    let example = std::fs::read_to_string(format!("{snap}/apps/.env.example")).map_err(|e| e.to_string())?;
+    let gen_secret = || -> String {
+        let mut b = [0u8; 32];
+        getrandom::fill(&mut b).expect("system randomness");
+        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    };
+    let mut out = String::new();
+    for line in example.lines() {
+        if line.starts_with("TWENTY_APP_SECRET=") {
+            out.push_str(&format!("TWENTY_APP_SECRET={}\n", gen_secret()));
+        } else if line.starts_with("POSTIZ_JWT_SECRET=") {
+            out.push_str(&format!("POSTIZ_JWT_SECRET={}\n", gen_secret()));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if let Some(parent) = env_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&env_path, out).map_err(|e| e.to_string())?;
+    Ok(env_path.to_string_lossy().into_owned())
+}
+
+/// The `docker compose` plugin binary is not discovered as a `docker` subcommand inside the snap's confinement
+/// (the CLI's plugin search paths do not include $SNAP's own - confirmed by reproducing the exact failure in a
+/// real confined run: `docker compose ...` fails with "unknown shorthand flag: 'f' in -f" because `compose`
+/// itself is never recognised as a subcommand). Invoke the bundled plugin binary directly instead - it accepts
+/// identical arguments. In dev (no SNAP), fall back to the ordinary `docker compose` dispatch.
+fn compose_cli() -> (String, Vec<String>) {
+    if let Ok(snap) = std::env::var("SNAP") {
+        (format!("{snap}/usr/libexec/docker/cli-plugins/docker-compose"), vec![])
+    } else {
+        ("docker".to_string(), vec!["compose".to_string()])
+    }
+}
+
+/// The (program, base-args) every apps-compose invocation starts from: the compose dispatch (see
+/// `compose_cli`), `--env-file` (see `apps_env_file`) and `-f <compose file>`. Every caller appends its own
+/// subcommand after this.
+fn apps_compose_base() -> Result<(String, Vec<String>), String> {
+    let compose = apps_compose_path()?;
+    let env_file = apps_env_file()?;
+    let (prog, lead) = compose_cli();
+    let mut args = lead;
+    args.extend(["--env-file".to_string(), env_file, "-f".to_string(), compose]);
+    Ok((prog, args))
+}
+
+/// Which profiles are currently up, decided by whether each profile's own domain-agent service is running
+/// (not its shared OSS cores, which may be running for a different, still-active profile).
+#[tauri::command]
+fn apps_status() -> Result<String, String> {
+    let (prog, mut args) = apps_compose_base()?;
+    args.extend(["ps".to_string(), "--services".to_string(), "--status".to_string(), "running".to_string()]);
+    let out = run_wait(Command::new(&prog).args(&args))?;
+    let running: HashSet<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let active: Vec<&str> = INSTALLABLE_APPS
+        .iter()
+        .filter(|a| running.contains(agent_service_name(a.profile)))
+        .map(|a| a.profile)
+        .collect();
+    serde_json::to_string(&active).map_err(|e| e.to_string())
+}
+
+/// Apply the checked set: `docker compose --profile <each selected> up -d` brings up every selected
+/// profile's full dependency set (never a profile that wasn't selected); then, for anything that was
+/// running before and is no longer selected, stop (not remove) just that agent's own container. Shared
+/// OSS cores (e.g. Metabase, used by both `intelligence` and `finance`) are deliberately left running
+/// rather than guessed at - a full teardown of an app's data is a separate, future destructive action
+/// with its own confirmation, not folded into this one.
+#[tauri::command]
+fn apply_selected_apps(profiles: Vec<String>) -> Result<String, String> {
+    let known: Vec<&str> = INSTALLABLE_APPS.iter().map(|a| a.profile).collect();
+    for p in &profiles {
+        if !known.contains(&p.as_str()) {
+            return Err(format!("unknown app profile: {p}"));
+        }
+    }
+    let currently: Vec<String> = serde_json::from_str(&apps_status()?).map_err(|e| e.to_string())?;
+
+    let mut up_out = String::new();
+    if !profiles.is_empty() {
+        let (prog, mut up_args) = apps_compose_base()?;
+        for p in &profiles {
+            up_args.push("--profile".into());
+            up_args.push(p.clone());
+        }
+        up_args.push("up".into());
+        up_args.push("-d".into());
+        up_out = run_wait(Command::new(&prog).args(&up_args))?;
+    }
+
+    let mut stop_out = String::new();
+    for p in &currently {
+        if !profiles.contains(p) {
+            let svc = agent_service_name(p);
+            if !svc.is_empty() {
+                let (prog, mut stop_args) = apps_compose_base()?;
+                stop_args.extend(["stop".to_string(), svc.to_string()]);
+                stop_out += &run_wait(Command::new(&prog).args(&stop_args))?;
+            }
+        }
+    }
+    Ok(format!("{up_out}{stop_out}"))
+}
+
 /// The compiled Tauri context. A function (not inline in `main`) so the tests can inspect exactly
 /// what the build embedded: the configuration and the injected global API script.
 fn context() -> tauri::Context {
@@ -256,6 +455,9 @@ fn main() {
             advanced_docker_up,
             advanced_docker_down,
             advanced_docker_purge,
+            list_installable_apps,
+            apps_status,
+            apply_selected_apps,
             about::about_info,
             about::about_text
         ])

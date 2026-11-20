@@ -205,3 +205,50 @@ The amd64 snap, the Wayland session, a real GPU, `snap refresh` from a store cha
     packages and does not make the `.deb`/AppImage trustworthy outside the store.
 
 Nothing was uploaded, registered, released or reviewed by the store; the output in section 6 is from the local review tools only.
+
+## 8. The Apps screen: checkable business-apps install (O-SNAP-2, applied 2026-11-20)
+
+The owner decided, for the Snap specifically (cloud/remote deployments use a different path and were explicitly out of
+scope): add the `docker` plug and let the launcher's new "Apps" screen drive `docker compose` against
+`deploy/apps/compose.yml`'s profiled services (six domain agents, one Compose profile each — see that file's own
+"PROFILES" header comment). `snap/snapcraft.yaml`'s `plugs:` is now `[network, network-bind, docker]`.
+
+**What changed, and why, confirmed by building and running the real snap in a bare-metal Ubuntu 24.04 LXC container
+(not simulated):**
+
+* `docker` grants socket access only (confirmed again: strict confinement cannot exec a host binary at all) — a Docker
+  CLI and the `docker compose` plugin are bundled INTO the snap as exact-pinned `stage-packages`
+  (`docker.io=24.0.7-0ubuntu4`, `docker-compose-v2=2.24.6+ds1-0ubuntu2`, chosen and verified by downloading the real
+  `.deb`s from the noble archive and listing their contents — not guessed). `dockerd` itself is dropped via `prime`
+  (this snap never runs its own daemon; it only ever talks to the HOST's via the `docker` interface's socket).
+* **Real bug found and fixed**: `docker compose ...` is not discovered as a subcommand inside the snap's confinement
+  at all — reproduced exactly (`unknown shorthand flag: 'f' in -f`, because `compose` itself was never recognised).
+  Fixed by invoking the bundled plugin binary directly (`$SNAP/usr/libexec/docker/cli-plugins/docker-compose`), which
+  takes identical arguments; confirmed fixed in the same confined environment.
+* **Real bug found and fixed**: `deploy/apps/compose.yml` has two required-with-no-default secrets
+  (`TWENTY_APP_SECRET`, `POSTIZ_JWT_SECRET`); Compose refuses to interpolate the file at all without them (breaks
+  even a plain `ps`, not just `up`) — reproduced exactly in the real launcher window. There is no terminal here for
+  the usual `cp .env.example .env && edit` flow, so the launcher now generates both once into
+  `$SNAP_USER_COMMON/apps/.env` (writable, kept across snap revisions), the same pattern
+  `deploy/combined/bundle-bootstrap.sh` already uses for that bundle's own credentials.
+* **Correction of an earlier claim in this same change**: bundling `docker` does **not** make the pre-existing
+  "Advanced · local containers" buttons (`deploy/sidekick-devops`, a different, unrelated bundle) work under the
+  snap. They hit the same subcommand-discovery problem (never fixed for them, only the new Apps commands were), and
+  separately `deploy/sidekick-devops/` was never staged into the snap at all. `docker_available()` does return true
+  now, so those buttons are visible per the existing UI gate — clicking them still fails, for both reasons. Not fixed
+  here; said so plainly in `snapcraft.yaml`'s own comment rather than leaving the earlier, untested claim standing.
+* **Verified end-to-end, up to the point a real Docker daemon is required**: installed the rebuilt snap for real,
+  launched the actual GUI under Xvfb, clicked "Apps", watched it correctly generate the `.env`, correctly interpolate
+  the compose file, correctly resolve the bundled compose plugin binary, and correctly reach Docker's own real error —
+  `Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?` — because this
+  test container has no Docker daemon at all (confirmed separately: no `docker` package installed at the system
+  level, no `/var/run/docker.sock`) and the `docker` interface has no slot to connect to without one. This is the
+  correct, expected failure for this test environment, not a defect; a full live "containers actually start" test
+  needs a host with a real Docker daemon, which was not available for this round.
+* The Store's own local `review-tools` (same tool as section 6) still reports 0 errors and 0 `manual_review` entries
+  against the rebuilt snap — the privileged-interface review trigger is a server-side determination at real upload,
+  not something the local tool simulates.
+
+**Still true, unchanged by this work**: `docker` is a snapd "super-privileged" interface, not auto-connected — a real
+user (including the owner) needs a Store manual-review grant before `snap connect railsapps:docker` can succeed. This
+is an external dependency with its own timeline, the same shape as the Microsoft Partner Center account.

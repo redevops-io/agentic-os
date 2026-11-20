@@ -9,11 +9,27 @@
 # Confinement is STRICT, with the smallest interface set the app needs and nothing more:
 #   network       the control plane calls hosted-model / connector APIs the user configures (outbound)
 #   network-bind  the control plane listens on 127.0.0.1 (the local UI + API)
+#   docker        owner decision O-SNAP-2 (docs/release/SNAP_STORE.md), applied 2026-11-20: lets the "Apps" screen
+#                 drive `docker compose` against deploy/apps/compose.yml's profiled services. super-privileged -
+#                 not auto-connected; the user runs `snap connect railsapps:docker` themselves, and it needs a Snap
+#                 Store manual-review grant before that connect can succeed for anyone, including the owner. Grants
+#                 socket access ONLY (confirmed: a strict snap cannot exec a host binary at all), which is why the
+#                 CLI below is bundled INTO the snap rather than assumed present on the host.
 #   + the `gnome` extension's own plugs (desktop, desktop-legacy, gsettings, opengl, wayland, x11) for the GTK/WebKit window
-# NOT requested: home, removable-media, docker, system-files, ssh-keys, password-manager-service, process-control,
-# classic confinement. The launcher's optional "advanced containers" buttons run `docker compose` on the HOST; inside a
-# strict snap there is no docker binary and no docker socket, so they fail closed with "failed to launch" (documented
-# owner decision O-SNAP-2 in docs/release/SNAP_STORE.md).
+# NOT requested: home, removable-media, system-files, ssh-keys, password-manager-service, process-control,
+# classic confinement. CORRECTION (checked in a real confined run, not assumed): bundling `docker` does NOT make
+# the launcher's pre-existing "Advanced · local containers" buttons (a different, unrelated bundle -
+# deploy/sidekick-devops, Sidekick + observability) work under the snap. Two separate reasons, neither fixed by
+# this change: `docker compose` is not discovered as a subcommand inside the snap's confinement at all (the CLI's
+# plugin search paths do not include $SNAP's own - the new Apps commands in main.rs work around this by invoking
+# the bundled compose plugin binary directly; advanced_docker_up/down/purge were not changed and still dispatch
+# through `docker compose`, so they still fail this way), and separately `deploy/sidekick-devops/` itself is not
+# staged into the snap at all (only deploy/apps/ is, for the Apps screen). `docker_available()` does return true
+# under the snap now (a real, bundled `docker` binary exists on PATH), which makes those buttons visible per the
+# existing UI gate - clicking them still fails, for the two reasons above. No `SNAP` env-var kill-switch exists
+# in main.rs (docs/release/SNAP_STORE.md's O-SNAP-4 was deliberately not taken) - fixing this properly (either
+# wiring sidekick-devops into the snap the same way deploy/apps/ was, or hiding those buttons under SNAP) is
+# follow-up work, not done here.
 name: railsapps                     # registered by the owner on the Snap Store under their account (`snapcraft register railsapps`)
 title: Agentic Apps R0-prime
 base: core24
@@ -22,7 +38,9 @@ summary: Governed AI control plane - your apps as one system (private R0-prime b
 description: |
   Agentic Apps R0-prime runs a small control plane on your own computer (127.0.0.1 only) and shows its pages in
   your web browser. Connect apps, run missions across them, approve the consequential steps. Bring your own model.
-  No Docker required. Private, unsigned build for testing; not a release.
+  Docker is not required for the control plane itself; an optional Apps screen can pull and run the tested
+  business-apps suite via a bundled Docker CLI, once you grant the docker interface. Private, unsigned build for
+  testing; not a release.
 grade: devel                        # `stable` only when the owner decides to release; the store refuses devel on stable/candidate
 confinement: strict
 platforms:
@@ -38,7 +56,7 @@ apps:
   railsapps:
     command: bin/agentic-apps-snap
     extensions: [gnome]
-    plugs: [network, network-bind]
+    plugs: [network, network-bind, docker]
 
 parts:
   app:
@@ -64,7 +82,26 @@ parts:
       - libwebkit2gtk-4.1-0
       - libayatana-appindicator3-1
       - xdg-utils
+      # Pinned exact versions (verified present in the core24/noble archive, 2026-11-20 - see
+      # docs/release/SNAP_STORE.md's O-SNAP-2 update for how these were chosen and confirmed). docker.io also pulls
+      # in dockerd, which this snap never runs (it only ever talks to the HOST's daemon via the docker interface's
+      # socket) - dropped below in `prime`, along with man pages/docs/completions/systemd units nothing here uses.
+      - docker.io=24.0.7-0ubuntu4
+      - docker-compose-v2=2.24.6+ds1-0ubuntu2
+    prime:
+      - -usr/bin/dockerd
+      - -etc/docker
+      - -usr/lib/systemd/system/docker.service
+      - -usr/lib/systemd/system/docker.socket
+      - -usr/share/bash-completion/completions/docker
+      - -usr/share/doc/docker.io
+      - -usr/share/docker.io
+      - -usr/share/lintian/overrides/docker.io
+      - -usr/share/man/man1/docker-*
     override-build: |
       set -eux
       sh "$CRAFT_PART_SRC/snap/local/build-payload.sh" "$CRAFT_PART_SRC" "$CRAFT_PART_BUILD" "$CRAFT_PART_INSTALL"
+      install -Dm644 "$CRAFT_PART_SRC/deploy/apps/compose.yml" "$CRAFT_PART_INSTALL/apps/compose.yml"
+      install -Dm644 "$CRAFT_PART_SRC/deploy/apps/Caddyfile" "$CRAFT_PART_INSTALL/apps/Caddyfile"
+      install -Dm644 "$CRAFT_PART_SRC/deploy/apps/.env.example" "$CRAFT_PART_INSTALL/apps/.env.example"
       craftctl set version="$(python3 -I "$CRAFT_PART_SRC/packaging/tools/identity.py" get version)"

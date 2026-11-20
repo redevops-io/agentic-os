@@ -20,19 +20,23 @@ def test_confinement_is_strict_and_the_grade_is_devel():
     assert SNAP["base"] == "core24"
 
 
-def test_the_only_declared_interfaces_are_network_and_network_bind():
+def test_the_only_declared_interfaces_are_network_network_bind_and_docker():
     apps = SNAP["apps"]
     assert len(apps) == 1
     (app,) = apps.values()
-    assert sorted(app["plugs"]) == ["network", "network-bind"], app["plugs"]
+    # docker added 2026-11-20, owner decision O-SNAP-2 (docs/release/SNAP_STORE.md) - super-privileged, not
+    # auto-connected, needs a Store manual-review grant before `snap connect railsapps:docker` can succeed.
+    assert sorted(app["plugs"]) == ["docker", "network", "network-bind"], app["plugs"]
     assert app["extensions"] == ["gnome"], "the gnome extension adds desktop/wayland/x11/opengl/gsettings and nothing privileged"
     assert "plugs" not in SNAP or not SNAP["plugs"], "no top-level plug declarations"
     assert "slots" not in SNAP and "hooks" not in SNAP
 
 
-def test_no_privileged_interface_or_classic_anywhere_in_the_snap_sources():
+def test_no_other_privileged_interface_or_classic_anywhere_in_the_snap_sources():
+    """docker is the one deliberate exception (test above); every other privileged interface or classic
+    confinement must still never appear anywhere in this file, by accident or otherwise."""
     text = (ROOT / "snap" / "snapcraft.yaml").read_text(encoding="utf-8")
-    for forbidden in ("classic", "docker", "home:", "removable-media", "system-files", "ssh-keys", "process-control",
+    for forbidden in ("classic", "home:", "removable-media", "system-files", "ssh-keys", "process-control",
                       "password-manager-service", "personal-files", "devmode", "login-session-control"):
         # the header comment names what is NOT requested; only non-comment lines count
         live = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]

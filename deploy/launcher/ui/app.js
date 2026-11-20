@@ -89,8 +89,68 @@
   };
   legacyNote().then((n) => { if (n) say(out.textContent + n); });
   invoke("docker_available").then((ok) => {
-    if (ok) $("advanced").hidden = false;
+    if (ok) { $("advanced").hidden = false; $("open-apps").hidden = false; }
   }).catch(() => {});
+
+  // ── Apps: checkable business-apps suite ───────────────────────────────────────────────
+  // list_installable_apps (static metadata) and apps_status (which profiles are up) come from the
+  // launcher's own Rust commands, wired to deploy/apps/compose.yml's profiles - see that file's
+  // "PROFILES" header comment. Nothing here parses or renders anything from the Docker output itself.
+  const appsSetStatus = (t) => { $("apps-status").textContent = t; };
+  const appsShowError = (message) => {
+    const box = $("apps-error");
+    box.replaceChildren(el("p", { text: message }));
+    box.hidden = false;
+    appsSetStatus("");
+  };
+
+  const loadApps = async () => {
+    $("apps-error").hidden = true;
+    $("apps-list").replaceChildren();
+    appsSetStatus("Loading apps…");
+    let apps, active;
+    try {
+      apps = JSON.parse(await invoke("list_installable_apps"));
+      active = new Set(JSON.parse(await invoke("apps_status")));
+    } catch (e) { appsShowError("Could not load the apps list: " + e); return; }
+    for (const a of apps) {
+      const id = "app-" + a.profile;
+      const cb = el("input", { type: "checkbox", id, name: "profile", value: a.profile });
+      if (active.has(a.profile)) cb.checked = true;
+      const label = el("label", { for: id, class: "app-row" },
+        cb,
+        el("span", { class: "app-label", text: a.label }),
+        el("span", { class: "note", text: "Tested against " + a.tested_against.join(", ") }));
+      $("apps-list").append(label);
+    }
+    appsSetStatus("");
+  };
+
+  $("apps-apply").onclick = async () => {
+    const checked = Array.from($("apps-list").querySelectorAll('input[name="profile"]:checked')).map((i) => i.value);
+    appsSetStatus("Applying…");
+    $("apps-apply").disabled = true;
+    try {
+      await invoke("apply_selected_apps", { profiles: checked });
+      appsSetStatus("Applied.");
+    } catch (e) { appsShowError("Could not apply: " + e); }
+    finally { $("apps-apply").disabled = false; }
+  };
+
+  const showApps = () => {
+    disarmPurge(false);
+    $("view-main").hidden = true;
+    $("view-apps").hidden = false;
+    $("apps-title").focus();
+    loadApps();
+  };
+  const hideApps = () => {
+    $("view-apps").hidden = true;
+    $("view-main").hidden = false;
+    $("open-apps").focus();
+  };
+  $("open-apps").onclick = showApps;
+  $("apps-back").onclick = hideApps;
 
   // ── About / Legal ──────────────────────────────────────────────────────────────────────
   // Data comes from two launcher commands that read fixed files of the app's own Licenses folder
@@ -418,5 +478,6 @@
     if (ev.key !== "Escape") return;
     if (!$("viewer").hidden) closeViewer();
     else if (!$("view-about").hidden) hideAbout();
+    else if (!$("view-apps").hidden) hideApps();
   });
 })();
