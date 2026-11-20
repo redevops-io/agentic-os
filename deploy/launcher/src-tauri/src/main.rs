@@ -316,6 +316,42 @@ fn apps_compose_path() -> Result<String, String> {
     Err("the Apps screen needs RDO_APPS_COMPOSE (dev) or SNAP (the packaged snap build) set".to_string())
 }
 
+/// A writable `.env` for deploy/apps/compose.yml, generated once. The staged `.env.example` is a template with
+/// two required, no-default secrets (TWENTY_APP_SECRET, POSTIZ_JWT_SECRET) that Compose refuses to even
+/// interpolate without - confirmed: this breaks a plain `ps`, not just `up`. There is no terminal here for a
+/// user to `cp .env.example .env && edit`, so this generates them once into $SNAP_USER_COMMON (writable, kept
+/// across snap revisions), the same way bundle-bootstrap.sh generates the combined bundle's own credentials.
+fn apps_env_file() -> Result<String, String> {
+    let common = std::env::var("SNAP_USER_COMMON").map_err(|_| "SNAP_USER_COMMON is not set".to_string())?;
+    let env_path = std::path::Path::new(&common).join("apps").join(".env");
+    if env_path.exists() {
+        return Ok(env_path.to_string_lossy().into_owned());
+    }
+    let snap = std::env::var("SNAP").map_err(|_| "SNAP is not set".to_string())?;
+    let example = std::fs::read_to_string(format!("{snap}/apps/.env.example")).map_err(|e| e.to_string())?;
+    let gen_secret = || -> String {
+        let mut b = [0u8; 32];
+        getrandom::fill(&mut b).expect("system randomness");
+        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    };
+    let mut out = String::new();
+    for line in example.lines() {
+        if line.starts_with("TWENTY_APP_SECRET=") {
+            out.push_str(&format!("TWENTY_APP_SECRET={}\n", gen_secret()));
+        } else if line.starts_with("POSTIZ_JWT_SECRET=") {
+            out.push_str(&format!("POSTIZ_JWT_SECRET={}\n", gen_secret()));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if let Some(parent) = env_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&env_path, out).map_err(|e| e.to_string())?;
+    Ok(env_path.to_string_lossy().into_owned())
+}
+
 /// The `docker compose` plugin binary is not discovered as a `docker` subcommand inside the snap's confinement
 /// (the CLI's plugin search paths do not include $SNAP's own - confirmed by reproducing the exact failure in a
 /// real confined run: `docker compose ...` fails with "unknown shorthand flag: 'f' in -f" because `compose`
@@ -329,14 +365,24 @@ fn compose_cli() -> (String, Vec<String>) {
     }
 }
 
+/// The (program, base-args) every apps-compose invocation starts from: the compose dispatch (see
+/// `compose_cli`), `--env-file` (see `apps_env_file`) and `-f <compose file>`. Every caller appends its own
+/// subcommand after this.
+fn apps_compose_base() -> Result<(String, Vec<String>), String> {
+    let compose = apps_compose_path()?;
+    let env_file = apps_env_file()?;
+    let (prog, lead) = compose_cli();
+    let mut args = lead;
+    args.extend(["--env-file".to_string(), env_file, "-f".to_string(), compose]);
+    Ok((prog, args))
+}
+
 /// Which profiles are currently up, decided by whether each profile's own domain-agent service is running
 /// (not its shared OSS cores, which may be running for a different, still-active profile).
 #[tauri::command]
 fn apps_status() -> Result<String, String> {
-    let compose = apps_compose_path()?;
-    let (prog, lead) = compose_cli();
-    let mut args = lead;
-    args.extend(["-f".to_string(), compose.clone(), "ps".to_string(), "--services".to_string(), "--status".to_string(), "running".to_string()]);
+    let (prog, mut args) = apps_compose_base()?;
+    args.extend(["ps".to_string(), "--services".to_string(), "--status".to_string(), "running".to_string()]);
     let out = run_wait(Command::new(&prog).args(&args))?;
     let running: HashSet<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     let active: Vec<&str> = INSTALLABLE_APPS
@@ -355,7 +401,6 @@ fn apps_status() -> Result<String, String> {
 /// with its own confirmation, not folded into this one.
 #[tauri::command]
 fn apply_selected_apps(profiles: Vec<String>) -> Result<String, String> {
-    let compose = apps_compose_path()?;
     let known: Vec<&str> = INSTALLABLE_APPS.iter().map(|a| a.profile).collect();
     for p in &profiles {
         if !known.contains(&p.as_str()) {
@@ -364,11 +409,9 @@ fn apply_selected_apps(profiles: Vec<String>) -> Result<String, String> {
     }
     let currently: Vec<String> = serde_json::from_str(&apps_status()?).map_err(|e| e.to_string())?;
 
-    let (prog, lead) = compose_cli();
     let mut up_out = String::new();
     if !profiles.is_empty() {
-        let mut up_args: Vec<String> = lead.clone();
-        up_args.extend(["-f".to_string(), compose.clone()]);
+        let (prog, mut up_args) = apps_compose_base()?;
         for p in &profiles {
             up_args.push("--profile".into());
             up_args.push(p.clone());
@@ -383,8 +426,8 @@ fn apply_selected_apps(profiles: Vec<String>) -> Result<String, String> {
         if !profiles.contains(p) {
             let svc = agent_service_name(p);
             if !svc.is_empty() {
-                let mut stop_args = lead.clone();
-                stop_args.extend(["-f".to_string(), compose.clone(), "stop".to_string(), svc.to_string()]);
+                let (prog, mut stop_args) = apps_compose_base()?;
+                stop_args.extend(["stop".to_string(), svc.to_string()]);
                 stop_out += &run_wait(Command::new(&prog).args(&stop_args))?;
             }
         }
