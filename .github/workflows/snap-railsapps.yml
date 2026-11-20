@@ -1,5 +1,5 @@
 # Builds, locally review-tools-checks and (on explicit confirmation) publishes the Ubuntu Snap Store package
-# `raislapps` (registered by the owner under their Snap Store account, 2026-11-19; see docs/release/SNAP_STORE.md).
+# `railsapps` (registered by the owner under their Snap Store account, 2026-11-19; see docs/release/SNAP_STORE.md).
 # Manual dispatch only, from the protected branch release/0.6.0, same shape as oci-redevops-projects.yml.
 #
 # Known, unresolved defect (SNAP-D1, docs/release/SNAP_STORE.md section 6): the launcher window has been observed
@@ -13,7 +13,7 @@
 # Credentials: SNAPCRAFT_STORE_CREDENTIALS (an exported `snapcraft export-login` token) must exist as a GitHub
 # Actions secret on this repository, created by the owner from their own already-authenticated Snap Store session.
 # This workflow never logs it, never derives it, and the publish job is skipped entirely if it is not set.
-name: snap-raislapps
+name: snap-railsapps
 on:
   workflow_dispatch:
     inputs:
@@ -26,7 +26,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: snap-raislapps
+  group: snap-railsapps
   cancel-in-progress: false
 jobs:
   build:
@@ -81,8 +81,8 @@ jobs:
       - name: Installability smoke test (install/remove only; the GUI itself is not exercised here - see SNAP-D1)
         run: |
           sudo snap install --dangerous ./*.snap
-          snap list raislapps
-          sudo snap remove --purge raislapps
+          snap list railsapps
+          sudo snap remove --purge railsapps
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
@@ -129,7 +129,7 @@ jobs:
         if: env.publish_skipped != '1'
         run: |
           {
-            echo "### raislapps $TAG"
+            echo "### railsapps $TAG"
             echo "- channel: edge (grade: devel; stable/candidate refused by the Store)"
             echo "- known defect at upload time: SNAP-D1, launcher window blank under strict confinement (docs/release/SNAP_STORE.md section 6) - not re-verified by this workflow"
           } >> "$GITHUB_STEP_SUMMARY"

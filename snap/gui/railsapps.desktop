@@ -2,7 +2,7 @@
 Type=Application
 Name=Agentic Apps R0-prime
 Comment=Governed AI control plane - your apps as one system (private R0-prime build)
-Exec=raislapps
+Exec=railsapps
 Icon=${SNAP}/meta/gui/icon.png
 Terminal=false
 Categories=Development;
