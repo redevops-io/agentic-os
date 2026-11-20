@@ -405,7 +405,7 @@ class AuthorizationConfig:
     """What the deployment's authorization file currently contributes. `status` is never inferred from the
     entry count: 'unconfigured' (no file named) and 'invalid' (a file that could not be read) both suppress
     nothing and must still be distinguishable in a health report."""
-    status: str                                     # unconfigured | ok | unreadable | invalid
+    status: str                                     # unconfigured | ok | unreadable | invalid | unsafe_permissions
     detail: str = ""
     path: str = ""
     context: AuthorizationContext = field(default=NO_AUTHORIZATION)
@@ -473,38 +473,48 @@ def _parse(raw: str, path: str, warnings: tuple[str, ...] = (), digest: str = ""
                                warnings=tuple(warnings), digest=digest)
 
 
-def _permissions_warnings(path: str) -> tuple[str, ...]:
-    """What an allowlist is worth depends on who can write it. A file any local account can edit is a
-    suppression any local account can order — which is precisely what requiring a named principal and a
-    provenance string was supposed to make impossible. Nothing here refuses to load in that case (the file
-    may legitimately be group-writable on a shared CM host), but the health report says it, because an
-    operator who believes the list is theirs alone is making decisions on a false premise."""
-    out: list[str] = []
+def _permissions_check(path: str) -> tuple[tuple[str, ...], str]:
+    """(group-writable warnings, world-writable rejection detail or "").
+
+    Group-writable only warns: the file may legitimately be group-writable on a shared CM host, where "the
+    group" is a controlled set of operators or tooling, so the health report says it and loading proceeds.
+    World-writable is not that case — mode 0o002 means any unrelated local account on the box, not just the
+    owning group, can rewrite the file — which is exactly what requiring a named principal and a provenance
+    string was supposed to make impossible. A warning that never limits who can write is not a control, so
+    this is refused outright rather than merely reported."""
+    warns: list[str] = []
+    rejects: list[str] = []
     target = Path(path)
     for label, p in (("the authorization file", target), ("the directory holding it", target.parent)):
         try:
             mode = _stat.S_IMODE(os.stat(p).st_mode)
         except OSError:
             continue
-        if mode & 0o022:
-            out.append(f"{label} is writable by any local user (mode {mode:o}): anyone local can add a suppression")
-    return tuple(out)
+        if mode & 0o002:
+            rejects.append(f"{label} is world-writable (mode {mode:o}): any local account could add a suppression")
+        elif mode & 0o020:
+            warns.append(f"{label} is group-writable (mode {mode:o}): anyone in the owning group can add a suppression")
+    return tuple(warns), "; ".join(rejects)
 
 
-def _slurp(path: str) -> tuple[str | None, str, tuple[str, ...]]:
-    """(the text, why-not, warnings). Read whole and decoded here so that the bytes that were hashed are the
-    bytes that were parsed — a re-read further down could see a different file than the one digested."""
-    warns = _permissions_warnings(path)
+def _slurp(path: str) -> tuple[str | None, str, tuple[str, ...], str]:
+    """(the text, why-not, warnings, status-on-failure). Read whole and decoded here so that the bytes that
+    were hashed are the bytes that were parsed — a re-read further down could see a different file than the
+    one digested. A world-writable file or directory is rejected before the bytes are even opened: its
+    content doesn't matter if any unrelated local account can rewrite it out from under the check."""
+    warns, reject = _permissions_check(path)
+    if reject:
+        return None, reject, (), "unsafe_permissions"
     try:
         data = Path(path).read_bytes()
     except OSError as e:
-        return None, f"names a file that cannot be read ({e.strerror or type(e).__name__})", warns
+        return None, f"names a file that cannot be read ({e.strerror or type(e).__name__})", warns, "unreadable"
     if len(data) > MAX_CONFIG_BYTES:
-        return None, f"is {len(data)} bytes, over the {MAX_CONFIG_BYTES}-byte cap", warns
+        return None, f"is {len(data)} bytes, over the {MAX_CONFIG_BYTES}-byte cap", warns, "unreadable"
     try:
-        return data.decode("utf-8"), "", warns
+        return data.decode("utf-8"), "", warns, "ok"
     except UnicodeDecodeError as e:
-        return None, f"is not UTF-8 text ({e.reason})", warns
+        return None, f"is not UTF-8 text ({e.reason})", warns, "unreadable"
 
 
 def load_authorization(env=None) -> AuthorizationConfig:
@@ -513,9 +523,9 @@ def load_authorization(env=None) -> AuthorizationConfig:
     path = str(env.get(CONFIG_VAR, "") or "").strip()
     if not path:
         return _invalid("", "unconfigured", f"{CONFIG_VAR} is not set: nothing is authorized, every detection stands")
-    raw, why, warns = _slurp(path)
+    raw, why, warns, status = _slurp(path)
     if raw is None:
-        return _invalid(path, "unreadable", f"{CONFIG_VAR} {why}: nothing is authorized", warns)
+        return _invalid(path, status, f"{CONFIG_VAR} {why}: nothing is authorized", warns)
     return _parse(raw, path, warns)
 
 
@@ -537,10 +547,10 @@ def authorization_config(env=None) -> AuthorizationConfig:
     path = str(env.get(CONFIG_VAR, "") or "").strip()
     if not path:
         return load_authorization(env)
-    raw, why, warns = _slurp(path)
+    raw, why, warns, status = _slurp(path)
     if raw is None:
         _CACHE.pop(path, None)
-        return _invalid(path, "unreadable", f"{CONFIG_VAR} {why}: nothing is authorized", warns)
+        return _invalid(path, status, f"{CONFIG_VAR} {why}: nothing is authorized", warns)
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     hit = _CACHE.get(path)
     if hit is not None and hit[0] == digest and hit[1].warnings == warns:

@@ -632,16 +632,29 @@ def test_a_binary_authorization_file_fails_closed_instead_of_raising(monkeypatch
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
-def test_an_allowlist_any_local_user_can_edit_is_reported(monkeypatch, tmp_path):
-    """What an allowlist is worth depends on who can write it: a file any local account can edit is a
-    suppression any local account can order, which is exactly what a named principal and a provenance string
-    were meant to make impossible. It still loads — a group-writable file on a shared CM host is legitimate
-    — but the health report says the list is not theirs alone."""
+def test_a_world_writable_allowlist_is_rejected_outright(monkeypatch, tmp_path):
+    """A file any unrelated local account can edit is a suppression any unrelated local account can order,
+    which is exactly what a named principal and a provenance string were meant to make impossible. Unlike
+    group-writable, this is not a legitimate shared-CM-host pattern — there is no bounded set of writers to
+    trust — so it fails closed instead of merely being noted in the health report."""
     path = _write(tmp_path, [_grant(source_scope=(ALIEN,))])
     os.chmod(path, 0o666)
     cfg = _use(monkeypatch, path)
+    assert cfg.status == "unsafe_permissions" and not cfg.usable and cfg.context.entries == ()
+    assert "world-writable" in cfg.detail
+    assert [a.capability for a in _offers(*_ingest())] == ["sentinel.block_ip"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_group_writable_allowlist_still_loads_and_is_reported(monkeypatch, tmp_path):
+    """Group-writable (no world-write bit) is kept as a warning, not a rejection: a shared CM host with a
+    controlled owning group writing this file is a legitimate deployment shape, and the health report still
+    says the list is not the operator's alone."""
+    path = _write(tmp_path, [_grant(source_scope=(ALIEN,))])
+    os.chmod(path, 0o664)
+    cfg = _use(monkeypatch, path)
     assert cfg.status == "ok" and len(cfg.context) == 1
-    assert any("writable by any local user" in w for w in cfg.health()["warnings"]), cfg.health()
+    assert any("group-writable" in w for w in cfg.health()["warnings"]), cfg.health()
 
 
 @pytest.mark.skipif(ipguard is None, reason="ipguard is not in this tree")
