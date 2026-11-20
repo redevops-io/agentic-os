@@ -1,0 +1,80 @@
+# Pushes ONLY the Snap Store listing text (summary/description/icon) for `railsapps` from this branch's
+# snap/snapcraft.yaml. This does NOT build or publish a new installable revision - `snapcraft upload-metadata`
+# reads those three fields out of a .snap file's own meta/snap.yaml and syncs them to the Store's cached listing
+# page, which snap-railsapps.yml's build+publish job never touches (confirmed: publishing revision 3/4 on
+# 2026-11-20 left `snap info railsapps`'s summary/description showing the OLD text, even though the real
+# published package's own meta/snap.yaml already had the new text - two separate data sources, see
+# docs/release/SNAP_STORE.md).
+#
+# To avoid a full ~15-40 minute Tauri rebuild just to change two text fields, this takes the ALREADY-PUBLISHED
+# edge snap, patches only its meta/snap.yaml summary/description in place from this branch's snap/snapcraft.yaml,
+# and feeds that patched copy to `snapcraft upload-metadata`. The patched file is never installed or uploaded as
+# a revision - only read back out for its yaml text.
+#
+# Credentials: SNAPCRAFT_STORE_CREDENTIALS, same secret and same owner-authenticated-export origin as
+# snap-railsapps.yml. Skipped entirely if it is not set.
+name: snap-railsapps-metadata
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type exactly: UPDATE STORE LISTING TEXT FOR railsapps"
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: snap-railsapps-metadata
+  cancel-in-progress: false
+jobs:
+  push-metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - name: Check the confirmation
+        run: |
+          [ "$CONFIRM" = "UPDATE STORE LISTING TEXT FOR railsapps" ] || { echo "confirmation does not match: type UPDATE STORE LISTING TEXT FOR railsapps"; exit 1; }
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Refuse without store credentials
+        run: |
+          if [ -z "${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}" ]; then
+            echo "SNAPCRAFT_STORE_CREDENTIALS is not set on this repository; nothing to push."
+            echo "push_skipped=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install snapcraft and squashfs-tools
+        if: env.push_skipped != '1'
+        run: |
+          sudo snap install snapcraft --classic
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq squashfs-tools python3-yaml
+
+      - name: "Download the current edge snap and patch its meta/snap.yaml summary+description from this branch"
+        if: env.push_skipped != '1'
+        run: |
+          set -eux
+          sudo snap download railsapps --channel=edge --basename=current-edge
+          unsquashfs -d extracted current-edge.snap
+          python3 -I - <<'PY'
+          import yaml
+          src = yaml.safe_load(open("snap/snapcraft.yaml"))
+          dst_path = "extracted/meta/snap.yaml"
+          dst = yaml.safe_load(open(dst_path))
+          dst["summary"] = src["summary"]
+          dst["description"] = src["description"]
+          with open(dst_path, "w") as f:
+              yaml.safe_dump(dst, f, sort_keys=False)
+          PY
+          mksquashfs extracted metadata-carrier.snap -noappend -comp xz
+          ls -la metadata-carrier.snap
+
+      - name: "Push the listing text to the Store (summary/description/icon only; no new revision)"
+        if: env.push_skipped != '1'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: snapcraft upload-metadata metadata-carrier.snap --force
