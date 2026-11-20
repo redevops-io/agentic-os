@@ -237,6 +237,13 @@ FP_LEDGER: dict[str, str] = {
     "crowdsecurity/http-do-not-crawl-policy": "crawl",
 }
 
+#: The ledger is a RATCHET THAT ONLY TURNS ONE WAY. Every entry in it is a detection that fires on benign
+#: input, so an improvement is measured by the ledger getting shorter — and a new acknowledged false
+#: positive must be a visible line in the diff (bumping this constant), never the quiet cost of a rule that
+#: got broader. Fixing one of these means deleting its entry AND lowering this number in the same change;
+#: CI then proves the shrink instead of taking it on trust. It is a ceiling, not a target: the target is 0.
+FP_LEDGER_CEILING = 7
+
 
 def corpus_digest() -> str:
     """Content hash of the measured corpus (positives + controls + version). The artifact carries it so a
@@ -252,10 +259,13 @@ def corpus_digest() -> str:
     return sha256_hex(canonical_json(payload))
 
 
-def evaluate_negative_controls(controls=NEGATIVE_CONTROLS, detector=_scenario_tags, basis_of=None) -> dict:
+def evaluate_negative_controls(controls=None, detector=_scenario_tags, basis_of=None) -> dict:
     """Flag-rate over negative controls. `detector(input) -> tags` — anything that returns a non-empty
     result on a benign control is a false positive, and the record names both the tags it produced and the
     tokens responsible (`basis_of`; the tags are their own basis when none is given)."""
+    # Resolved at call time, not bound as a default: a default captures the list as it was at import, so a
+    # test that patches NEGATIVE_CONTROLS to add a hard case would measure the OLD corpus and pass anyway.
+    controls = NEGATIVE_CONTROLS if controls is None else controls
     cases = []
     for c in controls:
         tags = tuple(detector(c.input))
@@ -313,6 +323,10 @@ def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
     FP_LEDGER key that matches no control (renamed control = silently un-accounted), (6) more unaccounted
     false positives than `max_unaccounted_fp`. A known false positive is allowed only as a named token
     with a reason; an unaccounted one is a broken measurement, not a pass with a note.
+
+    A seventh check is a ratchet rather than a correctness test: the ledger may not grow past
+    `FP_LEDGER_CEILING`. It is here because the honest-looking failure mode of this whole apparatus is a
+    PR that broadens a rule, adds a ledger line for the fallout, and reports gate PASS.
     """
     ledger = FP_LEDGER if fp_ledger is None else fp_ledger
     failures: list[str] = []
@@ -343,9 +357,16 @@ def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
     if unaccounted > max_unaccounted_fp:
         failures.append(f"{unaccounted} unaccounted false positive(s) over {total_n} benign controls "
                         f"(unaccounted fp rate {unaccounted_rate}) — bound is {max_unaccounted_fp}")
+    if len(ledger) > FP_LEDGER_CEILING:
+        failures.append(f"FP_LEDGER holds {len(ledger)} acknowledged false positive(s), over its ceiling "
+                        f"of {FP_LEDGER_CEILING}: the ledger only shrinks. A new acknowledged false "
+                        f"positive has to be argued into FP_LEDGER_CEILING in the same diff, next to the "
+                        f"rule that caused it.")
 
     report = {"passed": not failures, "fp_rate": fp_rate, "unaccounted": unaccounted,
               "unaccounted_fp_rate": unaccounted_rate,
+              "acknowledged": total_fp - unaccounted, "total_false_positives": total_fp,
+              "controls": total_n, "ledger_size": len(ledger), "ledger_ceiling": FP_LEDGER_CEILING,
               "scenario": scenario_fp, "injection": injection_fp, "failures": failures}
     return report
 
@@ -366,33 +387,63 @@ def metrics_artifact(*, recorded_utc: str = "", baseline: dict = ATTACK_BASELINE
     gate = quality_report(mapping_baseline=baseline)
     scenario_fp, injection_fp = gate["scenario"], gate["injection"]
     mapping = evaluate_attack_mapping().to_dict()
+    total_controls = scenario_fp["n"] + injection_fp["n"]
+    firing_rate = round(gate["total_false_positives"] / total_controls, 3) if total_controls else 0.0
+    on_baseline = mapping == baseline
     return {
         "schema": "aos.edge-sentinel.evaluation/v1",
         "corpus_version": CORPUS_VERSION,
         "corpus_digest": corpus_digest(),
         "recorded_utc": recorded_utc,
-        "mapping": {"metrics": mapping, "baseline": baseline, "on_baseline": mapping == baseline},
+        "mapping": {"metrics": mapping, "baseline": baseline, "on_baseline": on_baseline},
         "negative_controls": {"scenario": scenario_fp, "injection": injection_fp},
-        "false_positive_rate": round((scenario_fp["false_positives"] + injection_fp["false_positives"])
-                                     / (scenario_fp["n"] + injection_fp["n"]), 3),
+        # Named for its denominator on purpose. A bare "false_positive_rate" beside a 1.0 recall invites
+        # "46.7% of detection is wrong", which is not what this says: the denominator is 15 adversarial
+        # near-misses chosen BECAUSE they resemble a trigger, not observed traffic.
+        "adversarial_control_firing_rate": firing_rate,
         "fp_ledger": dict(sorted(FP_LEDGER.items())),
         "gate": {"passed": gate["passed"], "failures": gate["failures"]},
+        # THREE NUMBERS, NEVER ONE. A green gate proves the MEASUREMENT is honest — nothing fires on benign
+        # input without being named, the corpus is sourced, the mapping has not drifted. It says nothing
+        # about whether the DETECTOR is good, and one PASS is exactly how those two get confused. `harness`
+        # is what the gate defends; `detector` is the open backlog. Read the second block as the work
+        # remaining, never as an approval.
+        "claims": {
+            "harness": {                                    # does the measurement mean anything?
+                "positive_recall": mapping["recall"],
+                "positive_precision": mapping["precision"],
+                "positive_cases": mapping["n"],
+                "unaccounted_false_positives": gate["unaccounted"],
+                "mapping_on_baseline": on_baseline,
+            },
+            "detector": {                                   # is the detector any good?
+                "acknowledged_false_positives": gate["acknowledged"],
+                "of_adversarial_controls": total_controls,
+                "adversarial_control_firing_rate": firing_rate,
+                "fp_ledger_size": len(FP_LEDGER),
+                "fp_ledger_ceiling": FP_LEDGER_CEILING,     # fix one: delete its entry AND lower this
+            },
+        },
         "counts": {"positives": len(ATTACK_CORPUS),
                    "controls": len(NEGATIVE_CONTROLS) + len(INJECTION_NEGATIVE_CONTROLS),
-                   "false_positives": scenario_fp["false_positives"] + injection_fp["false_positives"]},
+                   "false_positives": gate["total_false_positives"],
+                   "acknowledged_false_positives": gate["acknowledged"],
+                   "unaccounted_false_positives": gate["unaccounted"]},
         # Framing, because a rate whose denominator's shape is unstated is a lie waiting to be quoted:
         # these controls are adversarial near-misses BY CONSTRUCTION (benign input chosen because it
         # resembles a trigger). A 0.467 here is "how much of the look-alike surface fires", not a
         # production false-positive estimate, and anyone pasting this number must paste that sentence too.
         "controls_are": ("adversarial benign near-misses, deliberately shaped to resemble a detection "
-                         "trigger; fp_rate measures the look-alike surface, not production traffic"),
-        "read_as": ("mapping on baseline; "
-                    f"{scenario_fp['false_positives'] + injection_fp['false_positives']} of "
-                    f"{scenario_fp['n'] + injection_fp['n']} near-miss controls flagged, "
-                    f"{scenario_fp['unaccounted'] + injection_fp['unaccounted']} unaccounted; gate "
+                         "trigger; adversarial_control_firing_rate measures the look-alike surface, not "
+                         "production traffic"),
+        "read_as": ("harness: recall " + str(mapping["recall"]) + f" on {mapping['n']} positives, "
+                    + f"{gate['unaccounted']} unaccounted false positives, mapping "
+                    + ("on baseline; " if on_baseline else "OFF baseline; ")
+                    + "detector: " + str(gate["acknowledged"]) + f" of {total_controls} near-miss "
+                    + "controls flagged "
+                    + f"(ledger {len(FP_LEDGER)}/{FP_LEDGER_CEILING}); gate "
                     + ("PASS" if gate["passed"] else f"FAIL ({len(gate['failures'])})")),
     }
-
 
 def write_metrics_artifact(path, **kw) -> dict:
     """Write the artifact (creating parent dirs). Returns it so the caller can assert on what landed."""
@@ -424,11 +475,19 @@ def main(argv=None) -> int:
 
     art = write_metrics_artifact(args.out)
     mapping, gate = art["mapping"]["metrics"], art["gate"]
+    harness, detector = art["claims"]["harness"], art["claims"]["detector"]
     print(f"edge-sentinel evaluation [{art['corpus_version']}] digest={art['corpus_digest'][:12]} "
-          f"n={mapping['n']} precision={mapping['precision']} recall={mapping['recall']} "
-          f"abstain={mapping['abstention_rate']} fp_rate={art['false_positive_rate']} "
-          f"controls={art['counts']['controls']} ledger={len(art['fp_ledger'])}")
-    print(f"gate: {'PASS' if gate['passed'] else 'FAIL'}")
+          f"controls={art['counts']['controls']}")
+    # Two lines, never merged into one verdict: the first is the measurement, the second is the detector.
+    print(f"  harness:  recall={harness['positive_recall']} (n={harness['positive_cases']}) "
+          f"precision={harness['positive_precision']} abstain={mapping['abstention_rate']} "
+          f"unaccounted_fp={harness['unaccounted_false_positives']}")
+    print(f"  detector: acknowledged_fp={detector['acknowledged_false_positives']}"
+          f"/{detector['of_adversarial_controls']} "
+          f"adversarial_firing_rate={detector['adversarial_control_firing_rate']} "
+          f"ledger={detector['fp_ledger_size']}/{detector['fp_ledger_ceiling']}")
+    print(f"gate: {'PASS' if gate['passed'] else 'FAIL'}  "
+          f"(PASS = the measurement is honest, not that the detector is precise)")
     for failure in gate["failures"]:
         print(f"  - {failure}", file=sys.stderr)
     print(f"wrote {args.out}")
