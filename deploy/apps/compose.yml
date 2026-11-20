@@ -27,6 +27,14 @@
 # IMAGE PINNING: every third-party image below is pinned by immutable digest (the "# was <tag>" comment names the
 # tag it replaced). They were the tags current on 2026-10-23 and are the exact images the six-agent install was
 # tested with. To update one: pull the new tag, run the install/journey tests, then replace the digest here.
+#
+# PROFILES (2026-11-20): `caddy` and `projects-console` carry no `profiles:` key, so they always start (the console
+# "degrades one tile per down agent" by design, confirmed tolerant of a dependency whose profile isn't active).
+# Every domain agent carries exactly one profile, named after itself (revenue, intelligence, content, finance,
+# customer-success, security-compliance); every OSS core carries the profile(s) of every agent that `depends_on` it,
+# so `docker compose --profile <agent> up -d` always pulls in everything that one agent needs and nothing else.
+# `tests/test_apps_compose_profiles.py` checks this invariant holds. This is the first use of Compose profiles in
+# this repo — see that test file for the exact rule, before adding a seventh agent or a new OSS core.
 
 x-agent: &agent
   restart: unless-stopped
@@ -70,19 +78,23 @@ services:
       - REDEVOPS_LLM_BASE_URL=${REDEVOPS_LLM_BASE_URL:-http://host.docker.internal:8000/v1}
       - REDEVOPS_LLM_MODEL=${REDEVOPS_LLM_MODEL:-qwen3.8-27b}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
+    # long-form + required: false: each agent is profile-gated, and the console must still start (and run, degraded)
+    # when a given agent's profile isn't active — the short list form here would make Compose refuse the whole
+    # project unless every agent's profile were active (see tests/test_apps_compose_profiles.py).
     depends_on:
-      - revenue-agent
-      - intelligence-agent
-      - content-agent
-      - security-compliance
-      - finance-agent
-      - customer-success
+      revenue-agent: {condition: service_started, required: false}
+      intelligence-agent: {condition: service_started, required: false}
+      content-agent: {condition: service_started, required: false}
+      security-compliance: {condition: service_started, required: false}
+      finance-agent: {condition: service_started, required: false}
+      customer-success: {condition: service_started, required: false}
 
   # =========================================================================
   # The 6 governed domain agents (ENTERPRISE, private) — learning + discovery
   # =========================================================================
   revenue-agent:            # prospecting + next-best-action over Twenty CRM
     <<: *agent
+    profiles: [revenue]
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-revenue-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8220
@@ -108,6 +120,7 @@ services:
 
   intelligence-agent:       # growth + BI + market-radar over Metabase
     <<: *agent
+    profiles: [intelligence]
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-intelligence-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8221
@@ -119,6 +132,7 @@ services:
 
   content-agent:            # content engine over Postiz
     <<: *agent
+    profiles: [content]
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-content-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8222
@@ -130,6 +144,7 @@ services:
 
   finance-agent:            # billing + books financial-ops loop
     <<: *agent
+    profiles: [finance]
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-finance-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8231
@@ -137,9 +152,11 @@ services:
       - METABASE_API_URL=http://metabase:3000
       - FIN_TENANT=${TENANT:-Summit Roofing Co.}
       - FIN_SHADOW=${SHADOW_MODE:-true}
+    depends_on: [metabase]   # uses METABASE_API_URL; added with the `finance` profile so `--profile finance` also starts it
 
   customer-success:         # support + guide + lifecycle missions
     <<: *agent
+    profiles: [customer-success]
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-customer-success:${APPS_TAG:-stable}
     environment:
       - PORT=8232
@@ -149,6 +166,7 @@ services:
 
   security-compliance:      # multi-representation KYC + controls
     <<: *agent
+    profiles: [security-compliance]
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-security-compliance:${APPS_TAG:-stable}
     environment:
       - PORT=8230
@@ -163,6 +181,7 @@ services:
   twenty:
     image: twentycrm/twenty@sha256:6398458f42b760312aa59c4ade78cbaaa62063a0817e42cb21c66628fc310b3f   # was twentycrm/twenty:latest
     restart: unless-stopped
+    profiles: [revenue]
     networks: [apps]
     depends_on: [twenty-db, twenty-redis]
     ports: ["${TWENTY_PORT:-3010}:3000"]
@@ -180,6 +199,7 @@ services:
   twenty-db:
     image: pgvector/pgvector@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a   # was pgvector/pgvector:pg16
     restart: unless-stopped
+    profiles: [revenue]
     networks: [apps]
     environment:
       - POSTGRES_USER=postgres
@@ -190,12 +210,14 @@ services:
   twenty-redis:
     image: redis@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541   # was redis:7-alpine
     restart: unless-stopped
+    profiles: [revenue]
     networks: [apps]
 
   # --- Metabase (BI) ------------------------------------------------------
   metabase:
     image: metabase/metabase@sha256:e436bb73322cfc79000462bfb769430a6aa1c87b435c36e04b9a6b6e6df32bd4   # was metabase/metabase:latest
     restart: unless-stopped
+    profiles: [intelligence, finance]   # both intelligence-agent and finance-agent depend on it
     networks: [apps]
     depends_on: [metabase-db]
     ports: ["${METABASE_PORT:-3001}:3000"]
@@ -209,6 +231,7 @@ services:
   metabase-db:
     image: postgres@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36   # was postgres:16-alpine
     restart: unless-stopped
+    profiles: [intelligence, finance]
     networks: [apps]
     environment:
       - POSTGRES_USER=metabase
@@ -221,6 +244,7 @@ services:
   postiz:
     image: ghcr.io/gitroomhq/postiz-app@sha256:d2b37802e96757729fdea2d3d71287f841c2b619faa1cb4c21dac07df657fde1   # was ghcr.io/gitroomhq/postiz-app:latest
     restart: unless-stopped
+    profiles: [content]
     networks: [apps]
     depends_on: [postiz-db, postiz-redis]
     ports: ["${POSTIZ_PORT:-4200}:5000"]
@@ -240,6 +264,7 @@ services:
   postiz-db:
     image: postgres@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36   # was postgres:16-alpine
     restart: unless-stopped
+    profiles: [content]
     networks: [apps]
     environment:
       - POSTGRES_USER=postiz
@@ -250,6 +275,7 @@ services:
   postiz-redis:
     image: redis@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541   # was redis:7-alpine
     restart: unless-stopped
+    profiles: [content]
     networks: [apps]
 
 networks:
