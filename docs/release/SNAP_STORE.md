@@ -156,6 +156,23 @@ rendering problem from a confinement one; try WebKitGTK from the `gnome-46-2404`
 ask in the snapcraft forum whether WebKitGTK 2.5x needs an interface for the sandbox. The snap is **not shippable** until this is
 resolved; the structure, the build, the interface set, the review tools and the control plane are fine.
 
+**UPDATE 2026-11-19: does NOT reproduce on real amd64 hardware.** `railsapps` `0.1.1` (the published `amd64` revision, built by
+`.github/workflows/snap-railsapps.yml`) was installed `--dangerous` on a real Ubuntu 24.04 LXC container on bare-metal Proxmox
+(x86_64, unprivileged, `fuse`+`nesting` features; no Apple Virtualization layer, no nested VM) and run under Xvfb exactly as the
+VM test above. The result is the opposite of SNAP-D1: `WebKitNetworkProcess` and `WebKitWebProcess` both start (the VM test's
+suspicion that `bwrap` cannot spawn them at all does not hold here), no AppArmor/seccomp denial in `journalctl -k`, and a
+screenshot of the Xvfb framebuffer shows the launcher page fully painted - title, both description lines, all three buttons.
+Clicking "Start & open" (via `xdotool`) started the sidecar for real (`redevops-sidecar serve --exit-on-stdin-eof`, two
+processes) and the launcher's own status line correctly reported `Running at http://127.0.0.1:<port> - opened in your browser`;
+`curl` against that port from inside the container got `GET / -> 200` and `GET /api/projects -> 401` (unauthenticated correctly
+refused), matching every other platform's smoke test. The `arm64` revision was not re-tested this way (no arm64 host was
+available for this check; the CI build/review-tools/install-remove smoke test passed for both architectures, but neither
+exercises the GUI). Reading the two results together, the most likely explanation is that SNAP-D1 was specific to the original
+Lima VM's Apple Virtualization Framework rendering path for a nested aarch64 Linux guest, not a property of strict confinement,
+WebKitGTK's sandbox, or the snap packaging itself - but this is not proven for `arm64`, only for `amd64` on real hardware. The
+snap is not re-classified as shippable on this evidence alone: `grade: devel` stays, and a real GUI test on `arm64` hardware
+(or at least a non-Apple-Virtualization arm64 VM) is the next step before upgrading this finding further.
+
 Uninstall (`snap remove`): processes gone, desktop file removed, `~/snap/agentic-apps-r0-prime` removed and an automatic snapshot of
 its data saved (`snap saved`; `snap forget` deletes it, `snap remove --purge` skips it). Left on the system: the content snaps
 (`gnome-46-2404`, `gnome-46-2404-sdk`, `gtk-common-themes`, `mesa-2404`: shared, hundreds of MB), `/var/lib/snapd/sequence/agentic-apps-r0-prime.json`,
