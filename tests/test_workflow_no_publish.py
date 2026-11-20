@@ -77,6 +77,7 @@ PUBLISH_ALLOWED_WORKFLOWS = {
     "oci-redevops-projects.yml": "signed GHCR publish of the Projects UI standalone image (redevops-projects), gated on the UI source actually being published",
     "release-publish.yml": "GitHub Release of the signed R0-prime Windows installers, gated on the distribution gate passing",
     "snap-railsapps.yml": "build and Snap Store edge-channel publish of railsapps, gated on the distribution gate passing and a confirmation phrase naming the known SNAP-D1 defect",
+    "snap-railsapps-metadata.yml": "Snap Store listing text (summary/description/icon) push for railsapps via `snapcraft upload-metadata`, no new revision published",
 }
 
 
