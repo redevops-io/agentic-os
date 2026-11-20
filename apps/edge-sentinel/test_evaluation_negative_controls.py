@@ -9,12 +9,24 @@ Runs the REAL detector (`map_scenario_to_techniques`, `ai_security._has_injectio
 """
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import importlib
 import json
 
 import pytest
 
 evaluation = importlib.import_module("edge-sentinel.evaluation")
+authorization_mod = importlib.import_module("edge-sentinel.authorization")
+attack_mod = importlib.import_module("edge-sentinel.attack")
+ai_security = importlib.import_module("edge-sentinel.ai_security")
+
+NO_AUTHORIZATION = authorization_mod.NO_AUTHORIZATION
+Authorization = authorization_mod.Authorization
+AuthorizationContext = authorization_mod.AuthorizationContext
+AuthorizationError = authorization_mod.AuthorizationError
+KIND_LABEL = attack_mod.KIND_LABEL
+KIND_OBSERVATION = attack_mod.KIND_OBSERVATION
 
 NEGATIVE_CONTROLS = evaluation.NEGATIVE_CONTROLS
 INJECTION_NEGATIVE_CONTROLS = evaluation.INJECTION_NEGATIVE_CONTROLS
@@ -29,6 +41,20 @@ write_metrics_artifact = evaluation.write_metrics_artifact
 
 def _marker_tags(payload: str) -> tuple[str, ...]:
     return evaluation._marker_tags(payload)
+
+
+@contextlib.contextmanager
+def unconfigured_deployment():
+    """The corpus as a deployment with no loaded inventory would see it: same strings, no authorizations.
+    This is the realistic regression — nobody deletes a control, someone restores from a snapshot that lost
+    the allowlist — and it is what proves a clean gate here is conditional on context, not on the rules."""
+    original = evaluation.NEGATIVE_CONTROLS
+    evaluation.NEGATIVE_CONTROLS = tuple(
+        dataclasses.replace(c, authorized=()) if c.authorized else c for c in original)
+    try:
+        yield
+    finally:
+        evaluation.NEGATIVE_CONTROLS = original
 
 
 # ── the controls are controls: benign input must not be flagged, or must be named ──
@@ -96,10 +122,79 @@ def test_gate_passes_on_the_current_detector():
 
 
 def test_an_unaccounted_false_positive_fails_the_gate():
-    """Empty the ledger and the measurement must break loudly rather than pass quietly."""
+    """Take the authorizations away and the measurement must break loudly, not quietly agree that nothing
+    is wrong. This is the modern shape of "empty the ledger": the ledger IS empty now, so the thing that
+    can go unaccounted is a near-miss nobody stood down."""
     with pytest.raises(QualityGateError) as err:
-        assert_quality_gates(fp_ledger={})
+        assert_quality_gates(authorization=NO_AUTHORIZATION)
     assert "unaccounted false positive" in str(err.value)
+
+
+def test_every_near_miss_the_rules_fire_on_is_explained_by_a_named_mechanism():
+    """The invariant FP_LEDGER used to carry alone, now that three mechanisms can stand between a rule and
+    a finding. Before any of them decide anything, SEVEN of the fifteen controls look like triggers. Every
+    one of those seven has to be claimed by exactly one mechanism — authorization, prose downgrade, or
+    ledger — and the mechanisms have to add up to the raw number. That arithmetic is what makes a silent
+    improvement impossible: a rate can only fall if one of these three counters moves with it.
+    """
+    def sees(control) -> bool:
+        """Does either raw rule fire on this control at all?"""
+        return bool({tok for _t, tok in attack_mod.map_scenario_to_techniques(control.input)}
+                    or evaluation._markers_seen(control.input))
+
+    firing = [c for c in list(NEGATIVE_CONTROLS) + list(INJECTION_NEGATIVE_CONTROLS) if sees(c)]
+    assert len(firing) == 7, [c.input for c in firing]
+
+    authorized, mentioned, ledgered = [], [], []
+    for control in firing:
+        tokens = {tok for _t, tok in attack_mod.map_scenario_to_techniques(control.input)}
+        grants = {(a.observable, a.token) for a in control.authorized}
+        if grants:
+            authorized.append(control.input)
+            # An authorization has to be about what the name actually matched, not about a nearby idea.
+            assert grants <= {(control.input, tok) for tok in tokens}, \
+                f"{control.input!r} authorizes something its name never matched"
+            for entry in control.authorized:
+                assert entry.principal.strip(), entry
+                assert entry.source.startswith(("manual:", "observed:", "imported:")), entry
+        elif evaluation._marker_mentions(control.input):
+            mentioned.append(control.input)
+        elif FP_LEDGER.get(control.input):
+            ledgered.append(control.input)
+        else:
+            raise AssertionError(f"{control.input!r} fires on the raw rules with nothing standing it down")
+
+    assert (len(authorized), len(mentioned), len(ledgered)) == (4, 3, 0), \
+        (authorized, mentioned, ledgered)
+    assert len(authorized) + len(mentioned) + len(ledgered) == len(firing)
+
+
+def test_an_allowlist_word_in_the_name_grants_nothing():
+    """The trap this whole design turns on. `crowdsecurity/nmap-allowlist-internal` contains the word
+    `allowlist` and names the scanner it permits — which is exactly what an unauthorized scan would be
+    called. The string must not be able to stand the detector down; only the typed context can."""
+    name = "crowdsecurity/nmap-allowlist-internal"
+    assert attack_mod.adjudicate_scenario(name).tags == ("T1046",)
+    assert evaluation._scenario_tags(name, authorization=NO_AUTHORIZATION) == ("T1046",)
+    # a lookalike authorization covers nothing: identity is exact, on both axes.
+    near = AuthorizationContext((Authorization(observable="crowdsecurity/nmap-allowlist-internal-x",
+                                              token="nmap", principal="secops", source="manual:t"),))
+    assert attack_mod.adjudicate_scenario(name, authorization=near).tags == ("T1046",)
+    wrong_token = AuthorizationContext((Authorization(observable=name, token="ssh-bf",
+                                                     principal="secops", source="manual:t"),))
+    assert attack_mod.adjudicate_scenario(name, authorization=wrong_token).tags == ("T1046",)
+
+
+def test_an_authorization_that_stands_nothing_down_fails_the_gate():
+    """Suppressions are evidence, and evidence goes stale. An authorization that covers no firing match is
+    paperwork about a rule that no longer exists — the same reason a stale ledger entry fails."""
+    # A well-formed authorization for a benign name that the rules never match: real paperwork, no effect.
+    stale = Authorization(observable="crowdsecurity/postfix-spam", token="postfix",
+                          principal="mailops", source="manual:old-ticket-2019")
+    live = evaluation._authorization_of(NEGATIVE_CONTROLS)
+    with pytest.raises(QualityGateError) as err:
+        assert_quality_gates(authorization=AuthorizationContext(live.entries + (stale,)))
+    assert "stands nothing down" in str(err.value)
 
 
 def test_an_unsourced_control_fails_the_gate():
@@ -137,10 +232,12 @@ def test_artifact_is_deterministic_and_carries_corpus_identity(tmp_path):
     written = write_metrics_artifact(p)
     reloaded = json.loads(p.read_text())
     assert reloaded == written                       # what CI uploads is what the code computed
-    assert reloaded["schema"] == "aos.edge-sentinel.evaluation/v1"
-    # The headline carries its own denominator. A key called `false_positive_rate`, sitting beside a 1.0
-    # recall, gets quoted as "47% of detection is wrong" — which this number does not say.
-    assert reloaded["adversarial_control_firing_rate"] == pytest.approx(0.467, abs=0.001)
+    assert reloaded["schema"] == "aos.edge-sentinel.evaluation/v2"
+    # The headline carries its own denominator, and there are two of them now: what the rules do raw, and
+    # what survives adjudication. A single `false_positive_rate` beside a 1.0 recall gets quoted as "47% of
+    # detection is wrong", and 0.0 without its mechanism would be read as "detection is perfect".
+    assert reloaded["adversarial_control_firing_rate"] == 0.0
+    assert reloaded["claims"]["detector"]["raw_adversarial_firing_rate"] == pytest.approx(0.467, abs=0.001)
     assert "false_positive_rate" not in reloaded
     # No third state for a false positive: acknowledged or unaccounted, and the two account for all of them.
     counts = reloaded["counts"]
@@ -158,13 +255,22 @@ def test_a_pass_reports_the_harness_and_the_detector_as_two_claims_not_one():
     assert harness["positive_precision"] == 1.0
     assert harness["unaccounted_false_positives"] == 0
     assert harness["mapping_on_baseline"] is True
-    # what is still open: seven of fifteen look-alikes fire, and PASS does not erase that.
-    assert detector["acknowledged_false_positives"] == 7
+    # what the detector now does with the same fifteen look-alikes — and HOW, because a 0.0 that came from
+    # adjudication must never be readable as a 0.0 that came from a scan that stopped looking.
+    assert detector["acknowledged_false_positives"] == 0
     assert detector["of_adversarial_controls"] == 15
-    assert detector["adversarial_control_firing_rate"] == pytest.approx(0.467, abs=0.001)
-    assert (detector["fp_ledger_size"], detector["fp_ledger_ceiling"]) == (7, 7)
+    assert detector["adversarial_control_firing_rate"] == 0.0
+    assert detector["raw_adversarial_firing_rate"] == pytest.approx(0.467, abs=0.001)
+    assert detector["suppressed_by_authorization"] == 4       # authorized reconnaissance, named per entry
+    assert detector["downgraded_to_mention"] == 3             # markers read as prose, counted not hidden
+    assert (detector["fp_ledger_size"], detector["fp_ledger_ceiling"]) == (0, 0)
+    assert len(detector["suppressions"]) == 4
+    for suppression in detector["suppressions"]:
+        assert suppression["principal"] and suppression["source"].startswith(("manual:", "imported:",
+                                                                              "observed:")), suppression
     assert art["read_as"].startswith("harness: recall 1.0")
-    assert "detector: 7 of 15" in art["read_as"]
+    assert "detector: 0 of 15" in art["read_as"]
+    assert "raw rule surface of 7/15" in art["read_as"]
 
 
 def test_the_ledger_is_a_ratchet_that_only_shrinks(monkeypatch):
@@ -180,7 +286,7 @@ def test_the_ledger_is_a_ratchet_that_only_shrinks(monkeypatch):
     assert report["passed"] is False
     assert any("only shrinks" in f for f in report["failures"]), report["failures"]
     # … and it is the ceiling that stopped it, not a collateral check failing for the wrong reason.
-    monkeypatch.setattr(evaluation, "FP_LEDGER_CEILING", 8)
+    monkeypatch.setattr(evaluation, "FP_LEDGER_CEILING", 1)
     assert evaluation.quality_report(fp_ledger=widened)["passed"] is True
 
 
@@ -195,6 +301,21 @@ def test_corpus_digest_moves_when_a_control_is_added():
         evaluation.NEGATIVE_CONTROLS = original
 
 
+def test_removing_an_authorization_moves_the_digest_too():
+    """The corpus digest has to cover the context, not just the strings: four controls are clean BECAUSE
+    they are authorized, so a digest blind to the authorization would let someone delete the allowlist and
+    still report the same corpus. The gate catches the fallout, but only the digest says when it started."""
+    before = corpus_digest()
+    original = evaluation.NEGATIVE_CONTROLS
+    try:
+        evaluation.NEGATIVE_CONTROLS = tuple(
+            dataclasses.replace(c, authorized=()) if c.authorized else c for c in original)
+        assert corpus_digest() != before
+        with pytest.raises(QualityGateError):
+            assert_quality_gates()          # and the moment it moves, the four are unaccounted again
+    finally:
+        evaluation.NEGATIVE_CONTROLS = original
+
 # ── the CI entry point ──
 
 def test_cli_prints_the_numbers_and_writes_the_artifact_even_when_red(tmp_path, capsys):
@@ -206,16 +327,17 @@ def test_cli_prints_the_numbers_and_writes_the_artifact_even_when_red(tmp_path, 
     stdout = capsys.readouterr().out
     # both claims on their own lines, so a PASS cannot be read as an endorsement of the detector
     assert "harness:" in stdout and "unaccounted_fp=0" in stdout
-    assert "detector:" in stdout and "acknowledged_fp=7/15" in stdout
-    assert "adversarial_firing_rate=0.467" in stdout
+    assert "detector:" in stdout and "acknowledged_fp=0/15" in stdout
+    assert "adversarial_firing_rate=0.0" in stdout
+    # …and the mechanism behind the zero, printed with it: the raw rule surface and what stood it down.
+    assert "raw_rule_surface=0.467" in stdout
+    assert "4 authorized" in stdout and "3 mentions" in stdout
     assert "gate: PASS" in stdout and "not that the detector is precise" in stdout
 
-    real = dict(FP_LEDGER)
-    try:
-        FP_LEDGER.clear()                          # the failure mode: tolerances silently dropped
+    # the failure mode in its current shape: the authorizations go missing, four near-misses start firing
+    # again with nothing to account for them. The build goes red and the artifact is still written.
+    with unconfigured_deployment():
         assert evaluation.main(["--out", str(out)]) == 1
-    finally:
-        FP_LEDGER.update(real)
     art = json.loads(out.read_text())
     assert art["gate"]["passed"] is False and art["gate"]["failures"]
     assert "unaccounted false positive" in capsys.readouterr().err

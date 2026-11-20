@@ -14,7 +14,9 @@ are explainable.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
+from .authorization import Authorization, AuthorizationContext, NO_AUTHORIZATION
 from .stix import Provenance, StixObject
 
 # Pinned identity so a case records which ATT&CK version its mapping came from (acceptance: version identity).
@@ -142,13 +144,121 @@ def map_scenario_to_techniques(scenario: str) -> list[tuple[str, str]]:
     if re.search(r"(?<![a-z0-9])cve-\d{4}-\d{3,}", s):   # unknown CVE scenario: exploitation of a service
         out.append(("T1190", "cve"))
         seen.add("T1190")
+    matched_tokens: list[str] = []
     for token, techniques in _SCENARIO_MAP:
         # Match the token as a DELIMITED unit (bounded by non-alphanumerics), not a raw substring, so a
         # short token like "rce" does not match inside "bruteforce"/"force"/"source" and mislabel a
         # brute-force attack as Exploit-Public-Facing-Application (T1190) + Command Execution (T1059).
         if re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])", s):
+            # One signal, one claim. When a longer token already matched, a generic token inside it
+            # describes the SAME activity — `port-scan` is not also a bare `scan` — and piling T1595 on top
+            # of T1046 inflates the technique list off a single observation. The explicit table already
+            # handles known names this way (`port-scan` → T1046 alone); this makes the fallback agree.
+            if any(token != done and token in done for done in matched_tokens):
+                continue
+            matched_tokens.append(token)
             for t in techniques:
                 if t not in seen:
                     seen.add(t)
                     out.append((t, token))
     return out
+
+
+# ─────────────────── adjudication: what a mapping is allowed to become ───────────────────
+#
+# `map_scenario_to_techniques` answers "which technique does this NAME suggest". That is a hypothesis about
+# a string, and four of the ledgered false positives were exactly the cost of treating it as an observation:
+# `crowdsecurity/nmap-allowlist-internal` is an inventory entry ABOUT a scanner, not evidence that anyone
+# scanned anything. Adjudication is where the two other facts the mapper cannot see get a say — what kind of
+# input this is, and whether the operator authorized it.
+
+KIND_OBSERVATION = "observation"   # something happened and was recorded: an alert, a connection, a request
+KIND_LABEL = "label"               # a name about a detection: hub feed name, allowlist entry, config key
+KINDS = (KIND_OBSERVATION, KIND_LABEL)
+_KINDS = KINDS                                # internal alias; KINDS is the public surface
+
+
+@dataclass(frozen=True)
+class ScenarioMatch:
+    """One technique the name suggests, plus the authorization that stands it down (None = none applies)."""
+    technique_id: str
+    token: str
+    authorization: Authorization | None = None
+
+    @property
+    def suppressed(self) -> bool:
+        return self.authorization is not None
+
+
+@dataclass(frozen=True)
+class ScenarioVerdict:
+    """The mapping plus what it may be used for. `all_tags` is what the mapper saw — the number a precision
+    measurement needs. `tags` is what survives adjudication and may back a finding. Reporting only the
+    second would let a suppression look like precision, which is the trick this whole file exists to stop."""
+    scenario: str
+    kind: str
+    matches: tuple[ScenarioMatch, ...] = ()
+
+    @property
+    def all_tags(self) -> tuple[str, ...]:
+        return tuple(m.technique_id for m in self.matches)
+
+    @property
+    def tags(self) -> tuple[str, ...]:
+        return tuple(m.technique_id for m in self.matches if not m.suppressed)
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        """The responsible tokens of what survived — actionable both ways: a suppressed token names the
+        authorization to review, an unsuppressed one names the rule to tighten."""
+        return tuple(m.token for m in self.matches if not m.suppressed)
+
+    @property
+    def advisory(self) -> bool:
+        """True when this verdict came from a NAME. Advisory does not mean ignored: the mapping is still
+        reported, it just cannot open a case by itself. It also does not mean unmeasured — the evaluation
+        counts tags regardless of kind, so relabelling inputs cannot launder a false-positive number."""
+        return self.kind == KIND_LABEL
+
+    @property
+    def finding_worthy(self) -> bool:
+        return bool(self.tags)
+
+    @property
+    def suppressions(self) -> tuple[dict, ...]:
+        # One record per (observable, token), not one per technique: `ssh-bf` yields T1110 and T1110.001
+        # from a single authorized token, and a review log that repeats the same decision per technique
+        # makes one authorization look like several.
+        seen: dict[tuple[str, str], dict] = {}
+        for match in self.matches:
+            if match.suppressed:
+                seen.setdefault((match.authorization.observable, match.authorization.token),
+                                match.authorization.record())
+        return tuple(seen.values())
+
+    def to_dict(self) -> dict:
+        return {"scenario": self.scenario, "kind": self.kind, "advisory": self.advisory,
+                "techniques": [{"technique_id": m.technique_id, "basis": m.token,
+                                "suppressed": m.suppressed,
+                                "authorized_by": m.authorization.record() if m.authorization else None}
+                               for m in self.matches],
+                "claimable_techniques": list(self.tags),
+                "attack_version": ATTACK_VERSION}
+
+
+def adjudicate_scenario(scenario: str, *, kind: str = KIND_OBSERVATION,
+                        authorization: AuthorizationContext | None = None) -> ScenarioVerdict:
+    """Deterministic scenario → verdict. Same table as `map_scenario_to_techniques`; two things added, and
+    neither of them reads the scanned string for permission slips:
+
+    * `kind` — is this an observation, or a label about one? Labels are advisory.
+    * `authorization` — the operator's declarations, passed IN. An empty context (the default) authorizes
+      nothing, so an unconfigured deployment keeps every detection it has always made.
+    """
+    if kind not in _KINDS:
+        raise ValueError(f"unknown scenario kind {kind!r}: expected one of {_KINDS}")
+    ctx = authorization if authorization is not None else NO_AUTHORIZATION
+    return ScenarioVerdict(
+        scenario=scenario, kind=kind,
+        matches=tuple(ScenarioMatch(technique_id, token, ctx.cover(observable=scenario, token=token))
+                      for technique_id, token in map_scenario_to_techniques(scenario)))

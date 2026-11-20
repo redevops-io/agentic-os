@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .attack import map_scenario_to_techniques
+from .attack import KIND_LABEL, KIND_OBSERVATION, adjudicate_scenario, map_scenario_to_techniques
+from .authorization import Authorization, AuthorizationContext, NO_AUTHORIZATION
 from .evidence import canonical_json, sha256_hex
 
 
@@ -146,33 +147,58 @@ class NegativeControl:
     and is worth nothing. `source` is provenance and is load-bearing: :func:`assert_quality_gates`
     refuses to let an unsourced case count toward a green gate, because a control nobody can trace is a
     control someone will delete the first time it fails.
+
+    `authorized` is the operator's inventory saying this source is permitted to do this activity, modelled
+    as the real :class:`~edge-sentinel.authorization.AuthorizationContext` the detector receives in
+    production. It is a SEPARATE field from `input` on purpose: the scanned string never grants permission
+    to itself. Four of the original seven false positives were authorized activity misread as reconnaissance,
+    and the naive fix — stand down on seeing `allowlist` in a name — is what an attacker would name a scan.
     """
     input: str
     why_benign: str
     source: str
     split: str = "test"
+    authorized: tuple[Authorization, ...] = ()
 
 
 # Benign scenario names chosen to be NEAR misses against the token fallback — each one contains a token
 # the mapper keys on, in a name whose meaning is the opposite of an attack. Written from the mapper's
 # token table, not from what it currently returns (otherwise this file would be a screenshot of the code).
+#
+# The four with `authorized=` are the authorized-reconnaissance shape: sanctioned activity the operator's
+# inventory knows about. Their authorization is supplied the way production supplies it — as a typed object
+# alongside the input — and each cites where it came from, because a suppression with no source is a
+# coverage gap. Drop the context and they fire again (pinned by
+# test_an_allowlist_word_in_the_name_grants_nothing), which is the whole point.
 NEGATIVE_CONTROLS: tuple[NegativeControl, ...] = (
     NegativeControl("crowdsecurity/internal-vulnscanner-allowed",
                     "sanctioned internal vulnerability scanner on an allowlist", "manual:near-miss-token-scan"),
     NegativeControl("crowdsecurity/backup-agent-port-scan-benign",
                     "backup appliance enumerating its own targets; 'port-scan' is in the name",
-                    "manual:near-miss-token-port-scan"),
+                    "manual:near-miss-token-port-scan",
+                    authorized=(Authorization(observable="crowdsecurity/backup-agent-port-scan-benign",
+                                              token="port-scan", principal="backup-agent",
+                                              source="imported:inventory/backup-cluster"),)),
     NegativeControl("crowdsecurity/nmap-allowlist-internal",
-                    "explicit allowlist entry naming the scanner it permits", "manual:near-miss-token-nmap"),
+                    "explicit allowlist entry naming the scanner it permits", "manual:near-miss-token-nmap",
+                    authorized=(Authorization(observable="crowdsecurity/nmap-allowlist-internal",
+                                              token="nmap", principal="secops-vulnmgmt",
+                                              source="manual:secops-scan-policy-2026"),)),
     NegativeControl("crowdsecurity/ssh-bf-allowlist-bastion",
                     "allowlist for the bastion that legitimately retries keys; contains 'ssh-bf'",
-                    "manual:near-miss-token-ssh-bf"),
+                    "manual:near-miss-token-ssh-bf",
+                    authorized=(Authorization(observable="crowdsecurity/ssh-bf-allowlist-bastion",
+                                              token="ssh-bf", principal="secops-bastion",
+                                              source="imported:inventory/bastion-allowlist"),)),
     NegativeControl("crowdsecurity/modsec2-rule-updates",
                     "WAF ruleset feed traffic; 'c2' appears inside 'modsec2'", "manual:near-miss-substring-c2"),
     NegativeControl("crowdsecurity/source-view-access-log",
                     "read-only source browser; 'rce' appears inside 'source'", "manual:near-miss-substring-rce"),
     NegativeControl("crowdsecurity/http-do-not-crawl-policy",
-                    "policy enforcement telemetry; contains 'crawl'", "manual:near-miss-token-crawl"),
+                    "policy enforcement telemetry; contains 'crawl'", "manual:near-miss-token-crawl",
+                    authorized=(Authorization(observable="crowdsecurity/http-do-not-crawl-policy",
+                                              token="crawl", principal="webops",
+                                              source="manual:robots-policy-enforcement"),)),
     NegativeControl("crowdsecurity/passcvemgr-service",
                     "password CVE-reporting daemon name; not an exploit attempt", "manual:near-miss-adjacent-cve"),
     NegativeControl("crowdsecurity/postfix-spam",
@@ -198,84 +224,138 @@ INJECTION_NEGATIVE_CONTROLS: tuple[NegativeControl, ...] = (
 )
 
 
-def _scenario_tags(name: str) -> tuple[str, ...]:
+def _scenario_tags(name: str, *, authorization: AuthorizationContext | None = None,
+                   kind: str = KIND_OBSERVATION) -> tuple[str, ...]:
+    """Techniques this name may STILL claim after adjudication — i.e. what a finding is allowed to assert.
+    `authorization` comes from the caller (the operator's inventory), never from `name`."""
+    return adjudicate_scenario(name, kind=kind, authorization=authorization).tags
+
+
+def _scenario_basis(name: str, *, authorization: AuthorizationContext | None = None,
+                    kind: str = KIND_OBSERVATION) -> tuple[str, ...]:
+    """The matched TOKENS behind a surviving mapping — the actionable half of a false positive. `T1595` is
+    what was claimed; `scan` is the rule to go and tighten."""
+    return adjudicate_scenario(name, kind=kind, authorization=authorization).tokens
+
+
+def _scenario_raw_tags(name: str) -> tuple[str, ...]:
+    """What the mapper saw before any authorization stood it down. Needed to keep suppressions in the
+    numerator of an honest report: precision that only counts surviving claims is self-graded."""
     return tuple(t for t, _token in map_scenario_to_techniques(name))
 
 
-def _scenario_basis(name: str) -> tuple[str, ...]:
-    """The matched TOKENS behind a mapping — the actionable half of a false positive. `T1595` is what was
-    claimed; `scan` is the rule to go and tighten."""
-    return tuple(token for _t, token in map_scenario_to_techniques(name))
+def _authorization_of(controls) -> AuthorizationContext:
+    """The lane's operator context, assembled from what its controls declare they run under."""
+    entries = tuple(a for c in controls for a in getattr(c, "authorized", ()))
+    return AuthorizationContext(entries) if entries else NO_AUTHORIZATION
 
 
 def _marker_tags(payload_json: str) -> tuple[str, ...]:
-    """Which injection markers fire on a JSON payload string. Kept as tags so a false positive names the
-    responsible marker — 'this control was flagged' is not actionable, 'marker `leak` flagged it' is."""
-    # Same compiled patterns the detector itself uses — this function must never re-implement the match,
-    # or the FP measurement would be measuring a copy of the detector instead of the detector.
-    from .ai_security import _INJECTION_MARKERS, _INJECTION_RES   # local import: keeps the graph flat
-    low = payload_json.lower()
-    return tuple(m for m, rx in zip(_INJECTION_MARKERS, _INJECTION_RES) if rx.search(low))
+    """Which injection markers earn a FINDING on a payload. Calls the detector — this function must never
+    re-implement the match, or the FP measurement would measure a copy of the detector instead of it. The
+    detector is now position-aware, and so the measurement is too, for free."""
+    from .ai_security import _as_payload, injection_hits   # local import: keeps the graph flat
+    return tuple(h.marker for h in injection_hits(_as_payload(payload_json)) if h.finding_worthy)
 
 
+def _marker_mentions(payload_json: str) -> tuple[str, ...]:
+    """Markers the scan SAW and stood down as prose. Measured because a downgrade nobody counts is
+    indistinguishable from a detector that quietly stopped looking."""
+    from .ai_security import _as_payload, injection_hits
+    return tuple(h.marker for h in injection_hits(_as_payload(payload_json)) if not h.finding_worthy)
+
+
+def _markers_seen(payload_json: str) -> tuple[str, ...]:
+    """Every marker occurrence in the payload, finding-worthy or not — the number BEFORE position and
+    grammar decide anything."""
+    from .ai_security import _as_payload, injection_hits
+    return tuple(h.marker for h in injection_hits(_as_payload(payload_json)))
 #: Recorded false positives, as `control input -> token/marker responsible`. A LEDGER, not an approval
 #: list: a false positive that is not named here FAILS the gate, and a ledger entry that no longer fires
 #: fails too (a stale ledger hides a detector that got sharper than its paperwork). Each entry names the
-#: responsible token, because "known false positive" without a token is not a thing anyone can go fix.
+#: responsible token, because "known false positive" without a token is not a thing anyone can fix.
 #:
-#: Why these are carried instead of silenced: every one is an ordinary-English use of a real injection
-#: verb. Removing the verb to silence them would drop recall on genuine jailbreak phrasings, and the
-#: finding they produce is a 0.7-confidence human-reviewed finding, not an auto-mitigation. The ledger is
-#: the honest middle: the number is measured, the token is named, the cost is visible.
-FP_LEDGER: dict[str, str] = {
-    '{"summary": "vendor patched a memory leak in the driver"}': "leak",
-    '{"note": "use a class override in the theme"}': "override",
-    '{"feature": "developer mode toggle for QA"}': "developer mode",
-    "crowdsecurity/backup-agent-port-scan-benign": "port-scan",
-    "crowdsecurity/nmap-allowlist-internal": "nmap",
-    "crowdsecurity/ssh-bf-allowlist-bastion": "ssh-bf",
-    "crowdsecurity/http-do-not-crawl-policy": "crawl",
-}
+#: EMPTY — and empty here is the result of a change, not the absence of one. The seven entries this held
+#: closed two ways: the scenario four by AUTHORIZED context handed to the detector as data (the operator's
+#: inventory, never a word found inside the scanned name), the injection three by WHERE the text sits in a
+#: payload plus what the verb acts on. No marker and no scenario token was removed, and recall on the 48
+#: positives is still 1.0. Both mechanisms are counted in the artifact — suppressions and downgraded
+#: mentions — because "zero false positives" bought by not looking is the exact failure this file exists
+#: to catch.
+#:
+#: An empty ledger is also an empty allowance: the next false positive has nowhere to hide, and the ceiling
+#: below is what turns that into a build failure instead of a conversation.
+FP_LEDGER: dict[str, str] = {}
 
 #: The ledger is a RATCHET THAT ONLY TURNS ONE WAY. Every entry in it is a detection that fires on benign
 #: input, so an improvement is measured by the ledger getting shorter — and a new acknowledged false
 #: positive must be a visible line in the diff (bumping this constant), never the quiet cost of a rule that
-#: got broader. Fixing one of these means deleting its entry AND lowering this number in the same change;
-#: CI then proves the shrink instead of taking it on trust. It is a ceiling, not a target: the target is 0.
-FP_LEDGER_CEILING = 7
+#: got broader. Fixing one means deleting its entry AND lowering this number in the same change; CI then
+#: proves the shrink instead of taking it on trust. It is a ceiling, not a target: the target is 0, and it
+#: reached it with the corpus unchanged, which is the only way the number means anything.
+FP_LEDGER_CEILING = 0
 
 
 def corpus_digest() -> str:
     """Content hash of the measured corpus (positives + controls + version). The artifact carries it so a
     changed number can be traced to a changed corpus instead of argued about."""
+    def row(c):
+        # The authorizations a control runs under are part of the corpus: four controls went from false
+        # positive to clean by being handed context, so a digest that ignored the context could not tell
+        # "the detector improved" from "someone quietly deleted the allowlist entries".
+        auths = [sorted(a.record().items()) for a in
+                 sorted(c.authorized, key=lambda a: (a.observable, a.token))]
+        return [c.input, c.why_benign, c.source, auths]
+
     payload = {
         "corpus_version": CORPUS_VERSION,
         "positives": [[e.input, list(e.expected), e.rationale] for e in ATTACK_CORPUS],
-        "controls": [[c.input, c.why_benign, c.source] for c in NEGATIVE_CONTROLS],
-        "injection_controls": [[c.input, c.why_benign, c.source] for c in INJECTION_NEGATIVE_CONTROLS],
+        "controls": [row(c) for c in NEGATIVE_CONTROLS],
+        "injection_controls": [row(c) for c in INJECTION_NEGATIVE_CONTROLS],
         # The ledger is part of the claim: "0 unaccounted" means nothing without saying what was accounted.
         "fp_ledger": dict(sorted(FP_LEDGER.items())),
     }
     return sha256_hex(canonical_json(payload))
 
 
-def evaluate_negative_controls(controls=None, detector=_scenario_tags, basis_of=None) -> dict:
-    """Flag-rate over negative controls. `detector(input) -> tags` — anything that returns a non-empty
+def evaluate_negative_controls(controls=None, detector=None, basis_of=None, *,
+                               authorization=None, raw_of=None, mention_of=None) -> dict:
+    """Flag-rate over negative controls. `detector(input) -> tags` — anything that still returns a non-empty
     result on a benign control is a false positive, and the record names both the tags it produced and the
-    tokens responsible (`basis_of`; the tags are their own basis when none is given)."""
+    tokens responsible (`basis_of`; the tags are their own basis when none is given).
+
+    Two extra counts, because a detector that fires on nothing after adjudication has to prove it still sees
+    the input: `raw_of` names what the rules produced BEFORE context/position (`suppressed`), and
+    `mention_of` names what was seen and stood down (`mentions`). A clean rate with both at zero is a
+    different instrument from a clean rate with them at seven."""
     # Resolved at call time, not bound as a default: a default captures the list as it was at import, so a
     # test that patches NEGATIVE_CONTROLS to add a hard case would measure the OLD corpus and pass anyway.
     controls = NEGATIVE_CONTROLS if controls is None else controls
-    cases = []
+    ctx = authorization if authorization is not None else _authorization_of(controls)
+
+    def default_detector(name: str) -> tuple[str, ...]:
+        return _scenario_tags(name, authorization=ctx)
+
+    def default_basis(name: str) -> tuple[str, ...]:
+        return _scenario_basis(name, authorization=ctx)
+
+    detector = detector or default_detector
+    basis_of = basis_of or default_basis
+    cases, suppressed, mentions = [], 0, 0
     for c in controls:
         tags = tuple(detector(c.input))
         basis = tuple(basis_of(c.input)) if basis_of else tags
         if tags:
             cases.append({"input": c.input, "fired": list(tags), "source": c.source,
                           "why_benign": c.why_benign, "basis": list(basis or tags)})
+        elif raw_of is not None and tuple(raw_of(c.input)):
+            suppressed += 1                       # the rule fired; an authorization stood it down
+        elif mention_of is not None and tuple(mention_of(c.input)):
+            mentions += 1                         # the scan saw the word and read it as prose
     n = len(controls)
     return {"n": n, "false_positives": len(cases),
-            "fp_rate": round(len(cases) / n, 3) if n else 0.0, "cases": cases}
+            "fp_rate": round(len(cases) / n, 3) if n else 0.0,
+            "suppressed": suppressed, "mentions": mentions, "cases": cases}
 
 
 class QualityGateError(Exception):
@@ -313,7 +393,8 @@ def _ledger_check(block: dict, ledger: dict, controls) -> tuple[list[str], int]:
 
 
 def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
-                   max_unaccounted_fp: int = 0, fp_ledger: dict | None = None) -> dict:
+                   max_unaccounted_fp: int = 0, fp_ledger: dict | None = None,
+                   authorization: AuthorizationContext | None = None) -> dict:
     """The gate a detector change has to pass before its numbers mean anything — as data, without raising.
 
     Split from `assert_quality_gates` on purpose: CI has to publish the artifact on a RED build, and a
@@ -327,6 +408,12 @@ def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
     A seventh check is a ratchet rather than a correctness test: the ledger may not grow past
     `FP_LEDGER_CEILING`. It is here because the honest-looking failure mode of this whole apparatus is a
     PR that broadens a rule, adds a ledger line for the fallout, and reports gate PASS.
+
+    An eighth covers the other new escape hatch. Authorizations are evidence: every entry has to stand
+    SOMETHING down, or it is paperwork about a rule that no longer fires and it should be deleted — the same
+    rule that keeps FP_LEDGER honest, applied to the mechanism that could otherwise hollow it out. Pass
+    `authorization=NO_AUTHORIZATION` to measure the detector without them; the false positives come back,
+    and with an empty ledger they are unaccounted, which is the point.
     """
     ledger = FP_LEDGER if fp_ledger is None else fp_ledger
     failures: list[str] = []
@@ -341,13 +428,26 @@ def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
     if mapping != mapping_baseline:
         failures.append(f"ATT&CK mapping moved off the frozen baseline: {mapping} != {mapping_baseline}")
 
-    scenario_fp = evaluate_negative_controls(basis_of=_scenario_basis)
-    injection_fp = evaluate_negative_controls(INJECTION_NEGATIVE_CONTROLS, _marker_tags)
+    ctx = authorization if authorization is not None else _authorization_of(controls)
+    # Hub scenario names ARE labels — documents about detections. Saying so changes what a verdict may be
+    # used for (advisory vs evidenced), and changes nothing about whether it is counted here.
+    verdicts = [adjudicate_scenario(c.input, kind=KIND_LABEL, authorization=ctx) for c in NEGATIVE_CONTROLS]
+    scenario_fp = evaluate_negative_controls(NEGATIVE_CONTROLS, raw_of=_scenario_raw_tags,
+                                             authorization=ctx)
+    injection_fp = evaluate_negative_controls(INJECTION_NEGATIVE_CONTROLS, _marker_tags,
+                                              mention_of=_marker_mentions)
     for block, lane_controls in ((scenario_fp, NEGATIVE_CONTROLS),
                                  (injection_fp, INJECTION_NEGATIVE_CONTROLS)):
         block_failures, block_unaccounted = _ledger_check(block, ledger, lane_controls)
         failures += block_failures
         block["unaccounted"] = block_unaccounted
+
+    standing = {m.authorization.key for v in verdicts for m in v.matches if m.suppressed}
+    for entry in ctx.entries:
+        if entry.key not in standing:
+            failures.append(f"authorization for {entry.observable!r} / {entry.token!r} stands nothing down: "
+                            f"either it names a control that no longer exists or the rule moved under it — "
+                            f"delete it, an unearned suppression is a hole with paperwork attached")
 
     total_n = scenario_fp["n"] + injection_fp["n"]
     total_fp = scenario_fp["false_positives"] + injection_fp["false_positives"]
@@ -367,6 +467,17 @@ def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
               "unaccounted_fp_rate": unaccounted_rate,
               "acknowledged": total_fp - unaccounted, "total_false_positives": total_fp,
               "controls": total_n, "ledger_size": len(ledger), "ledger_ceiling": FP_LEDGER_CEILING,
+              # What the clean rate is made of. `raw_false_positives` is what the rules alone do to this
+              # corpus with no context and no position reading — the number the previous release published
+              # as its headline. `suppressed` + `mentions` is the distance between the two, per mechanism,
+              # and `suppressions` names who signed for each one. A reader who only looks at `fp_rate` can
+              # still be told the truth by the two fields beside it.
+              "raw_false_positives": (sum(1 for c in NEGATIVE_CONTROLS if _scenario_raw_tags(c.input))
+                                      + sum(1 for c in INJECTION_NEGATIVE_CONTROLS
+                                            if _markers_seen(c.input))),
+              "suppressed": scenario_fp["suppressed"] + injection_fp["suppressed"],
+              "mentions": scenario_fp["mentions"] + injection_fp["mentions"],
+              "suppressions": [r for v in verdicts for r in v.suppressions],
               "scenario": scenario_fp, "injection": injection_fp, "failures": failures}
     return report
 
@@ -391,7 +502,11 @@ def metrics_artifact(*, recorded_utc: str = "", baseline: dict = ATTACK_BASELINE
     firing_rate = round(gate["total_false_positives"] / total_controls, 3) if total_controls else 0.0
     on_baseline = mapping == baseline
     return {
-        "schema": "aos.edge-sentinel.evaluation/v1",
+        # v2: the detector block now separates what the RULES do from what survives ADJUDICATION, and the
+        # corpus carries operator authorizations. A consumer reading v1 keys will not misread v2 values —
+        # a `false positives: 0` that means "nothing fired" and a `0` that means "context stood it down"
+        # are different claims, and the schema says which artifact it is.
+        "schema": "aos.edge-sentinel.evaluation/v2",
         "corpus_version": CORPUS_VERSION,
         "corpus_digest": corpus_digest(),
         "recorded_utc": recorded_utc,
@@ -422,6 +537,14 @@ def metrics_artifact(*, recorded_utc: str = "", baseline: dict = ATTACK_BASELINE
                 "adversarial_control_firing_rate": firing_rate,
                 "fp_ledger_size": len(FP_LEDGER),
                 "fp_ledger_ceiling": FP_LEDGER_CEILING,     # fix one: delete its entry AND lower this
+                # …and how the rate got to where it is. Without these three, a 0.0 cannot be told apart
+                # from a scan that stopped looking: the first number is the raw rule surface, the next two
+                # are the distance from there to here, split by mechanism.
+                "raw_adversarial_firing_rate": (round(gate["raw_false_positives"] / total_controls, 3)
+                                                if total_controls else 0.0),
+                "suppressed_by_authorization": gate["suppressed"],
+                "downgraded_to_mention": gate["mentions"],
+                "suppressions": gate["suppressions"],       # who authorized what, and from where
             },
         },
         "counts": {"positives": len(ATTACK_CORPUS),
@@ -440,10 +563,13 @@ def metrics_artifact(*, recorded_utc: str = "", baseline: dict = ATTACK_BASELINE
                     + f"{gate['unaccounted']} unaccounted false positives, mapping "
                     + ("on baseline; " if on_baseline else "OFF baseline; ")
                     + "detector: " + str(gate["acknowledged"]) + f" of {total_controls} near-miss "
-                    + "controls flagged "
+                    + "controls flagged, from a raw rule surface of "
+                    + str(gate["raw_false_positives"]) + f"/{total_controls} "
+                    + f"({gate['suppressed']} authorized, {gate['mentions']} prose mentions) "
                     + f"(ledger {len(FP_LEDGER)}/{FP_LEDGER_CEILING}); gate "
                     + ("PASS" if gate["passed"] else f"FAIL ({len(gate['failures'])})")),
     }
+
 
 def write_metrics_artifact(path, **kw) -> dict:
     """Write the artifact (creating parent dirs). Returns it so the caller can assert on what landed."""
@@ -486,6 +612,12 @@ def main(argv=None) -> int:
           f"/{detector['of_adversarial_controls']} "
           f"adversarial_firing_rate={detector['adversarial_control_firing_rate']} "
           f"ledger={detector['fp_ledger_size']}/{detector['fp_ledger_ceiling']}")
+    # …and the mechanism behind the rate, printed next to it. 0.0 with seven suppressions and three
+    # downgraded mentions is a different instrument than 0.0 with nothing happening, and the log is where a
+    # reviewer actually looks.
+    print(f"            raw_rule_surface={detector['raw_adversarial_firing_rate']} "
+          f"({detector['suppressed_by_authorization']} authorized, "
+          f"{detector['downgraded_to_mention']} mentions)")
     print(f"gate: {'PASS' if gate['passed'] else 'FAIL'}  "
           f"(PASS = the measurement is honest, not that the detector is precise)")
     for failure in gate["failures"]:

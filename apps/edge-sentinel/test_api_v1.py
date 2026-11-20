@@ -572,6 +572,13 @@ def test_attack_map_is_deterministic_and_explains_its_basis(env):
     assert r["techniques"] and all({"technique_id", "name", "tactic", "basis", "url"} <= set(t) for t in r["techniques"])
     assert r == s.get("/api/v1/attack/map", params={"scenario": "crowdsecurity/ssh-bf"}).json()
     assert s.get("/api/v1/attack/map").status_code == 422
+    # a name is a label about a detection, not an observation of one — the endpoint says so, and applies no
+    # operator authorization context to an anonymous map request.
+    assert r["kind"] == "observation" and r["advisory"] is False
+    labelled = s.get("/api/v1/attack/map", params={"scenario": "crowdsecurity/ssh-bf", "kind": "label"}).json()
+    assert labelled["advisory"] is True and labelled["techniques"] == r["techniques"]
+    assert labelled["claimable_techniques"] == [t["technique_id"] for t in r["techniques"]]
+    assert s.get("/api/v1/attack/map", params={"scenario": "x", "kind": "whatever"}).status_code == 422
 
 
 def test_ioc_normalize_canonicalises_and_refangs(env):
