@@ -128,6 +128,12 @@ STUB = """
       case "advanced_docker_up": return Promise.resolve("containers up");
       case "advanced_docker_down": return Promise.resolve("containers down");
       case "advanced_docker_purge": return Promise.resolve("containers purged");
+      case "list_installable_apps": return Promise.resolve(JSON.stringify([
+        {profile: "revenue", label: "Revenue", tested_against: ["apps/outreach-engine"]},
+        {profile: "intelligence", label: "Intelligence", tested_against: ["apps/growth-engine"]},
+      ]));
+      case "apps_status": return Promise.resolve(JSON.stringify(fixture.appsActive || []));
+      case "apply_selected_apps": return Promise.resolve("applied");
       case "about_info":
         if (mode === "missing") return Promise.reject("ABOUT_RECORD_MISSING: The build record (Licenses/about.json) is not part of this build.");
         if (mode === "malformed") return Promise.resolve("{not json");
@@ -263,6 +269,32 @@ def test_the_six_buttons_call_the_stub_and_show_the_status_text(browser, served)
             page.click("#" + bid)                                            # the second, deliberate click confirms
         _wait(page, "(t) => document.getElementById('out').textContent.includes(t)", text)
         assert _calls(page) == commands, (bid, _calls(page))
+    assert _viol(page) == [] and problems == []
+    ctx.close()
+
+
+def test_the_apps_screen_lists_apps_and_applies_the_checked_ones(browser, served):
+    ctx, page, problems, _ = _open(browser, served, _stub())
+    _wait(page, "() => !document.getElementById('open-apps').hidden")        # docker_available -> true in the stub
+    page.evaluate("window.__calls.length = 0")
+    page.click("#open-apps")
+    _wait(page, "() => !document.getElementById('view-apps').hidden")
+    assert "Agentic Apps R0-prime does not have a ticket" not in page.content()  # sanity: real page, not a blank one
+    _wait(page, "() => document.querySelectorAll('#apps-list .app-row').length === 2")   # the 2 apps the stub returns
+    assert _calls(page) == ["list_installable_apps", "apps_status"]
+    assert page.locator("#apps-list").inner_text().count("Tested against") == 2
+
+    page.check("#app-revenue")
+    page.evaluate("window.__calls.length = 0")
+    page.click("#apps-apply")
+    _wait(page, "(t) => document.getElementById('apps-status').textContent.includes(t)", "Applied.")
+    calls = page.evaluate("window.__calls")
+    assert [c["name"] for c in calls] == ["apply_selected_apps"]
+    assert calls[0]["args"] == {"profiles": ["revenue"]}
+
+    page.click("#apps-back")
+    _wait(page, "() => document.getElementById('view-apps').hidden")
+    assert page.evaluate("document.activeElement.id") == "open-apps"
     assert _viol(page) == [] and problems == []
     ctx.close()
 

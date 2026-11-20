@@ -36,9 +36,20 @@
         <pre id="out" role="status" aria-live="polite" aria-label="Result">Click “Check this device” to begin.</pre>
 
         <footer class="foot">
+          <button id="open-apps" type="button" class="link" aria-controls="view-apps" hidden>Apps</button>
           <button id="open-about" type="button" class="link" aria-controls="view-about">About / Legal</button>
         </footer>
       </div>
+
+      <section id="view-apps" aria-labelledby="apps-title" hidden>
+        <button id="apps-back" type="button" class="link">← Back</button>
+        <h2 id="apps-title" tabindex="-1">Apps</h2>
+        <p class="note" id="apps-private-note">Checked apps run alongside the control plane via Docker. Unchecking stops that app's own container; shared systems another checked app still needs (for example Metabase) are left running.</p>
+        <div id="apps-status" role="status" aria-live="polite"></div>
+        <div id="apps-error" role="alert" hidden></div>
+        <div id="apps-list" role="group" aria-label="Apps"></div>
+        <button id="apps-apply" type="button" class="primary">Apply</button>
+      </section>
 
       <section id="view-about" aria-labelledby="about-title" hidden>
         <button id="about-back" type="button" class="link">← Back</button>
