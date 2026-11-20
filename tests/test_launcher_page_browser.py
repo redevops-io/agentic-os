@@ -8,7 +8,7 @@ webview's initialization script, which is not subject to the page CSP), loads th
   * the About / Legal view works from the keyboard against the fixture build record;
   * inline script, eval, inline handlers, inline style, form posts, base-tag injection, framing and requests to
     any other origin are blocked, and the "other origin" server sees zero requests;
-  * axe-core: 0 violations at 560x640 and at a narrow width, light and dark, main and About view.
+  * axe-core: 0 violations at 560x640 and at a narrow width, light and dark, main, About, and Apps view.
 
 WHAT THIS PROXY CANNOT SHOW (UNVERIFIED until the native GUI acceptance run): the real WKWebView (macOS) and
 WebView2 (Windows); the `tauri://localhost` / `http://tauri.localhost` origins; the `ipc:` custom-protocol fetch
@@ -788,7 +788,7 @@ def _axe_source() -> str:
 
 @pytest.mark.parametrize("viewport", [(560, 640), (320, 640)], ids=["560x640", "narrow-320"])
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize("state", ["main", "main-armed-waiting", "main-armed", "about", "about-viewer", "about-error", "about-states"])
+@pytest.mark.parametrize("state", ["main", "main-armed-waiting", "main-armed", "about", "about-viewer", "about-error", "about-states", "apps"])
 def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, state):
     axe_src = _axe_source()
     a = _Server(UI, {"Content-Security-Policy": CSP, "X-Content-Type-Options": NOSNIFF})
@@ -801,6 +801,9 @@ def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, st
             assert page.locator("#docker-purge").inner_text() == WAIT_LABEL
             if state == "main-armed":
                 _purge_ready(page)
+        elif state == "apps":
+            page.click("#open-apps")
+            page.wait_for_selector("#apps-list .app-row")
         elif state != "main":
             page.click("#open-about")
             page.wait_for_selector("#about-error:not([hidden])" if state == "about-error" else "#about-body h3")
