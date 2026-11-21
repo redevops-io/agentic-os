@@ -1,0 +1,84 @@
+name: _probe-arm64-cryptography-build
+# THROWAWAY, no production relevance. Only question being answered: can `cryptography==50.0.1`
+# (the exact version this repo's security-pinned wheelhouse requires) be built FROM SOURCE on a
+# windows-11-arm GitHub-hosted runner, since PyPI stopped publishing win_arm64 wheels after 46.0.3.
+# Never merged to main as-is; closed and branch deleted once the question is answered, same as the
+# earlier runner-availability probe.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Python 3.12 (match the production pin)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12.10"
+
+      - name: Rust 1.98.1 (match the production pin)
+        uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7  # branch 1.98.1
+        with:
+          toolchain: "1.98.1"
+
+      - name: What's on this image already (MSVC / vcpkg / perl / openssl)
+        shell: pwsh
+        run: |
+          Write-Host "VCPKG_INSTALLATION_ROOT = $env:VCPKG_INSTALLATION_ROOT"
+          perl -v | Select-Object -First 2
+          where.exe cl.exe 2>$null
+          vswhere.exe -latest -property installationPath
+          openssl version
+
+      - name: Attempt 1 - plain pip install --no-binary, no help (does it vendor-build OpenSSL on its own?)
+        id: attempt1
+        shell: bash
+        continue-on-error: true
+        run: |
+          python -m pip install --no-binary cryptography "cryptography==50.0.1" -v 2>&1 | tee attempt1.log
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Upload attempt 1 log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: attempt1-log
+          path: attempt1.log
+
+      - name: Attempt 2 - vcpkg-provided OpenSSL (arm64-windows triplet), only if attempt 1 failed
+        id: attempt2
+        if: steps.attempt1.outcome == 'failure'
+        shell: bash
+        continue-on-error: true
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:arm64-windows
+          export OPENSSL_DIR="$VCPKG_INSTALLATION_ROOT/installed/arm64-windows"
+          export OPENSSL_STATIC=1
+          python -m pip install --no-binary cryptography "cryptography==50.0.1" -v 2>&1 | tee attempt2.log
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+        env:
+          VCPKG_INSTALLATION_ROOT: C:\vcpkg
+
+      - name: Upload attempt 2 log
+        if: always() && steps.attempt2.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: attempt2-log
+          path: attempt2.log
+
+      - name: Verify (only if either attempt actually succeeded)
+        shell: bash
+        run: |
+          python -c "import cryptography; print('cryptography', cryptography.__version__, 'imported OK on', __import__('platform').machine())"
+
+      - name: Final verdict
+        if: always()
+        shell: bash
+        run: |
+          echo "attempt1=${{ steps.attempt1.outcome }} attempt2=${{ steps.attempt2.outcome }}"
