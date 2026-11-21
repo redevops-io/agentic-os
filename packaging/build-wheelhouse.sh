@@ -60,7 +60,7 @@ if [ "$OS" = windows ] && [ "$ARCH" = arm64 ]; then
   "$BPY" -m pip wheel --quiet --no-deps --no-binary cryptography --require-hashes \
       -r "$TMP/cryptography-sdist.lock" --wheel-dir "$WH"
   CRYPTO_WHEEL="$(ls "$WH"/cryptography-50.0.1-*.whl)"
-  CRYPTO_HASH="$("$BPY" -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$CRYPTO_WHEEL")"
+  CRYPTO_HASH="$("$BPY" -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$CRYPTO_WHEEL" | strip_cr)"
   # Written into $WH (not $TMP) so build-sidecar.sh and build-notices.sh — separate script
   # invocations, later `run:` steps of the same job — can find it too, via common.sh's effective_lock().
   EFFECTIVE_LOCK="$WH/requirements-$OS.lock.effective"
