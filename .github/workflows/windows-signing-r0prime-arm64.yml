@@ -62,6 +62,17 @@
 #                          the log showed only "unattributed: 2" with no way to tell what. ca635497
 #                          prints each unattributed/problem entry to stdout so the next run's log names
 #                          them directly; no change to the pass/fail decision itself.
+#
+# Re-dispatching on ca635497 (run 44943561112) named the two entries: pkg:libcrypto-3-arm64.dll and
+# pkg:libssl-3-arm64.dll. Root cause is in THIS workflow file, not the frozen packaging tree: the vcpkg
+# "openssl:arm64-windows" triplet below is DYNAMIC - it only ships import libs for those two DLLs, so
+# OPENSSL_STATIC=1 against it still links a cryptography native module that depends on them at runtime
+# (PyInstaller correctly bundled them; the SBOM generator correctly flagged them as unattributed - the
+# bug was never achieving true static linking in the first place). Fixed by switching to vcpkg's
+# "arm64-windows-static-md" triplet (true static libs, dynamic CRT - the same combination cryptography's
+# own official win_amd64/win32 wheels use), confirmed present as a built-in triplet via a disposable
+# probe (closed PR #731) before spending a real dispatch on it. BUILD_COMMIT stays at ca635497 - this
+# fix lives entirely in this workflow file, not the frozen packaging commit chain.
 name: windows-signing-r0prime-arm64
 
 on:
@@ -142,12 +153,21 @@ jobs:
         with:
           toolchain: "1.98.1"
 
-      - name: vcpkg openssl:arm64-windows (cryptography has no win_arm64 wheel on PyPI)
+      - name: vcpkg openssl:arm64-windows-static-md (cryptography has no win_arm64 wheel on PyPI)
         shell: bash
         run: |
-          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:arm64-windows
+          # arm64-windows (the dynamic triplet) only provides import libs for libssl-3-arm64.dll /
+          # libcrypto-3-arm64.dll: OPENSSL_STATIC=1 against that triplet still links a binary that
+          # dynamically depends on those two DLLs at runtime - confirmed by run 44943561112, which got
+          # this far and then failed Task 3 (licence notices) because those two DLLs end up as real,
+          # unattributed archive entries in the built sidecar. arm64-windows-static-md is vcpkg's true
+          # static triplet with the dynamic CRT (/MD, matching python3.dll and every other extension
+          # module here) - the same combination cryptography's own official win_amd64/win32 wheels use
+          # for their statically-linked OpenSSL. Confirmed present as a built-in vcpkg triplet via a
+          # disposable probe (closed PR #731) before spending a real dispatch on it.
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:arm64-windows-static-md
           {
-            echo "OPENSSL_DIR=$VCPKG_INSTALLATION_ROOT/installed/arm64-windows"
+            echo "OPENSSL_DIR=$VCPKG_INSTALLATION_ROOT/installed/arm64-windows-static-md"
             echo "OPENSSL_STATIC=1"
           } >> "$GITHUB_ENV"
 
