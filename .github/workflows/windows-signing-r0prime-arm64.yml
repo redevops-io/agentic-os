@@ -36,14 +36,20 @@
 # chose to port this workflow + its fix chain onto release/0.6.0 instead, matching where
 # windows-signing-r0prime.yml itself already lives and is already allow-listed.
 #
-# BUILD_COMMIT here (6e8874ae) is the five-commit packaging fix chain (originally 04db1b26 -> 16fa5b08
-# -> 956b5b74 -> ca635497 -> 51d7717c on main, cherry-picked here verbatim as 3afb0153 -> 3d1aa2cd ->
-# 9b176eab -> 9de03f55 -> 6e8874ae onto release/0.6.0's own tip, 9a0abd2904454501060d1a921b6c7f25de299dfb
-# — the port was a clean cherry-pick with zero conflicts, confirmed beforehand because all six touched
-# files were byte-identical between fc254a34 and that release/0.6.0 tip). Confirm: `git diff --stat
-# 9a0abd29...6e8874ae` shows just packaging/common.sh, packaging/build-wheelhouse.sh,
-# packaging/build-sidecar.sh, packaging/build-notices.sh, packaging/sbom/generate_sbom.py,
-# packaging/sbom/analyze.py — nothing else. The product tree is release/0.6.0's own, same as
+# BUILD_COMMIT here (495773433928) is the five-commit packaging fix chain (originally 04db1b26 ->
+# 16fa5b08 -> 956b5b74 -> ca635497 -> 51d7717c on main, cherry-picked here verbatim as 3afb0153 ->
+# 3d1aa2cd -> 9b176eab -> 9de03f55 -> 6e8874ae onto release/0.6.0's own tip,
+# 9a0abd2904454501060d1a921b6c7f25de299dfb — the port was a clean cherry-pick with zero conflicts,
+# confirmed beforehand because all six touched files were byte-identical between fc254a34 and that
+# release/0.6.0 tip) plus one more child commit (49577343) fixing two release/0.6.0-only test failures
+# this port's own CI surfaced: build-wheelhouse.sh's CRYPTO_HASH capture never went through strip_cr
+# (a real latent bug - a trailing \r could corrupt the hash written into the lock file on Windows),
+# caught by tests/test_windows_build_prep.py; the other failure (test_workflow_no_publish.py's
+# OIDC_SIGNING_WORKFLOWS carve-out) is a non-frozen test-file change, committed separately
+# (4424897b), not part of this BUILD_COMMIT. Confirm: `git diff --stat 9a0abd29...495773433928`
+# shows just packaging/common.sh, packaging/build-wheelhouse.sh, packaging/build-sidecar.sh,
+# packaging/build-notices.sh, packaging/sbom/generate_sbom.py, packaging/sbom/analyze.py — nothing
+# else. The product tree is release/0.6.0's own, same as
 # windows-signing-r0prime.yml; the only differences from it are how the packaging scripts source ONE
 # third-party dependency on this one platform (see the carve-out comment in build-wheelhouse.sh), one
 # diagnostic print in the SBOM generator, and one regex fix in the SBOM analyzer (below). This was a
@@ -105,14 +111,14 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type EXACTLY: sign arm64 6e8874ae38f0512331ba44bdc0685acec1110634'
+        description: 'Type EXACTLY: sign arm64 495773433928db858d3d249feddb3b17791a5967'
         required: true
 
 permissions:
   contents: read
 
 env:
-  BUILD_COMMIT: 6e8874ae38f0512331ba44bdc0685acec1110634
+  BUILD_COMMIT: 495773433928db858d3d249feddb3b17791a5967
   PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.1"
 
 jobs:
@@ -121,7 +127,7 @@ jobs:
     steps:
       - name: Confirm the exact commit phrase was typed
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 6e8874ae38f0512331ba44bdc0685acec1110634" ]; then
+          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 495773433928db858d3d249feddb3b17791a5967" ]; then
             echo "::error::confirmation phrase did not match exactly; refusing to proceed"
             exit 1
           fi
@@ -135,11 +141,11 @@ jobs:
             exit 1
           fi
           TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
-          if [ "${TREE:0:8}" != "d7dd5e4f" ]; then
-            echo "::error::BUILD_COMMIT's tree hash does not start with the expected d7dd5e4f prefix (got $TREE) - refusing"
+          if [ "${TREE:0:8}" != "48a7ae3e" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 48a7ae3e prefix (got $TREE) - refusing"
             exit 1
           fi
-          echo "BUILD_COMMIT verified present, tree prefix d7dd5e4f confirmed."
+          echo "BUILD_COMMIT verified present, tree prefix 48a7ae3e confirmed."
 
   collect:
     needs: guard
@@ -153,7 +159,7 @@ jobs:
       # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 6e8874ae38f0512331ba44bdc0685acec1110634
+          ref: 495773433928db858d3d249feddb3b17791a5967
       - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
         shell: bash
         run: |
@@ -329,7 +335,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 6e8874ae38f0512331ba44bdc0685acec1110634
+          ref: 495773433928db858d3d249feddb3b17791a5967
 
       - name: Download round1 state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -534,7 +540,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 6e8874ae38f0512331ba44bdc0685acec1110634
+          ref: 495773433928db858d3d249feddb3b17791a5967
 
       - name: CPython 3.12.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -684,7 +690,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 6e8874ae38f0512331ba44bdc0685acec1110634
+          ref: 495773433928db858d3d249feddb3b17791a5967
 
       - name: Download round2 containers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
