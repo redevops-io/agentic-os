@@ -36,7 +36,7 @@ PY
 
 
 echo "== install the shipped set OFFLINE: third-party by hash, first-party from the wheelhouse =="
-"$FPY" -m pip install --quiet --no-index --find-links "$WH" --require-hashes --no-deps -r "$LOCKS/requirements-$OS.lock"
+"$FPY" -m pip install --quiet --no-index --find-links "$WH" --require-hashes --no-deps -r "$(effective_lock)"
 first_party_wheels "$FPY" "$WH"
 # shellcheck disable=SC2086
 "$FPY" -m pip install --quiet --no-index --find-links "$WH" --no-deps $FIRST

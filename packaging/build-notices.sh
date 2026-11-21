@@ -25,7 +25,7 @@ uv pip install --python "$TPY" --require-hashes --no-deps -r "$LOCKS/build-tools
     --cargo-target "$TRIPLE" --tauri-conf "$ROOT/deploy/launcher/src-tauri/tauri.conf.json" --out "$DIST/sbom-pass1"
 # 2. site-packages of the shipped set (dist-info licence files) from the wheelhouse, offline and hash-checked
 uv venv --python "$PYTHON_VERSION" "$TMP/site" >/dev/null; SPY="$(venv_py "$TMP/site")"
-uv pip install --python "$SPY" --no-index --find-links "$WH" --require-hashes --no-deps -r "$LOCKS/requirements-$OS.lock" >/dev/null
+uv pip install --python "$SPY" --no-index --find-links "$WH" --require-hashes --no-deps -r "$(effective_lock)" >/dev/null
 first_party_wheels "$TPY" "$WH"
 # shellcheck disable=SC2086
 uv pip install --python "$SPY" --no-index --find-links "$WH" --no-deps $FIRST >/dev/null

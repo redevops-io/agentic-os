@@ -34,6 +34,16 @@ if [ "$OS" = windows ]; then
   esac
 fi
 LOCKS="$PK/locks"
+# effective_lock: the requirements-$OS.lock to use for a hash-checked install from the wheelhouse.
+# Normally that's just locks/requirements-$OS.lock. But build-wheelhouse.sh's windows-arm64 carve-out
+# (cryptography has no win_arm64 wheel on PyPI, so it's built from source) writes a wheelhouse-relative
+# copy with that one package's hash corrected to the wheel actually in the wheelhouse — every OTHER
+# script that re-installs the shipped set (build-sidecar.sh, build-notices.sh) must use that corrected
+# copy too, or pip's hash check fails against the original win_amd64-wheel hash. The override lives
+# inside $PK/wheelhouse (wiped and rewritten every time build-wheelhouse.sh runs, so it can't go stale
+# across CI runs) rather than a $TMP of build-wheelhouse.sh's own, which is deleted before these other
+# scripts, in separate `run:` steps, ever get to read it.
+effective_lock() { local f="$PK/wheelhouse/requirements-$OS.lock.effective"; [ -f "$f" ] && echo "$f" || echo "$LOCKS/requirements-$OS.lock"; }
 # uv venv puts executables in bin/ on POSIX and Scripts/ on Windows git-bash.
 venv_bin() { if [ -d "$1/bin" ]; then echo "$1/bin"; else echo "$1/Scripts"; fi; }
 # On Windows git-bash `[ -x "$b/python" ]` is TRUE for an existing python.exe (MSYS resolves the missing .exe), so testing the bare name
