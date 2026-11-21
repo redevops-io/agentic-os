@@ -1,0 +1,35 @@
+name: _probe-arch-detect
+# THROWAWAY. Diagnoses why the arm64 ARCH detection in packaging/common.sh (via PROCESSOR_ARCHITECTURE,
+# read from git-bash) didn't take the arm64 branch on windows-11-arm, even though the collect job is
+# genuinely running there (native ARM64 Python resolved by actions/setup-python). Hypothesis: git-bash
+# is an x64 binary, running under Windows' x64-on-arm64 emulation, so PROCESSOR_ARCHITECTURE inside
+# that bash process reports its OWN emulated architecture (AMD64), not the real host's.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-11-arm
+    steps:
+      - name: bash view
+        shell: bash
+        run: |
+          echo "uname -a: $(uname -a)"
+          echo "uname -m: $(uname -m)"
+          echo "PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE:-<unset>}"
+          echo "PROCESSOR_ARCHITEW6432=${PROCESSOR_ARCHITEW6432:-<unset>}"
+          echo "RUNNER_ARCH=${RUNNER_ARCH:-<unset>}"
+          file "$(command -v bash)" 2>/dev/null || true
+
+      - name: pwsh view (ground truth)
+        shell: pwsh
+        run: |
+          Write-Host "RUNNER_ARCH env = $env:RUNNER_ARCH"
+          Write-Host "PROCESSOR_ARCHITECTURE env = $env:PROCESSOR_ARCHITECTURE"
+          Write-Host "PROCESSOR_ARCHITEW6432 env = $env:PROCESSOR_ARCHITEW6432"
+          Write-Host "OS Arch (real) = $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+          Write-Host "Process Arch (this pwsh) = $([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"
