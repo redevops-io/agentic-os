@@ -17,29 +17,38 @@
 # distribution=no throughout: this authorizes a signed CANDIDATE, not a distribution build. It does not
 # invoke --distribution and does not claim the distribution-blocking legal decisions are resolved.
 #
-# Same BUILD_COMMIT, same source tree, same product version (0.1.1) as windows-signing-r0prime.yml —
-# this is a second ARCHITECTURE of the same release, not a separate version. Everything here mirrors
-# that proven workflow exactly except: the two Windows jobs run on windows-11-arm (confirmed real,
-# native ARM64-based PC, usable on this public repo at no extra cost) instead of windows-2022, with no
-# other change needed — the build has no explicit --target; it already builds for the runner's own
-# host triple (packaging/stage-sidecar.sh already names the sidecar by `rustc -Vv`'s host triple), so
-# collect naturally produces an aarch64-pc-windows-msvc build simply by running on this runner. The
-# MSI/NSIS output filenames are discovered by glob rather than assumed, since this file does not take
-# Tauri's "arm64" bundler-arch moniker on faith.
+# Same source tree, same product version (0.1.1) as windows-signing-r0prime.yml — this is a second
+# ARCHITECTURE of the same release, not a separate version. The two Windows jobs run on windows-11-arm
+# (confirmed real, native ARM64-based PC, usable on this public repo at no extra cost) instead of
+# windows-2022, with no other change needed for the build itself — it has no explicit --target; it
+# already builds for the runner's own host triple (packaging/stage-sidecar.sh already names the
+# sidecar by `rustc -Vv`'s host triple), so collect naturally produces an aarch64-pc-windows-msvc build
+# simply by running on this runner. The MSI/NSIS output filenames are discovered by glob rather than
+# assumed, since this file does not take Tauri's "arm64" bundler-arch moniker on faith.
+#
+# BUILD_COMMIT here (04db1b26) is NOT windows-signing-r0prime.yml's fc254a34610dcd84b4cd10147299c7d12
+# fca4119 — it is that exact commit's direct child, changing ONLY packaging/common.sh and
+# packaging/build-wheelhouse.sh (confirm: `git diff --stat fc254a34...04db1b26` shows just those two
+# files). The agentic_os product tree is byte-identical between the two commits; the only difference is
+# how the wheelhouse script sources ONE third-party dependency — see the carve-out comment in
+# build-wheelhouse.sh. This was a deliberate, discussed exception to "exact same BUILD_COMMIT": PyPI
+# stopped publishing win_arm64 wheels for cryptography after 46.0.3, and this repo's pin (50.0.1) has
+# none, so the frozen fc254a34 tree's build-wheelhouse.sh cannot succeed on this architecture no matter
+# what the environment provides — fixing it requires script changes, which a frozen commit cannot carry.
 name: windows-signing-r0prime-arm64
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type EXACTLY: sign arm64 fc254a34610dcd84b4cd10147299c7d12fca4119'
+        description: 'Type EXACTLY: sign arm64 04db1b26a681999f09a88e95c1f7403d704568ff'
         required: true
 
 permissions:
   contents: read
 
 env:
-  BUILD_COMMIT: fc254a34610dcd84b4cd10147299c7d12fca4119
+  BUILD_COMMIT: 04db1b26a681999f09a88e95c1f7403d704568ff
   PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.1"
 
 jobs:
@@ -48,7 +57,7 @@ jobs:
     steps:
       - name: Confirm the exact commit phrase was typed
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 fc254a34610dcd84b4cd10147299c7d12fca4119" ]; then
+          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 04db1b26a681999f09a88e95c1f7403d704568ff" ]; then
             echo "::error::confirmation phrase did not match exactly; refusing to proceed"
             exit 1
           fi
@@ -62,11 +71,11 @@ jobs:
             exit 1
           fi
           TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
-          if [ "${TREE:0:8}" != "b9f490a7" ]; then
-            echo "::error::BUILD_COMMIT's tree hash does not start with the expected b9f490a7 prefix (got $TREE) - refusing"
+          if [ "${TREE:0:8}" != "5f7e3a0e" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 5f7e3a0e prefix (got $TREE) - refusing"
             exit 1
           fi
-          echo "BUILD_COMMIT verified present, tree prefix b9f490a7 confirmed."
+          echo "BUILD_COMMIT verified present, tree prefix 5f7e3a0e confirmed."
 
   collect:
     needs: guard
@@ -80,7 +89,7 @@ jobs:
       # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+          ref: 04db1b26a681999f09a88e95c1f7403d704568ff
       - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
         shell: bash
         run: |
@@ -105,6 +114,15 @@ jobs:
         uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7  # branch 1.98.1
         with:
           toolchain: "1.98.1"
+
+      - name: vcpkg openssl:arm64-windows (cryptography has no win_arm64 wheel on PyPI)
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:arm64-windows
+          {
+            echo "OPENSSL_DIR=$VCPKG_INSTALLATION_ROOT/installed/arm64-windows"
+            echo "OPENSSL_STATIC=1"
+          } >> "$GITHUB_ENV"
 
       - name: Pins are consistent
         shell: bash
@@ -213,7 +231,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+          ref: 04db1b26a681999f09a88e95c1f7403d704568ff
 
       - name: Download round1 state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -418,7 +436,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+          ref: 04db1b26a681999f09a88e95c1f7403d704568ff
 
       - name: CPython 3.12.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -568,7 +586,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: fc254a34610dcd84b4cd10147299c7d12fca4119
+          ref: 04db1b26a681999f09a88e95c1f7403d704568ff
 
       - name: Download round2 containers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
