@@ -179,6 +179,31 @@ jobs:
         shell: bash
         run: ./packaging/build-wheelhouse.sh
 
+      - name: DIAGNOSTIC - did openssl-sys actually link OpenSSL statically into cryptography?
+        shell: bash
+        run: |
+          # Task 3 has twice failed with unattributed libcrypto-3-arm64.dll / libssl-3-arm64.dll in the
+          # built archive, even after switching to vcpkg's arm64-windows-static-md triplet (PR #732).
+          # This answers, in this same run, whether cryptography's own .pyd still imports those two DLLs
+          # (static linking genuinely failed) or not (something else - e.g. a PyInstaller hook - is
+          # pulling them in), so a Task 3 failure doesn't need a third blind round trip.
+          set -x
+          WH="packaging/wheelhouse"
+          WHL="$(ls "$WH"/cryptography-50.0.1-*.whl)"
+          echo "wheel: $WHL"
+          TMPD="$(mktemp -d)"
+          python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$WHL" "$TMPD"
+          find "$TMPD" \( -iname "*.pyd" -o -iname "*.dll" \) -print
+          PYD="$(find "$TMPD" -iname "*.pyd" | head -1)"
+          python3 -m pip install --quiet pefile
+          python3 -c "import pefile, sys; pe = pefile.PE(sys.argv[1]); print('IMPORTS:', [e.dll.decode() for e in getattr(pe, 'DIRECTORY_ENTRY_IMPORT', [])])" "$PYD"
+          echo "== vcpkg arm64-windows-static-md installed/lib =="
+          ls -la "$VCPKG_INSTALLATION_ROOT/installed/arm64-windows-static-md/lib" 2>&1 || echo "MISSING"
+          echo "== vcpkg arm64-windows-static-md installed/bin (should not exist for a true static triplet) =="
+          ls -la "$VCPKG_INSTALLATION_ROOT/installed/arm64-windows-static-md/bin" 2>&1 || echo "absent (expected)"
+          set +x
+        continue-on-error: true
+
       - name: Task 2 - freeze the Python sidecar (pass 1)
         shell: bash
         run: ./packaging/build-sidecar.sh
