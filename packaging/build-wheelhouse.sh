@@ -12,6 +12,17 @@
 # commit, the committed stale build/ of runtime-contracts v0.3.4 is removed, and every built .py is
 # compared with `git show <commit>:<path>`.
 #
+# windows-arm64 carve-out: PyPI stopped publishing win_arm64 wheels for cryptography after 46.0.3
+# (checked 2026-11-21; the pin here, 50.0.1, has none). Every OTHER third-party pin in
+# requirements-windows.lock still ships a win_arm64 wheel, so only cryptography is special-cased: the
+# other 20 are pulled exactly as before, and cryptography is built from its PyPI sdist (hash below is
+# PyPI's own published sha256 for the tarball, checked independently of requirements-windows.lock -
+# that file's hash is the win_amd64 WHEEL's hash and can never match a from-source build's bytes)
+# against vcpkg's openssl:arm64-windows port, statically linked so the shipped wheel has no runtime
+# OpenSSL dependency, matching the prebuilt wheel's behavior. Provisioning vcpkg itself (OPENSSL_DIR /
+# OPENSSL_STATIC) is the calling WORKFLOW's job, not this script's - same split already used for
+# Python/Rust/uv, which are also installed by workflow steps, not by this script.
+#
 # Output: packaging/wheelhouse/*.whl, WHEELS.sha256, wheelhouse-manifest.json (+ packaging/dist/build-manifest.json)
 # Runs on Linux, macOS (bash 3.2) and Windows git-bash. Needs uv and git; network for PyPI and GitHub.
 set -euo pipefail
@@ -34,8 +45,28 @@ echo "== pins check (pyproject, git-pins.json, requirements.in, locks, Cargo.loc
 "$BPY" -I "$PK/verify-pins.py" --quiet || { echo "pins are inconsistent: run packaging/verify-pins.py"; exit 1; }
 
 echo "== 1/4 third-party wheels: pip download --require-hashes (binary only, no build) =="
-"$BPY" -m pip download --quiet --no-deps --only-binary=:all: --require-hashes \
-    -r "$LOCKS/requirements-$OS.lock" --dest "$WH"
+EFFECTIVE_LOCK="$LOCKS/requirements-$OS.lock"
+if [ "$OS" = windows ] && [ "$ARCH" = arm64 ]; then
+  [ -n "${OPENSSL_DIR:-}" ] || { echo "ERROR: OPENSSL_DIR not set (expected vcpkg openssl:arm64-windows, set by the workflow)"; exit 1; }
+  [ "${OPENSSL_STATIC:-}" = 1 ] || { echo "ERROR: OPENSSL_STATIC=1 not set (the shipped wheel must not depend on a runtime OpenSSL DLL)"; exit 1; }
+  WITHOUT_CRYPTO="$TMP/requirements-$OS.no-cryptography.lock"
+  awk '/^[A-Za-z0-9_.-]+==/{skip=($0 ~ /^cryptography==/)} {if(!skip) print}' \
+      "$LOCKS/requirements-$OS.lock" > "$WITHOUT_CRYPTO"
+  "$BPY" -m pip download --quiet --no-deps --only-binary=:all: --require-hashes \
+      -r "$WITHOUT_CRYPTO" --dest "$WH"
+  echo "   cryptography==50.0.1 has no win_arm64 wheel on PyPI: building from the sdist (PyPI-published hash) instead"
+  printf 'cryptography==50.0.1 --hash=sha256:%s\n' \
+      "5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20" > "$TMP/cryptography-sdist.lock"
+  "$BPY" -m pip wheel --quiet --no-deps --no-binary cryptography --require-hashes \
+      -r "$TMP/cryptography-sdist.lock" --wheel-dir "$WH"
+  CRYPTO_WHEEL="$(ls "$WH"/cryptography-50.0.1-*.whl)"
+  CRYPTO_HASH="$("$BPY" -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$CRYPTO_WHEEL")"
+  EFFECTIVE_LOCK="$TMP/requirements-$OS.lock"
+  { cat "$WITHOUT_CRYPTO"; printf 'cryptography==50.0.1 --hash=sha256:%s\n' "$CRYPTO_HASH"; } > "$EFFECTIVE_LOCK"
+else
+  "$BPY" -m pip download --quiet --no-deps --only-binary=:all: --require-hashes \
+      -r "$LOCKS/requirements-$OS.lock" --dest "$WH"
+fi
 
 echo "== 2/4 first-party git dependencies: clean verified clones -> wheels =="
 "$BPY" -I "$PK/tools/build_git_wheels.py" --pins "$PK/git-pins.json" --out "$WH" \
@@ -48,7 +79,7 @@ echo "== 4/4 PROVE an offline, hash-checked install: exact set, no index, no git
 uv venv --python "$PYTHON_VERSION" "$TMP/verify" >/dev/null
 VPY="$(venv_py "$TMP/verify")"
 uv pip install --python "$VPY" --no-index --find-links "$WH" --require-hashes --no-deps \
-    -r "$LOCKS/requirements-$OS.lock" >/dev/null
+    -r "$EFFECTIVE_LOCK" >/dev/null
 first_party_wheels "$BPY" "$WH"
 # shellcheck disable=SC2086
 uv pip install --python "$VPY" --no-index --find-links "$WH" --no-deps $FIRST >/dev/null
