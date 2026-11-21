@@ -100,7 +100,7 @@ def classify_pkg(name: str, stdlib: set[str] = STDLIB) -> tuple[str, str]:
         return "ms-dll", base
     if re.fullmatch(r"api-ms-win-[\w\-]+\.dll", base):
         return "ms-apiset", "api-ms-win"
-    if re.fullmatch(r"lib(crypto|ssl)[-.\d]*(-x64)?\.(dylib|dll|so[.\d]*)", base):
+    if re.fullmatch(r"lib(crypto|ssl)[-.\d]*(-x64|-arm64)?\.(dylib|dll|so[.\d]*)", base):
         return "openssl-lib", base
     if re.fullmatch(r"libffi[-.\d]*\.(dylib|dll|so[.\d]*)", base):
         return "libffi", base
