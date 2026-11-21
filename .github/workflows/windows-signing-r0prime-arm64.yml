@@ -26,13 +26,14 @@
 # simply by running on this runner. The MSI/NSIS output filenames are discovered by glob rather than
 # assumed, since this file does not take Tauri's "arm64" bundler-arch moniker on faith.
 #
-# BUILD_COMMIT here (ca635497) is NOT windows-signing-r0prime.yml's fc254a34610dcd84b4cd10147299c7d12
-# fca4119 — it is a four-commit chain descending from that exact commit, touching ONLY packaging/
+# BUILD_COMMIT here (51d7717c) is NOT windows-signing-r0prime.yml's fc254a34610dcd84b4cd10147299c7d12
+# fca4119 — it is a five-commit chain descending from that exact commit, touching ONLY packaging/
 # common.sh, packaging/build-wheelhouse.sh, packaging/build-sidecar.sh, packaging/build-notices.sh,
-# packaging/sbom/generate_sbom.py (confirm: `git diff --stat fc254a34...ca635497` shows just those five
-# files). The agentic_os product tree is byte-identical to fc254a34; the only differences are how the
-# packaging scripts source ONE third-party dependency on this one platform (see the carve-out comment
-# in build-wheelhouse.sh) and one diagnostic print in the SBOM generator. This was a deliberate,
+# packaging/sbom/generate_sbom.py, packaging/sbom/analyze.py (confirm: `git diff --stat
+# fc254a34...51d7717c` shows just those six files). The agentic_os product tree is byte-identical to
+# fc254a34; the only differences are how the packaging scripts source ONE third-party dependency on
+# this one platform (see the carve-out comment in build-wheelhouse.sh), one diagnostic print in the
+# SBOM generator, and one regex fix in the SBOM analyzer (below). This was a deliberate,
 # discussed exception to "exact same BUILD_COMMIT": PyPI stopped publishing win_arm64 wheels for
 # cryptography after 46.0.3, and this repo's pin (50.0.1) has none, so the frozen fc254a34 tree's
 # scripts cannot succeed on this architecture no matter what the environment provides — fixing it
@@ -64,29 +65,41 @@
 #                          them directly; no change to the pass/fail decision itself.
 #
 # Re-dispatching on ca635497 (run 44943561112) named the two entries: pkg:libcrypto-3-arm64.dll and
-# pkg:libssl-3-arm64.dll. Root cause is in THIS workflow file, not the frozen packaging tree: the vcpkg
-# "openssl:arm64-windows" triplet below is DYNAMIC - it only ships import libs for those two DLLs, so
-# OPENSSL_STATIC=1 against it still links a cryptography native module that depends on them at runtime
-# (PyInstaller correctly bundled them; the SBOM generator correctly flagged them as unattributed - the
-# bug was never achieving true static linking in the first place). Fixed by switching to vcpkg's
+# pkg:libssl-3-arm64.dll. First hypothesis (WRONG, but worth fixing anyway): the vcpkg
+# "openssl:arm64-windows" triplet used below was DYNAMIC - only import libs for those DLLs, so
+# OPENSSL_STATIC=1 against it didn't achieve true static linking. Switched to vcpkg's
 # "arm64-windows-static-md" triplet (true static libs, dynamic CRT - the same combination cryptography's
-# own official win_amd64/win32 wheels use), confirmed present as a built-in triplet via a disposable
-# probe (closed PR #731) before spending a real dispatch on it. BUILD_COMMIT stays at ca635497 - this
-# fix lives entirely in this workflow file, not the frozen packaging commit chain.
+# own official win_amd64/win32 wheels use for static OpenSSL), confirmed present as a built-in triplet
+# via a disposable probe (closed PR #731). Re-dispatching on that fix (run 44950224552) failed Task 3
+# AGAIN with the exact same two entries - so the triplet switch (kept; it's a real improvement to
+# cryptography's own linkage either way) was never the actual cause.
+#
+# A non-blocking inline diagnostic step added for that same run proved it conclusively: the built
+# cryptography wheel's own .pyd has a CLEAN PE import table (no libcrypto/libssl at all - static
+# linking genuinely works now), and vcpkg's static-md triplet installed true static .lib files with no
+# bin/ DLLs. The two unattributed DLLs have NOTHING to do with cryptography or vcpkg - they're CPython's
+# own ARM64 Windows distribution's libcrypto-3-arm64.dll / libssl-3-arm64.dll, shipped in its DLLs/
+# folder for the stdlib's _ssl/_hashlib, bundled by PyInstaller the same way the x64 build bundles the
+# non-suffixed libcrypto-3.dll / libssl-3.dll for the exact same reason. packaging/sbom/analyze.py's
+# component-classification regex for OpenSSL library files only ever allowed an "-x64" architecture
+# suffix, never "-arm64", so these two legitimate, already-handled-on-x64 files fell through to
+# "unattributed" purely because of their filename suffix. 51d7717c is a one-character-class fix:
+# (-x64)? -> (-x64|-arm64)?. BUILD_COMMIT moves to 51d7717c for this (it touches a frozen packaging
+# file); the vcpkg triplet fix stays in this workflow file as before.
 name: windows-signing-r0prime-arm64
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type EXACTLY: sign arm64 ca6354976e8689a2874aab15ae58a7da343cef0f'
+        description: 'Type EXACTLY: sign arm64 51d7717cf2546c2a74e304e2a9aa5bf4766ba339'
         required: true
 
 permissions:
   contents: read
 
 env:
-  BUILD_COMMIT: ca6354976e8689a2874aab15ae58a7da343cef0f
+  BUILD_COMMIT: 51d7717cf2546c2a74e304e2a9aa5bf4766ba339
   PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.1"
 
 jobs:
@@ -95,7 +108,7 @@ jobs:
     steps:
       - name: Confirm the exact commit phrase was typed
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 ca6354976e8689a2874aab15ae58a7da343cef0f" ]; then
+          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 51d7717cf2546c2a74e304e2a9aa5bf4766ba339" ]; then
             echo "::error::confirmation phrase did not match exactly; refusing to proceed"
             exit 1
           fi
@@ -109,11 +122,11 @@ jobs:
             exit 1
           fi
           TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
-          if [ "${TREE:0:8}" != "778f8fd0" ]; then
-            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 778f8fd0 prefix (got $TREE) - refusing"
+          if [ "${TREE:0:8}" != "ef126653" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected ef126653 prefix (got $TREE) - refusing"
             exit 1
           fi
-          echo "BUILD_COMMIT verified present, tree prefix 778f8fd0 confirmed."
+          echo "BUILD_COMMIT verified present, tree prefix ef126653 confirmed."
 
   collect:
     needs: guard
@@ -127,7 +140,7 @@ jobs:
       # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: ca6354976e8689a2874aab15ae58a7da343cef0f
+          ref: 51d7717cf2546c2a74e304e2a9aa5bf4766ba339
       - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
         shell: bash
         run: |
@@ -303,7 +316,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: ca6354976e8689a2874aab15ae58a7da343cef0f
+          ref: 51d7717cf2546c2a74e304e2a9aa5bf4766ba339
 
       - name: Download round1 state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -508,7 +521,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: ca6354976e8689a2874aab15ae58a7da343cef0f
+          ref: 51d7717cf2546c2a74e304e2a9aa5bf4766ba339
 
       - name: CPython 3.12.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -658,7 +671,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: ca6354976e8689a2874aab15ae58a7da343cef0f
+          ref: 51d7717cf2546c2a74e304e2a9aa5bf4766ba339
 
       - name: Download round2 containers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
