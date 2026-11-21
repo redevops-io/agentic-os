@@ -10,6 +10,8 @@ case model and the UI agree. Nothing here talks to CrowdSec; it consumes the dic
 """
 from __future__ import annotations
 
+from . import attack
+from .authorization import AuthorizationContext, canonical_source, deployment_authorization
 from .evidence import (
     ActionReceipt,
     ActionRequest,
@@ -66,15 +68,35 @@ def normalize_crowdsec_alert(alert: dict, evidence: EvidenceArtifact) -> Securit
         confidence=1.0)
 
 
-def _finding_from_observation(obs: SecurityObservation, evidence: EvidenceArtifact) -> Finding:
+def _finding_from_observation(obs: SecurityObservation, evidence: EvidenceArtifact,
+                              *, verdict: attack.ScenarioVerdict | None = None) -> Finding:
     nf = obs.normalized_fields
     ip, scenario, sev = nf["source_ip"], nf["scenario"], nf["severity"]
+    tags = verdict.tags if verdict is not None else ()
+    # A stand-down is only a stand-down if nothing claimable survived it: an authorization covers the
+    # activity it names and nothing else, so a match that also produced an unauthorized token still stands.
+    stood_down = bool(verdict is not None and verdict.suppressions) and not tags
+    claim = f"Source {ip} matched CrowdSec scenario '{scenario}' (severity {sev})."
+    if stood_down:
+        rec = verdict.suppressions[0]
+        # The address the decision actually covered, in the form a ban would have named it. The alert's own
+        # text stays quoted above — that is what was observed — but a stand-down that names no address is not
+        # attributable: `::ffff:203.0.113.7` and `203.0.113.7` are one host to the edge and two strings to
+        # whoever reads this finding in six weeks, so the claim carries the canonical one.
+        decided_on = canonical_source(ip) or ", ".join(rec.get("source_scope") or []) or "no address recorded"
+        claim += (f" Stood down by operator authorization: {rec['principal']} ({rec['source']}) for {decided_on}"
+                  + (f", valid until {rec['expires_at']}" if rec.get("expires_at") else ", no expiry recorded")
+                  + ".")
     return Finding(
-        claim=f"Source {ip} matched CrowdSec scenario '{scenario}' (severity {sev}).",
+        claim=claim,
         confidence=obs.confidence,
         evidence_refs=(evidence.artifact_id,),
+        attack_refs=tags,
         affected_assets=(),
-        recommended_actions=("sentinel.block_ip",) if sev in ("critical", "high") else (),
+        # The block offer needs both: CrowdSec's own severity, AND something adjudication left standing.
+        # Severity alone used to be enough, which is how an alert about a sanctioned scanner became a ban
+        # proposal one refresh cycle later.
+        recommended_actions=("sentinel.block_ip",) if sev in ("critical", "high") and not stood_down else (),
         status=FindingStatus.SUPPORTED)
 
 
@@ -89,16 +111,30 @@ def stable_alert(alert: dict) -> dict:
                                    for d in decisions]}
 
 
-def ingest_crowdsec_alert(store, alert: dict) -> SecurityCase:
+def ingest_crowdsec_alert(store, alert: dict, *, authorization: AuthorizationContext | None = None,
+                          now=None) -> SecurityCase:
     """The ingestion path. Returns an INCIDENT case linking immutable raw evidence → observation →
     finding, plus a PROPOSED (approval-gated) block_ip ActionRequest when the finding recommends it.
-    Idempotent: re-ingesting the same alert yields the same content-addressed ids and does not duplicate."""
+    Idempotent: re-ingesting the same alert yields the same content-addressed ids and does not duplicate.
+
+    Every alert is adjudicated here, before anything downstream can act on it, because this is the point
+    where a CrowdSec label becomes a ban proposal. `authorization` comes from the deployment's operator
+    configuration (`SENTINEL_AUTHORIZATIONS_FILE`) when the caller does not pass one — never from the
+    alert, because an event cannot bring its own permission slip. The scope test is on: an authorized
+    scanner is authorized at the addresses the operator named, and a scan from anywhere else is a scan.
+    `now` is injectable so an expiry check is reproducible; it defaults to the current time, because a
+    grant that lapsed must stop applying to a process that started before it lapsed."""
     alert = stable_alert(alert)
     raw = canonical_json(alert)
     ev = store.put_evidence(EvidenceArtifact.of_raw("crowdsec_alert", "crowdsec", raw,
                                                     observed_at=alert.get("created_at", "")), raw)
     obs = store.put_observation(normalize_crowdsec_alert(alert, ev))
-    finding = store.put_finding(_finding_from_observation(obs, ev))
+    source_ip = obs.normalized_fields["source_ip"]
+    verdict = attack.adjudicate_scenario(
+        obs.normalized_fields["scenario"], kind=attack.KIND_OBSERVATION,
+        authorization=authorization if authorization is not None else deployment_authorization(),
+        source_ip=(source_ip if source_ip and source_ip != "?" else None), now=now)
+    finding = store.put_finding(_finding_from_observation(obs, ev, verdict=verdict))
     sev = Severity(obs.normalized_fields["severity"])
 
     action_refs = ()
@@ -149,13 +185,19 @@ def record_response(store, case: SecurityCase, request_id: str, *, actor: str, a
     return decision, receipt
 
 
-def replay_case(store, alert: dict) -> dict:
+def replay_case(store, alert: dict, *, authorization: AuthorizationContext | None = None,
+                now=None) -> dict:
     """Deterministic replay: re-run ingestion of the SAME raw alert into a FRESH store and prove the
     content-addressed identities are identical (evidence sha256, observation id, finding id, case id).
-    This is the 'replayable case' guarantee — the narrative can change, the evidence-derived ids cannot."""
+    This is the 'replayable case' guarantee — the narrative can change, the evidence-derived ids cannot.
+
+    `authorization`/`now` are pass-through because a verdict depends on the operator's inventory and on the
+    clock: a replay is identical under the same ones. Unset replays under the current deployment
+    configuration, which is the honest default — and the reason they are named arguments rather than
+    module state read deep inside."""
     from .case_store import CaseStore
     fresh = CaseStore()
-    case2 = ingest_crowdsec_alert(fresh, alert)
+    case2 = ingest_crowdsec_alert(fresh, alert, authorization=authorization, now=now)
     return {
         "case_id": case2.case_id,
         "evidence_ids": sorted(fresh.evidence.keys()),

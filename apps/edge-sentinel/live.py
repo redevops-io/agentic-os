@@ -32,6 +32,7 @@ from .case_store import CaseStore
 from .evidence import ActionReceipt, ActionRequest, ActionState, CaseStatus, SecurityDecision
 from . import agent_events as _agent_events
 from . import manual_cases
+from .authorization import AuthorizationContext, deployment_authorization
 from .incident import ingest_crowdsec_alert, replay_case
 
 
@@ -74,9 +75,15 @@ def reset_store() -> CaseStore:
     return _STORE
 
 
-def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict]] | None = None) -> list[str]:
+def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict]] | None = None,
+               authorization: AuthorizationContext | None = None) -> list[str]:
     """Ingest the current live CrowdSec alerts into cases. Idempotent: returns the case ids touched.
-    Degrades to [] (never raises, never fabricates) when the core is unreachable."""
+    Degrades to [] (never raises, never fabricates) when the core is unreachable.
+
+    The operator's authorization context is resolved ONCE per sync and passed to every alert, so one refresh
+    cannot adjudicate half its alerts under one inventory and half under another (an edit landing mid-sync
+    would produce exactly that, and the ids it wrote would not replay). An empty context — unset, unreadable
+    or invalid configuration — is the same thing a deployment had before this existed: nothing stood down."""
     st = st or store()
     _rehydrate_manual(st)
     fn = alerts_fn or core.fetch_alerts
@@ -84,10 +91,11 @@ def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict
         alerts = fn() or []
     except Exception:  # noqa: BLE001 — offline core → no cases, not a crash
         alerts = []
+    ctx = authorization if authorization is not None else deployment_authorization()
     ids: list[str] = []
     for alert in alerts:
         try:
-            case = ingest_crowdsec_alert(st, alert)
+            case = ingest_crowdsec_alert(st, alert, authorization=ctx)
             ids.append(case.case_id)
         except Exception:  # noqa: BLE001 — one malformed alert never sinks the sync
             continue

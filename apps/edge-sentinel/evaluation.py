@@ -244,6 +244,15 @@ def _scenario_raw_tags(name: str) -> tuple[str, ...]:
     return tuple(t for t, _token in map_scenario_to_techniques(name))
 
 
+#: What the near-miss scenario lane is measuring: hub feed NAMES, which are documents about detections, not
+#: detections. That is not a convenience — an OBSERVATION is adjudicated against the source address the
+#: alert came from (`attack.adjudicate_scenario(..., source_ip=)`), and a name has no address to check.
+#: Measuring these controls as observations would test a thing that cannot happen and would demand a scope
+#: no inventory row can answer. The observation path, where an authorization must survive the address test,
+#: is exercised end to end in test_authorization_enforcement.py.
+_SCENARIO_LANE_KIND = KIND_LABEL
+
+
 def _authorization_of(controls) -> AuthorizationContext:
     """The lane's operator context, assembled from what its controls declare they run under."""
     entries = tuple(a for c in controls for a in getattr(c, "authorized", ()))
@@ -334,10 +343,10 @@ def evaluate_negative_controls(controls=None, detector=None, basis_of=None, *,
     ctx = authorization if authorization is not None else _authorization_of(controls)
 
     def default_detector(name: str) -> tuple[str, ...]:
-        return _scenario_tags(name, authorization=ctx)
+        return _scenario_tags(name, authorization=ctx, kind=_SCENARIO_LANE_KIND)
 
     def default_basis(name: str) -> tuple[str, ...]:
-        return _scenario_basis(name, authorization=ctx)
+        return _scenario_basis(name, authorization=ctx, kind=_SCENARIO_LANE_KIND)
 
     detector = detector or default_detector
     basis_of = basis_of or default_basis
@@ -431,7 +440,8 @@ def quality_report(*, mapping_baseline: dict = ATTACK_BASELINE,
     ctx = authorization if authorization is not None else _authorization_of(controls)
     # Hub scenario names ARE labels — documents about detections. Saying so changes what a verdict may be
     # used for (advisory vs evidenced), and changes nothing about whether it is counted here.
-    verdicts = [adjudicate_scenario(c.input, kind=KIND_LABEL, authorization=ctx) for c in NEGATIVE_CONTROLS]
+    verdicts = [adjudicate_scenario(c.input, kind=_SCENARIO_LANE_KIND, authorization=ctx)
+                for c in NEGATIVE_CONTROLS]
     scenario_fp = evaluate_negative_controls(NEGATIVE_CONTROLS, raw_of=_scenario_raw_tags,
                                              authorization=ctx)
     injection_fp = evaluate_negative_controls(INJECTION_NEGATIVE_CONTROLS, _marker_tags,

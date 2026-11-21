@@ -103,6 +103,96 @@ loudly rather than reporting a clean run (`test_an_unaccounted_false_positive_fa
 residual risk is inventory integrity: whoever can edit the inventory can authorize a scan. That is the
 correct threat model for an allowlist and it is why every suppression carries a principal.
 
+Say it in the order the numbers belong, because the short version is a lie people tell about detectors:
+
+> **Rules fired on 7 of 15 benign inputs. After adjudication, 0 of 15 are unaccounted false positives.**
+
+Two numbers, in that order. "0% false-positive rate" alone hides which mechanism did the work and what it
+would cost to lose it. The corpus is a small, deliberately adversarial one — it is not a production
+precision estimate, and nothing here should be quoted as one.
+
+### The same contract in production: `SENTINEL_AUTHORIZATIONS_FILE`
+
+An evaluation that adjudicates and an operational system that does not have **two different security
+semantics**, and only the green one is measured. So the live path calls the same function with the same
+kind of context, loaded from operator configuration and never from the thing being scanned:
+
+| Entry point | What the verdict decides | Where |
+|-------------|--------------------------|-------|
+| `incident.ingest_crowdsec_alert()` | whether an alert becomes a `sentinel.block_ip` proposal, and which ATT&CK refs its finding may carry | every `live.sync_cases()` refresh (`live.py`, `/api/v1` reads) |
+| `cti.seed_ioc()` | whether an observable gets an `indicates` edge to a technique — the graph is a claim, not a log | the CTI/TAXII seam |
+| `evaluation.py` | the measured claim, under `kind=label` | `python -m edge-sentinel.evaluation` |
+| `GET /api/v1/attack/map` | **deliberately not** authorization-dependent: the map answers what a name suggests, and a read endpoint must not be able to render a suppressed view of the rules | — |
+
+The file is inventory data, so it is a mounted file and not a request parameter or an inline blob:
+
+```json
+{ "version": 1, "authorizations": [
+  { "observable": "crowdsecurity/backup-agent-port-scan-benign", "token": "port-scan",
+    "principal": "backup-agent", "source": "imported:inventory/backup-cluster",
+    "source_scope": ["10.0.4.9"], "expires_at": "2027-01-31" } ] }
+```
+
+Four things the loader (`authorization.load_authorization`) refuses, all of them tested:
+
+1. **No scope, no stand-down on an alert.** An entry that does not name the addresses the activity comes
+   from cannot cover an observation, and an alert whose source is outside `source_scope` is a detection.
+   Without this axis the mechanism would be a self-inflicted evasion: one `nmap-allowlist-internal` entry
+   would silence that scenario for every source on earth — a bigger hole than the false positives it was
+   added to remove. (`kind=label` inputs — hub feed names, inventory rows — have no source address, so
+   scope is neither demanded of them nor applied to them.)
+2. **`expires_at` is an instant, not a day.** A bare date is 00:00:00Z of the date named, so a grant the
+   operator believes lapsed is lapsed. An unparseable value is an error, never a permanent authorization.
+3. **Unknown keys are rejected, not ignored.** `expire_at` for `expires_at` reads leniently as "no expiry",
+   which turns a typo into a permanent grant.
+4. **Any failure returns an empty context — and says so.** Missing, unreadable, invalid: nothing is
+   authorized, every detection stands, and `/api/v1/info` reports `authorization.status` with the reason.
+   A broken configuration may only ever make the detector louder. The health block carries counts and
+   reasons but never the observables or principals themselves: which sanctioned activity a deployment has
+   allowlisted is a map of what an attacker could send without being stood down.
+5. **A scope means exactly what was typed into it.** `source_scope` is parsed by the same function that
+   canonicalises a ban target (`ipguard.parse_target`), so the texts that parser refuses are refused here:
+   `203.0.113.7/26` (host bits — `ipaddress(strict=False)` would silently mask it to a /26 and authorise 64
+   hosts where one was written), `010.0.4.9`, `2001:0db8::1`, `203.0.113.0/255.255.255.0`. Two IP readers
+   would mean the address that got stood down and the address a ban would name are decided twice, in
+   agreement only by luck; there is one reader, and a stand-down quotes its canonical output in the finding
+   so the audit trail names the address a ban would have named.
+
+`authorization.status` on `/api/v1/info` also reports `expired` and `without_source_scope` — entries that
+exist but can never apply to an alert. An authorization that silently never fires reads to an operator as a
+broken rule, and the usual fix for a broken rule is to loosen it.
+
+**Whose address is being tested.** A scope is only as strong as the attribution behind the address in it, so
+the provenance is spelled out rather than implied. `source.value` reaches `ingest_crowdsec_alert` from the
+CrowdSec LAPI over TLS (`live.sync_cases`) — **no route in this app accepts a CrowdSec alert**. The writable
+surface is `/api/v1/cases` (a human opening a case, which carries an owner and never becomes CrowdSec
+remediation), `/api/v1/agent-events` (operator-credentialed, no CrowdSec remediation) and the
+approve/execute endpoints, all behind credentials. And nothing an alert carries can widen a grant: its
+address is only ever tested for membership in a scope an operator wrote, coverage runs one way (a grant for
+one host does not speak for the `/24` that contains it), and the identity that *selects* a grant is
+`alert.scenario`, never anything the alert claims about itself. The trust anchor is the LAPI itself, CA-pinned
+(see "CrowdSec bootstrap method"); no layer here substitutes for it, and the authorization model makes no
+claim to survive a lying LAPI.
+
+Two boundaries worth stating, because both are tempting to get wrong:
+
+* **A stand-down applies to what is ingested after it.** Adding a grant does not retract a block proposal
+  already awaiting approval — the inventory must not be able to dispose of an incident a human is holding.
+  Reject it at the approval gate, which is where the person already is.
+* **Revoking takes effect on the next check, not after a restart.** The cache key is the digest of the file's
+  bytes, deliberately not `(mtime, size)`: an edit that leaves the length unchanged — one allowlisted address
+  replaced by another of the same length — plus any tool that puts the old timestamp back (a configuration
+  management apply, `cp -p`, an image rebuilt from a layer cache) leaves a stat-based key identical, and the
+  process goes on honouring a grant that was taken away. For ordinary configuration a stale value is an
+  annoyance; here the stale direction is the dangerous one, because a cache that never misses is a revocation
+  that never lands. So the bytes are read and hashed on every check (the file is capped at 1 MiB, over which
+  the loader reports `unreadable` rather than reading as empty), and `/api/v1/info` carries
+  `content_digest` so "did my edit land?" is answerable without a restart.
+* **A file anyone local can write is a suppression anyone local can order.** It still loads — a
+  group-writable file on a shared configuration-management host is legitimate — but the health report says so
+  in `authorization.warnings`, because requiring a named principal and a provenance string is worth little if
+  the list carrying them is world-writable.
+
 ## CrowdSec bootstrap method (the one that worked)
 
 CrowdSec has **no rich web UI** and is **CLI-managed** via `cscli`. There are two read
@@ -182,6 +272,7 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 | `REDEVOPS_LLM_BASE_URL` | _(unset)_ | Optional one-sentence narration on `triage`, inherited from the kernel. Unset — or a host the kernel will not treat as in-boundary — means **no model call at all**; the deterministic summary stands. Model id `REDEVOPS_LLM_MODEL`, bearer `OPENAI_API_KEY`. Nothing here reads an Anthropic key, and no model vendor is named by this app — see [Alert triage and the model boundary](#alert-triage-and-the-model-boundary). |
 
 | `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | _(empty)_ | Comma-separated addresses/CIDRs that are never banned (in addition to this host, its gateway, the LAPI host and the requesting operator). |
+| `SENTINEL_AUTHORIZATIONS_FILE` | _(empty)_ | Path to the operator's authorization file — the only input allowed to stand a scenario match down. Unset, unreadable (including non-UTF-8 or over 1 MiB) or invalid means **nothing** is authorized and every detection stands. `/api/v1/info` → `authorization.status` carries `content_digest` (the bytes in force) and `warnings` (e.g. a world-writable allowlist). Entries need a principal, a sourced `source`, a `source_scope` covering the alert's source address and may carry `expires_at`; see "The same contract in production". |
 | `SENTINEL_BLOCK_ALLOW_NETWORKS` | _(empty)_ | CIDRs inside which private/reserved space may be banned. Loopback, link-local, multicast and unspecified space is never bannable. |
 | `SENTINEL_BLOCK_ALLOW_WIDE_CIDR` | _(off)_ | Allow ranges wider than /24 (IPv4) or /64 (IPv6). |
 | `SENTINEL_BLOCK_MAX_HOURS` | `168` | Cap for a ban duration. |
