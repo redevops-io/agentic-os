@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Shared helpers for the packaging scripts (sourced, not executed). Bash 3.2 / git-bash safe.
-# Provides: ROOT, PK, OS (macos|windows|linux), the pinned versions from toolchain.env, venv_bin, and
-# assert_python (the interpreter must be exactly PYTHON_VERSION).
+# Provides: ROOT, PK, OS (macos|windows|linux), ARCH (windows only; empty elsewhere - unused by any
+# existing script, added only for the windows-arm64 cryptography source-build carve-out in
+# build-wheelhouse.sh), the pinned versions from toolchain.env, venv_bin, and assert_python (the
+# interpreter must be exactly PYTHON_VERSION).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PK="$ROOT/packaging"
 set -a; . "$PK/toolchain.env"; set +a
@@ -11,6 +13,15 @@ case "$(uname -s)" in
   Linux) OS=linux ;;
   *) echo "unsupported OS $(uname -s)"; exit 1 ;;
 esac
+# git-bash's uname -m does not reliably report the real CPU on Windows; the native env var does.
+ARCH=""
+if [ "$OS" = windows ]; then
+  case "${PROCESSOR_ARCHITECTURE:-}" in
+    ARM64) ARCH=arm64 ;;
+    AMD64|x86|IA64) ARCH=amd64 ;;
+    *) ARCH="" ;;
+  esac
+fi
 LOCKS="$PK/locks"
 # uv venv puts executables in bin/ on POSIX and Scripts/ on Windows git-bash.
 venv_bin() { if [ -d "$1/bin" ]; then echo "$1/bin"; else echo "$1/Scripts"; fi; }
