@@ -191,6 +191,12 @@ def main(argv: list[str] | None = None) -> int:
     (out / "sbom-inputs.json").write_text(json.dumps(inputs, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     n_un = len(res.unattributed)
     print(f"SBOM: {len(bom['components'])} components -> {out / 'sbom.cdx.json'}; attribution of {len(attrib)} archive entries; unattributed: {n_un}")
+    # the failing entry names only ever reached archive-attribution.json, which a failed job never uploads -
+    # print them so a CI failure is diagnosable from the log alone.
+    for u in res.unattributed:
+        print(f"   UNATTRIBUTED: {u}")
+    for p in res.problems:
+        print(f"   PROBLEM: {p}")
     return 1 if (n_un or res.problems) else 0
 
 
