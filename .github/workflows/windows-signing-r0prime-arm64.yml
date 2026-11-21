@@ -26,16 +26,16 @@
 # simply by running on this runner. The MSI/NSIS output filenames are discovered by glob rather than
 # assumed, since this file does not take Tauri's "arm64" bundler-arch moniker on faith.
 #
-# BUILD_COMMIT here (16fa5b08) is NOT windows-signing-r0prime.yml's fc254a34610dcd84b4cd10147299c7d12
-# fca4119 — it is a two-commit chain descending from that exact commit, touching ONLY packaging/
-# common.sh and packaging/build-wheelhouse.sh (confirm: `git diff --stat fc254a34...16fa5b08` shows
-# just those two files). The agentic_os product tree is byte-identical to fc254a34; the only
-# difference is how the wheelhouse script sources ONE third-party dependency on this one platform —
-# see the carve-out comment in build-wheelhouse.sh. This was a deliberate, discussed exception to
-# "exact same BUILD_COMMIT": PyPI stopped publishing win_arm64 wheels for cryptography after 46.0.3,
-# and this repo's pin (50.0.1) has none, so the frozen fc254a34 tree's build-wheelhouse.sh cannot
-# succeed on this architecture no matter what the environment provides — fixing it requires script
-# changes, which a frozen commit cannot carry.
+# BUILD_COMMIT here (956b5b74) is NOT windows-signing-r0prime.yml's fc254a34610dcd84b4cd10147299c7d12
+# fca4119 — it is a three-commit chain descending from that exact commit, touching ONLY packaging/
+# common.sh, packaging/build-wheelhouse.sh, packaging/build-sidecar.sh, packaging/build-notices.sh
+# (confirm: `git diff --stat fc254a34...956b5b74` shows just those four files). The agentic_os product
+# tree is byte-identical to fc254a34; the only difference is how the packaging scripts source ONE
+# third-party dependency on this one platform — see the carve-out comment in build-wheelhouse.sh. This
+# was a deliberate, discussed exception to "exact same BUILD_COMMIT": PyPI stopped publishing
+# win_arm64 wheels for cryptography after 46.0.3, and this repo's pin (50.0.1) has none, so the frozen
+# fc254a34 tree's scripts cannot succeed on this architecture no matter what the environment provides
+# — fixing it requires script changes, which a frozen commit cannot carry.
 #   fc254a34 -> 04db1b26  adds the ARCH-gated cryptography-from-sdist branch (the actual fix)
 #            -> 16fa5b08  corrects ARCH's own detection: 04db1b26 read PROCESSOR_ARCHITECTURE from
 #                          git-bash, but git-bash.exe is itself an x86-64 binary that runs under
@@ -45,20 +45,28 @@
 #                          the pre-fix run). 16fa5b08 reads RUNNER_ARCH instead (set by the Actions
 #                          runner itself before launching any shell; confirmed correct from bash via a
 #                          disposable probe, closed PR #727).
+#            -> 956b5b74  build-wheelhouse.sh's corrected cryptography hash was written to a $TMP file
+#                          only IT could see; build-sidecar.sh and build-notices.sh independently
+#                          reinstall the same locks/requirements-windows.lock, hardcoded, in later
+#                          `run:` steps of the same job (separate script invocations) — real run
+#                          44933496336 got past Task 1 on this fix but failed identically at Task 2's
+#                          own hash check. 956b5b74 moves the override into the wheelhouse directory
+#                          itself (wiped and rewritten every build-wheelhouse.sh run) behind a new
+#                          common.sh::effective_lock() helper, used by all three scripts now.
 name: windows-signing-r0prime-arm64
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type EXACTLY: sign arm64 16fa5b0865a57c97cb5bafcb344fb96e1d57ef12'
+        description: 'Type EXACTLY: sign arm64 956b5b74bef96a1903287efbf57c7f207520a349'
         required: true
 
 permissions:
   contents: read
 
 env:
-  BUILD_COMMIT: 16fa5b0865a57c97cb5bafcb344fb96e1d57ef12
+  BUILD_COMMIT: 956b5b74bef96a1903287efbf57c7f207520a349
   PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.1"
 
 jobs:
@@ -67,7 +75,7 @@ jobs:
     steps:
       - name: Confirm the exact commit phrase was typed
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 16fa5b0865a57c97cb5bafcb344fb96e1d57ef12" ]; then
+          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 956b5b74bef96a1903287efbf57c7f207520a349" ]; then
             echo "::error::confirmation phrase did not match exactly; refusing to proceed"
             exit 1
           fi
@@ -81,11 +89,11 @@ jobs:
             exit 1
           fi
           TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
-          if [ "${TREE:0:8}" != "41a89f7a" ]; then
-            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 41a89f7a prefix (got $TREE) - refusing"
+          if [ "${TREE:0:8}" != "9e42eb55" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 9e42eb55 prefix (got $TREE) - refusing"
             exit 1
           fi
-          echo "BUILD_COMMIT verified present, tree prefix 41a89f7a confirmed."
+          echo "BUILD_COMMIT verified present, tree prefix 9e42eb55 confirmed."
 
   collect:
     needs: guard
@@ -99,7 +107,7 @@ jobs:
       # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 16fa5b0865a57c97cb5bafcb344fb96e1d57ef12
+          ref: 956b5b74bef96a1903287efbf57c7f207520a349
       - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
         shell: bash
         run: |
@@ -241,7 +249,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 16fa5b0865a57c97cb5bafcb344fb96e1d57ef12
+          ref: 956b5b74bef96a1903287efbf57c7f207520a349
 
       - name: Download round1 state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -446,7 +454,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 16fa5b0865a57c97cb5bafcb344fb96e1d57ef12
+          ref: 956b5b74bef96a1903287efbf57c7f207520a349
 
       - name: CPython 3.12.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -596,7 +604,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 16fa5b0865a57c97cb5bafcb344fb96e1d57ef12
+          ref: 956b5b74bef96a1903287efbf57c7f207520a349
 
       - name: Download round2 containers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
