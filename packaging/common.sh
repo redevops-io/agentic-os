@@ -13,13 +13,24 @@ case "$(uname -s)" in
   Linux) OS=linux ;;
   *) echo "unsupported OS $(uname -s)"; exit 1 ;;
 esac
-# git-bash's uname -m does not reliably report the real CPU on Windows; the native env var does.
+# git-bash's uname -m does not reliably report the real CPU on Windows: Git for Windows ships bash.exe
+# as an x86-64 binary, which Windows runs under its x64-on-arm64 emulation layer on an ARM64 host —
+# so PROCESSOR_ARCHITECTURE inside THAT process reports AMD64 (its own emulated identity), not the
+# real host (confirmed empirically on windows-11-arm: `uname -m` -> x86_64, PROCESSOR_ARCHITECTURE ->
+# AMD64, while RUNNER_ARCH, set by the Actions runner itself before launching any shell, correctly
+# says ARM64). Prefer RUNNER_ARCH; fall back to PROCESSOR_ARCHITECTURE only outside Actions.
 ARCH=""
 if [ "$OS" = windows ]; then
-  case "${PROCESSOR_ARCHITECTURE:-}" in
+  case "${RUNNER_ARCH:-}" in
     ARM64) ARCH=arm64 ;;
-    AMD64|x86|IA64) ARCH=amd64 ;;
-    *) ARCH="" ;;
+    X64) ARCH=amd64 ;;
+    *)
+      case "${PROCESSOR_ARCHITECTURE:-}" in
+        ARM64) ARCH=arm64 ;;
+        AMD64|x86|IA64) ARCH=amd64 ;;
+        *) ARCH="" ;;
+      esac
+      ;;
   esac
 fi
 LOCKS="$PK/locks"
