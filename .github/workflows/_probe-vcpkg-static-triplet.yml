@@ -1,0 +1,18 @@
+name: _probe-vcpkg-static-triplet
+on:
+  pull_request:
+    branches: [main]
+    paths: [".github/workflows/_probe-vcpkg-static-triplet.yml"]
+jobs:
+  probe:
+    runs-on: windows-11-arm
+    steps:
+      - name: list available arm64 triplets + confirm static-md exists
+        shell: bash
+        run: |
+          echo "== triplets/community (arm64) =="
+          ls "$VCPKG_INSTALLATION_ROOT/triplets/community" | grep -i arm64 || true
+          echo "== triplets (arm64, built-in) =="
+          ls "$VCPKG_INSTALLATION_ROOT/triplets" | grep -i arm64 || true
+          echo "== static-md file contents, if present =="
+          cat "$VCPKG_INSTALLATION_ROOT/triplets/community/arm64-windows-static-md.cmake" 2>/dev/null || echo "NOT FOUND"
