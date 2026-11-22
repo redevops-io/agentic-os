@@ -46,11 +46,10 @@ on:
 permissions:
   contents: read
 
-# The agent-harness ref every job here installs, declared exactly once. tests/test_dependency_pins.py
-# asserts this file carries exactly one harness pin and that it is a full commit SHA, so a second copy of the
-# literal — which is how this file drifted apart from itself — is a test failure rather than a quiet gap.
-env:
-  AGENT_HARNESS_REF: 10e5c2ae7419e096630fb031ef8204fede125ec9
+# Both jobs below name the harness commit at the install site, which is what the repository's own pin rule
+# (SC20 in tests/test_sc03_sc14_build_and_deploy.py) requires and what it checks. The two copies have to
+# carry the same value: tests/test_dependency_pins.py asserts the file holds exactly ONE distinct harness
+# commit, because the copies are exactly the thing that drifted apart here before.
 
 concurrency:
   group: permissions-demo-compat-${{ github.ref }}
@@ -74,7 +73,7 @@ jobs:
       - name: "Install the kernel, dev extras and the tool-gate harness (pinned to a commit, so a moving dependency cannot weaken this gate)"
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,duckdb]" "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@${{ env.AGENT_HARNESS_REF }}"
+          pip install -e ".[dev,duckdb]" "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@10e5c2ae7419e096630fb031ef8204fede125ec9"
       - name: Demo compatibility gate
         run: pytest -q -p no:cacheprovider tests/test_demo_compatibility.py tests/test_deployment_paths.py tests/test_tool_actions_complete.py tests/test_sc*.py
       - name: Permissions regression suites (authorisation, scope, write authorisation, roles/columns, storage, concurrency)
@@ -107,7 +106,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
           pip install "$(grep '^context-runtime @ ' apps/support/requirements.txt)"
-          pip install "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@${{ env.AGENT_HARNESS_REF }}"
+          pip install "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@10e5c2ae7419e096630fb031ef8204fede125ec9"
           python -c "import agent_harness.tools as t, context_runtime, agentic_os; print('harness :', t.__file__); print('runtime :', context_runtime.__file__); assert hasattr(t, 'engine_authorizer_of'), 'the pinned harness predates engine_authorizer_of, so there is no twin to resolve'; from context_runtime.tools.base import set_default_authorizer; from agentic_os.permissions import make_engine_authorizer; print('both sides of the seam import')"
       - name: The seam, end to end
         shell: bash

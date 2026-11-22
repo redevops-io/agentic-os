@@ -59,23 +59,22 @@ def _permissions_gate() -> str:
     return (WORKFLOWS / "permissions-demo-compat.yml").read_text(encoding="utf-8")
 
 
-def test_the_permissions_gate_pins_agent_harness_once_as_a_commit():
-    """The job that runs ``tests/test_permissions_*.py`` must not install a moving dependency: the harness
-    decides what an authorizer's answer MEANS, so a floating harness is a floating gate.
+def test_the_permissions_gate_installs_one_harness_commit_everywhere():
+    """The job that runs ``tests/test_permissions_*.py`` must not install a moving dependency — the harness
+    decides what an authorizer's answer MEANS, so a floating harness is a floating gate — and every job in it
+    must install the SAME commit.
 
-    It is also allowed exactly ONE value. The literal used to sit inline in a ``pip install`` step while
-    other files carried their own copies of the same SHA, and they drifted apart with nothing watching; here
-    the commit lives in ``env`` and every step has to reference it.
+    Two jobs here install the harness, so the literal appears twice, and twice is where this drifted before:
+    one file read ``052d54f`` while the apps moved to a newer build. The repository's own rule (SC20) checks
+    that each pin is a commit; this checks that the file holds one value rather than two that merely look
+    plausible, which is the half that was left unwatched.
     """
-    workflow = _permissions_gate()
-    declared = re.findall(r"^  AGENT_HARNESS_REF: (\S+)$", workflow, re.M)
-    assert len(declared) == 1, f"the gate must declare its harness commit exactly once, found {declared}"
-    assert _FULL_SHA.match(declared[0]), f"AGENT_HARNESS_REF is {declared[0]!r}, not a full commit SHA"
-
-    installs = re.findall(r"agent-harness @ git\+https://github\.com/redevops-io/agent-harness\.git@(\S+)",
-                          workflow)
-    assert installs, "nothing installs agent-harness: the gate no longer gates the tool engine"
-    assert set(installs) == {"${{"}, f"every harness install must reference ${{{{ env.AGENT_HARNESS_REF }}}}, found {installs}"
+    pins = re.findall(r"agent-harness @ git\+https://github\.com/redevops-io/agent-harness\.git@([0-9a-f]+)",
+                      _permissions_gate())
+    assert pins, "nothing installs agent-harness any more: the permissions gate no longer gates the tool engine"
+    for pin in pins:
+        assert _FULL_SHA.match(pin), f"the permissions gate installs agent-harness at {pin!r}, not a full commit"
+    assert len(set(pins)) == 1, f"the permissions gate installs {sorted(set(pins))} — one file, two harness builds"
 
 
 def test_some_ci_job_installs_both_sides_of_the_authorization_seam():
