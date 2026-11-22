@@ -345,6 +345,10 @@ def test_single_flight_primitive_shares_one_call_and_drops_stale_flights():
     # a stale (hung) flight is abandoned after the timeout and the next request starts a fresh one
     block = threading.Event()
     assert sf.run("h", lambda: (block.wait(5), ("ok", 1))[1], 0.2) == ("error", "timeout")
-    assert sf.run("h", lambda: ("ok", 2), 1.0) == ("ok", 2)
+    assert sf.run("h", lambda: ("ok", 2), 1.0) == ("error", "busy")      # never concurrently with its own hung worker
     block.set()
+    deadline = time.time() + 5
+    while sf.abandoned_alive() and time.time() < deadline:
+        time.sleep(0.01)
+    assert sf.run("h", lambda: ("ok", 2), 1.0) == ("ok", 2)
     assert sf._flights == {}

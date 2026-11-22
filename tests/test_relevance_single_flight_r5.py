@@ -126,7 +126,11 @@ def test_sf1_waiters_get_an_explicit_interrupted_outcome_when_the_leaders_wait_i
     real_join(lt, 5)
     assert res == [("error", "interrupted")] * 6 and time.time() - t0 < 2.0       # woken at once, not after 30 s
     assert leader_exc == ["KeyboardInterrupt"] and sf._flights == {} and sf.abandoned_alive() == 1
+    assert sf.run("k", lambda: ("ok", 2), 1.0) == ("error", "busy")               # not run concurrently with its worker
     release.set()
+    deadline = time.time() + 5
+    while sf.abandoned_alive() and time.time() < deadline:
+        time.sleep(0.01)
     assert sf.run("k", lambda: ("ok", 2), 1.0) == ("ok", 2)                       # the key is not poisoned
 
 
@@ -136,12 +140,17 @@ def test_sf1_stress_repeated_async_exceptions_at_random_points_never_poison_a_ke
     done = []
 
     def worker_loop():
-        while not stop.is_set():
+        for _ in range(50):                                   # a late async exception may land outside the inner try
             try:
-                sf.run("k", lambda: (time.sleep(0.0005), ("ok", 1))[1], 0.5,
-                       cached=lambda: None, on_done=lambda o: None)
+                while not stop.is_set():
+                    try:
+                        sf.run("k", lambda: (time.sleep(0.0005), ("ok", 1))[1], 0.5,
+                               cached=lambda: None, on_done=lambda o: None)
+                    except BaseException:  # noqa: BLE001
+                        pass
+                break
             except BaseException:  # noqa: BLE001
-                pass
+                continue
         done.append(1)
     t = threading.Thread(target=worker_loop)
     t.start()

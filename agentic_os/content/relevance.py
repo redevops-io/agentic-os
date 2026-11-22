@@ -451,13 +451,14 @@ def _cap_seconds(value: float, default: float) -> float:
 
 
 class _Flight:
-    __slots__ = ("done", "outcome", "committed", "abandoned", "leader", "started")
+    __slots__ = ("done", "outcome", "committed", "abandoned", "leader", "started", "inline")
 
-    def __init__(self) -> None:
+    def __init__(self, inline: bool = False) -> None:
         self.done = threading.Event()
         self.outcome: Optional[tuple] = None
         self.committed = False            # the worker finished and owns the (cache-writing) completion
         self.abandoned = False            # the leader gave up on it (timeout); a late result is discarded
+        self.inline = inline              # runs in the leader's own thread (thread-affine mode)
         self.leader = threading.current_thread()
         self.started = time.monotonic()
 
@@ -465,40 +466,51 @@ class _Flight:
 class _SingleFlight:
     """Concurrent identical requests share ONE in-flight call.
 
-    The first caller (the leader) registers the flight, runs ``fn`` in a daemon worker thread (or inline when
-    ``inline`` is set, for thread-affine dependencies) and waits at most ``timeout`` seconds; every other caller with
-    the same key waits on the leader's outcome (also bounded) and receives the SAME outcome, including the same
-    failure. Guarantees:
+    The first caller (the leader) registers the flight, runs ``fn`` in a daemon worker thread (or inline in its own
+    thread when ``inline`` is set, for thread-affine dependencies) and waits at most ``timeout`` seconds; every other
+    caller with the same key waits on the leader's outcome (also bounded) and receives the SAME outcome, including
+    the same failure. Guarantees:
 
     * the cache lookup (``cached``) and the registration of a new flight are ONE atomic step, and the cache write
       (``on_done``) happens INSIDE the flight, before the flight is removed, so a request can never slip between "the
       flight finished" and "the result is cached" and start a duplicate call;
-    * the leader ALWAYS removes the flight and wakes the waiters, even when a BaseException (for example a
-      KeyboardInterrupt delivered while it waits) interrupts it: it publishes ``("error", "interrupted")`` and
-      re-raises. A flight whose leader thread died, or that is older than ``timeout`` plus a margin, is treated as
-      stale and replaced by the next caller, so a leftover flight (an asynchronous exception can arrive anywhere,
-      even inside the cleanup) never blocks a key for longer than the timeout;
-    * a call that does not finish in time is abandoned: leader and waiters get ``("error", "timeout")``, a late
-      result of the abandoned worker is discarded (never cached) and the abandoned thread is counted;
+    * the leader ALWAYS removes the flight and wakes the waiters, even when a BaseException interrupts it: it
+      publishes ``("error", "interrupted")`` and re-raises (in inline mode a KeyboardInterrupt / SystemExit raised by
+      the call propagates to the caller after the cleanup);
+    * a flight is stale, and replaced by the next caller, only when its leader thread is DEAD, or (threaded flights
+      only) when it is older than ``timeout`` plus a margin. An INLINE flight is never stale by age: a slow but
+      healthy leader keeps its flight, so the call is never executed twice or concurrently; waiters just stop
+      waiting after ``timeout`` (``("error", "timeout")``) without affecting the leader;
+    * a threaded call that does not finish in time is abandoned: the leader and the waiters get ``("error",
+      "timeout")``, a late result is discarded (never cached) and the abandoned worker is counted. While that
+      worker is still alive a new request for the SAME key is refused with ``("error", "busy")`` instead of running
+      the call concurrently with it (a hung call can therefore keep ITS key busy, never more than one execution per
+      key at a time); other keys are unaffected;
+    * ``on_settled`` is called by the leader only (never by a waiter) with the final outcome, so waiter timeouts
+      cannot be mistaken for a failing dependency;
     * distinct keys never block each other (the lock only guards the table, never a call)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._flights: Dict[object, _Flight] = {}
-        self._abandoned: List[threading.Thread] = []
+        self._abandoned: Dict[object, threading.Thread] = {}
 
     def abandoned_alive(self) -> int:
         with self._lock:
-            self._abandoned = [t for t in self._abandoned if t.is_alive()]
+            self._abandoned = {k: t for k, t in self._abandoned.items() if t.is_alive()}
             return len(self._abandoned)
 
     def _stale(self, flight: _Flight, timeout: float) -> bool:
-        return (flight.outcome is None and not flight.committed
-                and (not flight.leader.is_alive() or time.monotonic() - flight.started > timeout + 1.0))
+        if flight.outcome is not None or flight.committed:
+            return False
+        if not flight.leader.is_alive():
+            return True
+        return (not flight.inline) and time.monotonic() - flight.started > timeout + 1.0
 
     def run(self, key: object, fn: Callable[[], tuple], timeout: float, *,
             cached: Optional[Callable[[], Optional[tuple]]] = None,
-            on_done: Optional[Callable[[tuple], None]] = None, inline: bool = False) -> tuple:
+            on_done: Optional[Callable[[tuple], None]] = None,
+            on_settled: Optional[Callable[[tuple], None]] = None, inline: bool = False) -> tuple:
         with self._lock:
             flight = self._flights.get(key)
             if flight is not None and self._stale(flight, timeout):
@@ -511,7 +523,12 @@ class _SingleFlight:
                 hit = cached() if cached is not None else None      # atomic with registration (cache lock inside)
                 if hit is not None:
                     return hit
-                flight = self._flights[key] = _Flight()
+                old = self._abandoned.get(key)
+                if old is not None:
+                    if old.is_alive():
+                        return ("error", "busy")                    # never run it concurrently with its own hung worker
+                    del self._abandoned[key]
+                flight = self._flights[key] = _Flight(inline)
                 leader = True
             else:
                 leader = False
@@ -522,8 +539,12 @@ class _SingleFlight:
         def work() -> None:
             try:
                 out = fn()
-            except BaseException as exc:  # noqa: BLE001 — fn should return outcomes; never lose a failure
+            except Exception as exc:  # noqa: BLE001 — fn should return outcomes; never lose a failure
                 out = ("error", "exception:" + _safe_token(type(exc).__name__))
+            except BaseException as exc:  # noqa: BLE001 — KeyboardInterrupt, SystemExit, ...
+                if inline:
+                    raise                                    # the caller must see it; `finally` below cleans up
+                out = ("error", "exception:" + _safe_token(type(exc).__name__))    # a worker thread cannot propagate
             with self._lock:
                 if flight.abandoned:
                     return                                   # late result of an abandoned call: discarded
@@ -549,11 +570,11 @@ class _SingleFlight:
                     worker.join(timeout)                     # the commit (a cache write) is quick
             completed = True
         finally:
-            # ALWAYS reached, also when a BaseException interrupts the wait: no flight is ever left behind
+            # ALWAYS reached, also when a BaseException interrupts the wait or the inline call
             with self._lock:
                 if worker is not None and worker.is_alive() and not flight.committed:
                     flight.abandoned = True                  # a late result will be discarded
-                    self._abandoned.append(worker)
+                    self._abandoned[key] = worker
                 if flight.outcome is None:
                     flight.outcome = ("error", "timeout" if completed else "interrupted")
                 out = flight.outcome
@@ -567,6 +588,11 @@ class _SingleFlight:
                 if self._flights.get(key) is flight:
                     del self._flights[key]
             flight.done.set()
+        if on_settled is not None and completed:
+            try:
+                on_settled(out)                              # the leader's own outcome (never a waiter's)
+            except BaseException:  # noqa: BLE001
+                pass
         return out
 
 
@@ -609,7 +635,10 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
     breaks thread-affine providers or embedders (for example a sqlite3 connection created on the caller thread, a
     GPU context bound to one thread). With ``thread_affine=True`` calls run in the CALLER's thread: nothing can be
     abandoned, so the call timeout is NOT enforced for the leader (waiters still stop waiting after the timeout), the
-    circuit breaker cannot protect against a hung dependency and no worker threads are created.
+    circuit breaker cannot protect against a hung dependency and no worker threads are created. An inline flight
+    is never replaced by age, so a slow but healthy call is executed exactly once and concurrent callers of the same
+    key just stop waiting after the timeout. A KeyboardInterrupt / SystemExit raised by the dependency propagates to
+    the caller (after the flight is cleaned up); ordinary exceptions stay explicit ``unavailable:...`` results.
 
     BOUNDED FAILURE CACHE. A failed probe, provider call, embed call or timeout is remembered for
     ``probe_retry_seconds`` / ``failure_ttl_seconds`` (default 30 s, capped at 300 s, injectable clock), so a
@@ -681,14 +710,14 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
             return ("error", "circuit_open")
         if not thread_affine and flights.abandoned_alive() >= max_abandoned:
             return ("error", "busy")
-        outcome = flights.run(key, fn, call_timeout, cached=lambda: cached_outcome(key),
-                              on_done=lambda o: remember(key, o, ttl), inline=thread_affine)
-        with lock:
-            if outcome == ("error", "timeout"):
-                breaker[dep] = _clock() + fail_ttl       # a hung dependency: refuse ALL keys for the TTL
-            elif outcome[0] == "ok":
-                breaker.pop(dep, None)                   # a success closes the breaker
-        return outcome
+        def settled(out: tuple) -> None:                 # the LEADER's own outcome only (a waiter's timeout is not one)
+            with lock:
+                if out == ("error", "timeout"):
+                    breaker[dep] = _clock() + fail_ttl       # a hung dependency: refuse ALL keys for the TTL
+                elif out[0] == "ok":
+                    breaker.pop(dep, None)                   # a success closes the breaker
+        return flights.run(key, fn, call_timeout, cached=lambda: cached_outcome(key),
+                           on_done=lambda o: remember(key, o, ttl), on_settled=settled, inline=thread_affine)
 
     def probe() -> None:
         """Establish the fingerprint revision and the degenerate-embedder verdict (one flight, bounded retries)."""
