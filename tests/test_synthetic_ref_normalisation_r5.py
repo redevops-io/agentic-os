@@ -28,13 +28,16 @@ STARTS = [
     "syn​thetic-study:v1:x", "synthetic‍-study:x", "s​y​n​t​h​e​t​i​c-study:",
     "‮synthetic-study:v1:x", "⁦synthetic-study:x⁩", "synthe­tic-study:x", "﻿synthetic-study:x",
     "\x00synthetic-study:x", "synthetic-\x07study:x", "ѕynthetic-study:x", "synthetіc-study:x", "synthеtic-study:x",
-    "ѕуnthеtіс-ѕtudу:x", "SYNTHETIC-STUDY:V2:X"]
+    "ѕуnthеtіс-ѕtudу:x", "SYNTHETIC-STUDY:V2:X",
+    # round 6 (NF-1): combining marks and Latin small capitals
+    "synthetic-studý:x", "synthetic-studý:x", "synthetic-s̶tudy:x", "sýnthetic-study:x",
+    "synthetic-studỵ:x", "ꜱynthetic-study:x", "ꜱʏɴᴛʜᴇᴛɪᴄ-ꜱᴛᴜᴅʏ:x", "synthetic-ꜱtudy:v1:x", "synthetic-studʏ:x"]
 # references that mention the scheme but do not start with it
 MENTIONS_ONLY = ["obs:synthetic-study:x", "see synthetic-study:v1:x", "x" * 50 + "synthetic_study:y", "a/b/synthetic-study:"]
 # ordinary references (as on base): neither predicate
 ORDINARY = ["obs:1", "https://x.io/p", "snap:abc", "synthetic-study", "synthetic-studyx", "synthetic study:v1:x",
             "synth-study:x", "syn-thetic-study:", "study:x", "synthetic", "", "  ", "ssr:1", "mission:ssrs-report",
-            "ünïcode:ref", "x" * 500]
+            "ünïcode:ref", "x" * 500, "café:ref", "naïve:study", "synthetic-stüdent:x", "studý:x"]
 
 
 def opp(refs):
