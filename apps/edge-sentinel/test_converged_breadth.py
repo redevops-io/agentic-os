@@ -13,6 +13,7 @@ import importlib
 netbird = importlib.import_module("edge-sentinel.netbird")
 portabase = importlib.import_module("edge-sentinel.portabase")
 deploy_scan = importlib.import_module("edge-sentinel.deploy_scan")
+static_scan = importlib.import_module("edge-sentinel.static_scan")
 permissions_ui = importlib.import_module("edge-sentinel.permissions_ui")
 
 
@@ -61,6 +62,37 @@ def test_deploy_scan_unavailable_when_unset():
     assert "unavailable" in deploy_scan.results({"job_id": "x"})["text"].lower()
     # a missing target is handled before the plane is even consulted
     assert "target" in deploy_scan.scan({})["text"].lower()
+
+
+# ── 4. static-scan — unavailable until STATIC_SCAN_MCP_URL is set ────────────────────────────
+def test_static_scan_unavailable_when_unset():
+    assert static_scan.STATIC_SCAN_MCP_URL == ""        # unset in the test env
+    assert static_scan.configured() is False
+    for tool in (static_scan.engines, static_scan.board):
+        assert "unavailable" in tool({})["text"].lower()
+    assert "unavailable" in static_scan.scan({"target": "/srv/app"})["text"].lower()
+    assert "unavailable" in static_scan.status({"job_id": "x"})["text"].lower()
+    assert "unavailable" in static_scan.results({"job_id": "x"})["text"].lower()
+    assert "path" in static_scan.scan({})["text"].lower()      # asked before the plane is consulted
+
+
+def test_an_unreachable_static_plane_never_arrives_as_a_clean_result():
+    """The failure this proxy exists to prevent: a plane it cannot reach answering with an empty list,
+    which a caller reads as 'nothing found'. Every path must return an error it cannot misread."""
+    import importlib as _il
+    import os as _os
+    _os.environ["STATIC_SCAN_MCP_URL"] = "http://127.0.0.1:1/"         # nothing listens here
+    try:
+        fresh = _il.reload(static_scan)
+        assert fresh.configured() is True
+        for out in (fresh.engines({}), fresh.board({}), fresh.scan({"target": "/srv/app"}),
+                    fresh.status({"job_id": "x"}), fresh.results({"job_id": "x"})):
+            text = out["text"].lower()
+            assert "couldn't" in text or "unreachable" in text or "error" in text, out["text"]
+            assert out["data"].get("error"), out                # the machine-readable half says so too
+    finally:
+        _os.environ.pop("STATIC_SCAN_MCP_URL", None)
+        _il.reload(static_scan)
 
 
 # ── 5. permissions demo — honest row-scope + column-mask over the sample vuln-DB ─────────────
