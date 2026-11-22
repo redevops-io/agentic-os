@@ -748,7 +748,8 @@ class ForkJoinController:
         for b in spec.branches:
             cap = rt.registry.get(b.capability)
             node = Node(capability=b.capability, operator=cap.operator, produces=b.produces,
-                        approval_required=cap.approval_required, side_effecting=cap.side_effecting,
+                        approval_required=cap.approval_required or bool(getattr(cap, "revision_bound", None)), side_effecting=cap.side_effecting,
+                        revision_bound=getattr(cap, "revision_bound", None), revision_produces=getattr(cap, "revision_produces", None),
                         undo=_comp.declared_undo(cap), inputs={},
                         irreversible=bool(getattr(cap, "irreversible", False)),
                         cost=NodeCost(usd=cap.cost.usd, latency_ms=cap.cost.latency_ms, tokens=cap.cost.tokens,
@@ -996,7 +997,7 @@ class ForkJoinController:
                     self._park(m, node, decision, st.fork_id, bs.branch_id)
                     started = True
                     continue
-            if not rt._pre_exec_ok(m, plan, node):
+            if not rt._pre_exec_ok(m, plan, node) or not rt._revision_admit(m, plan, node):
                 self._append_failed(m, st, bs, attempt, "admission_refused", ran=False)
                 started = True
                 continue

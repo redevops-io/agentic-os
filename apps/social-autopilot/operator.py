@@ -20,12 +20,41 @@ workers and are not pure Postiz-core actions. They stay in app.py as UI-only end
 """
 from __future__ import annotations
 
+import os
+
 from agentic_os.mission.operator_sdk import Operator, capability
 
 from . import core
 
 
-def build_social_operator() -> Operator:
+def _revision_aware_default() -> bool:
+    return bool((os.environ.get("AGENTIC_OS_REVISION_LEDGER") or "").strip())
+
+
+# Revision-aware approvals (docs/REVISION_AWARE_APPROVALS.md). A staged post is an artifact ``social/post/<id>``: drafting and revising it
+# PRODUCE revisions; publishing is bound to the HEAD revision a human approved and consumes that approval exactly once.
+_POST_REVISION = {"artifact": "social/post/{post_id}", "digest": ["copy", "media"], "target": "{post_id}"}
+_PUBLISH_BOUND = {"artifact": "social/post/{id}", "digest": "head", "target": "{id}"}
+
+
+def build_social_operator(revision_aware: bool | None = None) -> Operator:
+    """``revision_aware`` (default: on when ``AGENTIC_OS_REVISION_LEDGER`` is set) declares the revision metadata above. The runtime must then be given
+    the same ledger; a revision-bound publish on a runtime without one fails closed rather than running unbound."""
+    aware = _revision_aware_default() if revision_aware is None else bool(revision_aware)
+    prod = {"revision_produces": dict(_POST_REVISION)} if aware else {}
+    bound = {"revision_bound": dict(_PUBLISH_BOUND)} if aware else {}
+    revise = [capability(
+        "social.revise_draft",
+        lambda inp: core.revise_draft(inp),
+        provides=["draft_revised"],
+        inputs={"id": "str", "copy": "str"},
+        outputs={"draft_revised": "the draft's copy was changed; approvals given for the previous text no longer apply"},
+        side_effecting=True,
+        compensation={"supported": False, "disposition": "PRESERVE", "notes": "only a private DRAFT is edited; the previous text is not published anywhere"},
+        permissions=["social:write"], estimated_value="medium", latency_ms=800,
+        concurrency_mode="exclusive", concurrency_key="social:post:{id}",
+        revision_produces={"artifact": "social/post/{post_id}", "digest": ["copy", "media"], "target": "{post_id}"},
+    )] if aware else []
     return Operator("social-autopilot", [
         capability(
             "social.draft",
@@ -36,6 +65,7 @@ def build_social_operator() -> Operator:
             compensation={"supported": False, "disposition": "PRESERVE", "notes": "a drafted post is kept for human review; it is never published or auto-removed by a failed workflow"},
             permissions=["social:write"], estimated_value="medium", latency_ms=1200,
             concurrency_key="provider:postiz", max_parallelism=3,  # bounded Postiz writes; drafts are independent
+            **prod,
         ),
         capability(
             "social.draft_visual",
@@ -47,6 +77,7 @@ def build_social_operator() -> Operator:
             compensation={"supported": False, "disposition": "PRESERVE", "notes": "a drafted post is kept for human review; it is never published or auto-removed by a failed workflow"},
             permissions=["social:write"], estimated_value="medium", latency_ms=1200,
             concurrency_key="provider:postiz", max_parallelism=3,
+            **prod,
         ),
         capability(
             "social.publish",
@@ -57,5 +88,7 @@ def build_social_operator() -> Operator:
             compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "publishing externally is NOT reliably reversible"}, approval_required=True,
             permissions=["social:write"], estimated_value="high", latency_ms=800,
             concurrency_mode="exclusive", concurrency_key="social:post:{id}",  # never double-publish one post
+            **bound,
         ),
+        *revise,
     ])

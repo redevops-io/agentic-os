@@ -106,6 +106,10 @@ class CapabilitySpec:
     mission_owned_temporary: bool = False
     irreversible_note: str = ""                 # WHY it cannot be undone (required when irreversible; lint N10)
     approval_required: bool = False
+    # Revision-aware approvals (docs/REVISION_AWARE_APPROVALS.md). ``revision_bound``: the action may only run under a human approval bound to ONE
+    # immutable revision of an artifact. ``revision_produces``: success registers a new revision (superseding approvals of older ones). Both optional.
+    revision_bound: dict | None = None
+    revision_produces: dict | None = None
     confidence: float = 0.9                     # learned success rate (Capability Learning)
     estimated_value: str = "medium"             # low|medium|high
     provides: list[str] = field(default_factory=list)  # world-state keys/outcomes it can satisfy
@@ -188,6 +192,8 @@ class Node:
     depends_on: list[str] = field(default_factory=list)
     produces: str | None = None                 # world-state key this node writes
     approval_required: bool = False
+    revision_bound: dict | None = None          # carried from the capability (never inferred)
+    revision_produces: dict | None = None
     side_effecting: bool = False
     undo: str | None = None
     irreversible: bool = False                  # carried from the capability's declaration (never inferred)

@@ -19,9 +19,21 @@ runtime parks it as a HumanTask before execution.
 """
 from __future__ import annotations
 
+import os
+
 from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
+
+
+def _revision_aware_default() -> bool:
+    return bool((os.environ.get("AGENTIC_OS_REVISION_LEDGER") or "").strip())
+
+
+# Revision-aware approvals (docs/REVISION_AWARE_APPROVALS.md): an account's pitch is an artifact ``outreach/account/<account>``. Drafting it PRODUCES a
+# revision (subject + body); approving the account is bound to the HEAD revision the human saw, and re-drafting supersedes a pending approval.
+_PITCH_REVISION = {"artifact": "outreach/account/{account}", "digest": ["subject", "body"], "target": "{account}"}
+_APPROVE_BOUND = {"artifact": "outreach/account/{account}", "digest": "head", "target": "{account}"}
 
 
 def _draft_pitch(inp):
@@ -38,7 +50,12 @@ def _follow_up(inp):
     return _app.follow_up(inp)
 
 
-def build_outreach_operator() -> Operator:
+def build_outreach_operator(revision_aware: bool | None = None) -> Operator:
+    """``revision_aware`` (default: on when ``AGENTIC_OS_REVISION_LEDGER`` is set) declares the revision metadata above; the runtime must be given the
+    same ledger, and a revision-bound approve on a runtime without one fails closed."""
+    aware = _revision_aware_default() if revision_aware is None else bool(revision_aware)
+    prod = {"revision_produces": dict(_PITCH_REVISION)} if aware else {}
+    bound = {"revision_bound": dict(_APPROVE_BOUND)} if aware else {}
     return Operator("outreach-engine", [
         capability(
             "outreach.refresh",
@@ -65,6 +82,7 @@ def build_outreach_operator() -> Operator:
                                        "link) attached to the account's draft"},
             estimated_value="medium", deterministic=False, latency_ms=1500,
             concurrency_mode="read_only",   # only writes the in-memory pipeline row, no CRM write, no send
+            **prod,
         ),
         capability(
             "outreach.approve",
@@ -77,6 +95,7 @@ def build_outreach_operator() -> Operator:
             compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "approval syncs the lead to Twenty (external CRM); not automatically reversible"}, approval_required=True,
             permissions=["outreach:write"], estimated_value="high", latency_ms=1500,
             concurrency_mode="exclusive", concurrency_key="outreach:account:{account}",
+            **bound,
         ),
         capability(
             "outreach.send_all",

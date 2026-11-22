@@ -75,7 +75,9 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
                max_parallelism: int | None = None,
                compensation: "dict | CompensationSpec | None" = None,
                irreversible: "bool | str" = False,
-               mission_owned_temporary: bool = False) -> Capability:
+               mission_owned_temporary: bool = False,
+               revision_bound: dict | None = None,
+               revision_produces: dict | None = None) -> Capability:
     """Ergonomic builder for one capability + its handler.
 
     Compensation (docs/COMPENSATION.md, explicit-only): a consequential capability DECLARES either
@@ -95,7 +97,8 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
         undo = comp.capability        # one source of truth: the declared compensating capability
     spec = CapabilitySpec(
         name=name, operator=operator, provides=provides or [], inputs=inputs or {},
-        outputs=outputs or {}, side_effecting=side_effecting, approval_required=approval_required,
+        outputs=outputs or {}, side_effecting=side_effecting, approval_required=approval_required or bool(revision_bound),
+        revision_bound=dict(revision_bound) if revision_bound else None, revision_produces=dict(revision_produces) if revision_produces else None,
         undo=undo, compensation=comp, irreversible=irreversible, irreversible_note=irr_note,
         mission_owned_temporary=bool(mission_owned_temporary),
         permissions=permissions or [], deterministic=deterministic,

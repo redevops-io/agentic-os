@@ -342,12 +342,60 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None, media: li
         "copy_source": "llm" if llm else "template",
         "staged_as_draft": staged,
         "draft_staged": staged,          # the declared output of social.draft: the runtime's verifier rejects a result without it
+        "content_hash": _content_hash(text),
         "post_id": post_id if staged else None,
         "network": network,
         "media": media or [],
         "summary": (f"Drafted a {network} post on “{topic}” and staged it as a DRAFT in Postiz "
                     f"(id {post_id}). It will not publish until a human approves it."),
     }
+
+
+def _read_post_raw(pid: str) -> tuple[str, str] | None:
+    """(state, raw Post.content) for one post, or None."""
+    if not _valid_post_id(pid):
+        return None
+    try:
+        rows = _psql('SELECT p.id, p.state, p."integrationId", p.content '
+                     f'FROM "Post" p WHERE p.id = \'{pid}\' AND p."deletedAt" IS NULL;')
+    except Exception:
+        return None
+    return (rows[0][1], rows[0][3]) if rows else None
+
+
+def revise_draft(body: dict) -> dict:
+    """Edit the copy of a staged DRAFT (media is kept). This is the *producer* side of revision-aware approvals: a changed draft is a new
+    revision, so an approval a human gave (or was about to give) for the old text no longer applies. Only a private DRAFT can be revised;
+    a post that is queued or published is never touched here."""
+    err = credentials_error()
+    if err:
+        return {"status": "config_error", "action": "revise_draft", "error": err}
+    pid, text = body.get("id"), (body.get("copy") or "").strip()
+    if not _valid_post_id(pid) or not text:
+        return {"status": "error", "action": "revise_draft", "error": "a valid post id and non-empty copy are required"}
+    cur = _read_post_raw(pid)
+    if cur is None:
+        return {"status": "error", "action": "revise_draft", "error": f"post {pid} not found"}
+    if (cur[0] or "").upper() != "DRAFT":
+        return {"status": "error", "action": "revise_draft", "error": f"post {pid} is {cur[0]}, only a DRAFT can be revised"}
+    try:
+        parsed = json.loads(cur[1])
+    except Exception:  # noqa: BLE001
+        parsed = None
+    entries = parsed if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) else [{}]
+    entries[0] = {**entries[0], "content": text}
+    media = entries[0].get("media") or []
+    content = json.dumps(entries).replace("'", "''")
+    try:
+        _psql(f'UPDATE "Post" SET content = \'{content}\', "updatedAt" = NOW() '
+              f'WHERE id = \'{pid}\' AND state = \'DRAFT\' AND "deletedAt" IS NULL;')
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "action": "revise_draft", "error": f"failed to revise draft: {e}"}
+    h = _content_hash(text)
+    _restage(pid, h)                                   # the in-memory staging hash follows the content; the ledger revision is the durable authority
+    fetch_activity(force=True)
+    return {"status": "done", "action": "revise_draft", "post_id": pid, "copy": text, "media": media, "content_hash": h, "draft_revised": True,
+            "summary": f"Revised draft {pid}. Any approval given for the previous text no longer applies."}
 
 
 def _visual_media(export: object) -> tuple[list[dict] | None, str]:
