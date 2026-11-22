@@ -11,7 +11,8 @@ Gates (roles come from the frame's ``committee_gates``):
 * BUDGET role (finance/procurement): ``purchase_intent`` mean below ``neg`` => contested; below ``pos`` => conditional.
 * FEASIBILITY roles (platform/app owner): ``relevance`` mean below ``pos`` => migration/fit at risk.
 Thresholds are HYPOTHETICAL (defaults 3.4 / 2.8 on the 1-5 synthetic SSR scale, which is known to compress toward
-the middle) and exist only to make the structure explicit; the sensitivity output shows how much hangs on them.
+the middle; on real dry-run data every concept fell below 2.8, so prefer :func:`standardise` with thresholds in sd units) and
+exist only to make the structure explicit; the sensitivity output shows how much hangs on them.
 """
 from __future__ import annotations
 
@@ -34,6 +35,21 @@ class Gates:
 class Thresholds:
     pos: float = 3.4
     neg: float = 2.8
+
+
+def standardise(roles: Mapping[str, Cell], mu: Mapping[str, float], sd: Mapping[str, float]) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """Express cell means and interval ends in standard-deviation units of the study's OWN panel distribution
+    (``mu``/``sd`` per construct, e.g. over all personas and all real variants). Absolute 1-5 SSR values are compressed
+    and construct-specific, so absolute gates (3.4 / 2.8) can classify every concept alike; a standardised reading says
+    only how a role's response to a concept compares with the average response of the whole panel: a RELATIVE reading
+    among the concepts tested, not a readiness verdict. Use with ``Thresholds(pos=0.25, neg=-0.25)`` or similar."""
+    out: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for r, cons in roles.items():
+        out[r] = {}
+        for c, d in cons.items():
+            s_ = sd.get(c) or 1.0
+            out[r][c] = {k: ((v - mu.get(c, 0.0)) / s_ if k in ("mean", "lo", "hi") else v) for k, v in d.items()}
+    return out
 
 
 def _get(role: Optional[Cell], construct: str, which: str = "mean") -> Optional[float]:
@@ -105,4 +121,4 @@ def committee_outcome(roles: Mapping[str, Cell], gates: Gates, thr: Thresholds =
             "sensitivity": sens, "outcome_changes_when": changes, "robust": not changes, "synthetic": True}
 
 
-__all__ = ["OUTCOMES", "Gates", "Thresholds", "evaluate", "committee_outcome"]
+__all__ = ["OUTCOMES", "Gates", "Thresholds", "standardise", "evaluate", "committee_outcome"]

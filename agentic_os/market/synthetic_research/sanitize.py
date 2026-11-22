@@ -235,7 +235,7 @@ _RESP_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
                                     r"```\s*(?:json|python|bash|sh)\b|\bcall(?:ing)? (?:the )?(?:tool|function)\b", re.I)),
     ("template_token", re.compile(r"<\|[a-z_]+\|>|\[/?INST\]|<<\s*SYS\s*>>|<think>", re.I)),
     ("instruction_to_operator", re.compile(
-        r"\b(?:ignore|disregard)\b[^.\n]{0,30}\b(?:instructions?|prompt)\b|\bas (?:instructed|directed) (?:by|in) the (?:page|text|website)\b|"
+        r"\b(?:ignore|disregard)\s+(?:(?:all|any|the|your|these|those)\s+)*(?:previous|prior|above|earlier|system|operator|developer|embedded)\s+(?:instructions?|prompts?|messages?)\b|\bas (?:instructed|directed) (?:by|in) the (?:page|text|website)\b|"
         r"\b(?:system prompt|operator|developer message)\b|\bI (?:have been|was) (?:told|instructed|asked) (?:by the (?:page|text|site) )?to\b", re.I)),
     ("base64_blob", re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{60,}={0,2}(?![A-Za-z0-9+/])")),
     ("markdown_injection", re.compile(r"!\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\((?:https?:)?//[^)]*\)")),
