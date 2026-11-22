@@ -47,12 +47,26 @@ def test_exact_texts_is_current():
     assert _load("build_legal_exact_texts").main(["--check"]) == 0
 
 
+def _pre_waiver_rev() -> str:
+    """The commit immediately before the owner's decision without counsel was recorded, found by locating the commit that
+    ADDED the waiver file - not "HEAD^", which only means that on the commit that introduced the waiver itself; every
+    later commit moves HEAD^ to something unrelated."""
+    import subprocess
+    waiver = LEGAL / "approved" / "OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md"
+    if not waiver.is_file():
+        return "HEAD"
+    added = subprocess.run(["git", "log", "--format=%H", "--diff-filter=A", "--", str(waiver.relative_to(ROOT))],
+                           cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip().splitlines()
+    assert added, f"{waiver} exists but no commit adding it was found"
+    return f"{added[-1]}^"                        # the oldest such commit (first time it was added), one before it
+
+
 def _gate_text_before_the_waiver() -> str:
     """The form is rendered from the gate as it stood BEFORE the owner's decision without counsel was recorded (that signature changes the decisions'
-    status fields, which the form shows). Read it from the commit that precedes the waiver; before the waiver exists that is HEAD."""
+    status fields, which the form shows)."""
     import subprocess
-    rev = "HEAD^" if (LEGAL / "approved" / "OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md").is_file() else "HEAD"
-    return subprocess.run(["git", "show", f"{rev}:packaging/distribution-gate.json"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", "show", f"{_pre_waiver_rev()}:packaging/distribution-gate.json"],
+                          cwd=ROOT, capture_output=True, text=True, check=True).stdout
 
 
 def test_owner_form_is_current_and_has_no_ticked_box(tmp_path):

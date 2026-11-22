@@ -26,6 +26,8 @@ jobs:
       AGENTIC_OS_REQUIRE_NODE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # several tests resolve historical revisions (e.g. the commit before a legal waiver); a shallow clone breaks them
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
