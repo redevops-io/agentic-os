@@ -17,3 +17,22 @@ agentic_os has no embedding client. `TextEmbedder` is injected. A chat model's `
 
 ## Sanity check (Illustrative/synthetic; internally reproduced, author-labelled data, n = 20)
 Hand-written synthetic answers with an intended polarity 1–5 (see `docs/evidence/synthetic_research_anchor_sanity.md`), scored with the local purchase-intent pack at the paper's defaults (`epsilon = 0`, `T = 1`): Spearman 0.97 with `BAAI/bge-small-en-v1.5` (group means 2.14 / 2.47 / 3.10 / 3.82 / 4.09) and 0.90 with `all-MiniLM-L6-v2` (2.72 … 3.38). Rank order is recovered but the scale is compressed towards the middle. This checks plumbing and anchor ordering only; it is **not** validation against human purchase intent.
+
+## Second slice: personas, elicitation, study runner, controls (still opt-in, read-only, synthetic-only)
+What is **published** (implemented, eq. 7-9, minimum subtraction, normalisation, mean over anchor sets), what is **independently constructed** (the local anchor packs, plus a second independently worded `purchase_intent`/`trust` pack in `anchors_alt.py`) and what is **new here** (everything below) are kept apart on purpose. Nothing in this slice claims or implies parity with the paper's reported figures.
+
+| module | what it does |
+|---|---|
+| `contracts.py` | frozen dataclasses, `synthetic` can only be `True`; `PersonaSpec`, `ConceptVariant` (label never shown to a model; prices are hypotheses), `SourceSnapshot`, `SyntheticResponse`, `SSRDistribution`, `StudyManifest` (embedder name **and revision**, pack ids, seeds, hashes, costs, `untrusted_content_flags`, held-out split, sealed planted order), `StudyResult.evidence_ref()` (a plain pointer, not a metric), `Recommendation` (always `requires_human_review`, gate `pending`). |
+| `personas.py`, `scenarios/*.yaml` | seeded, stratified sampler over a YAML frame; six SME niches; enterprise committee of seven roles x scenarios E1-E6. All weights are labelled hypothetical. |
+| `elicitation.py` | blind neutral prompts, one per construct; no tools in the request type or payload; budget refused before any call; per-call seeds; `LocalOpenAITransport` refuses hosts outside the trust boundary and redirects; `governed_route_receipt` resolves the endpoint through `GovernedLLM`. |
+| `sanitize.py` | public page text is untrusted data: HTML reduced to visible text, injection patterns detected, neutralised and counted, delimited block; answers containing URLs, tool-call syntax or operator instructions are quarantined. Heuristic, not a guarantee. |
+| `study.py` | persona x variant x construct, SSR (paper-cosine, half-cosine, epsilon/T sweep), DLR and FLR comparison arms, paired bootstrap over personas, controls, themes citing response and page sentence, unsupported-claim detector, abstention accounting. |
+| `controls.py`, `planted.py`, `anchor_sensitivity.py` | positive/negative controls; planted-order benchmark (order fixed by construction before scoring and sealed); anchor ablations and negative controls. |
+| `committee.py` | structural buying-committee model (veto, champion, budget, feasibility) with sensitivity; outputs a category, never a probability. |
+| `actionability.py` | blinded rubric for recommendations (deterministic checker + judge prompts + agreement). LLM-judged actionability is weak evidence. |
+| `stimuli.py`, `report.py` | held-out split and neutral-labelled stimulus pack for a blinded human pilot; JSON/Markdown/JSONL export that refuses any first-party sink. |
+
+Safety properties (each has a test): the flag is OFF by default and nothing runs when it is off; no write path to a website, queue, publisher, `OutcomeStore` or ledger (an AST test forbids the imports and `export_report` refuses non-directory sinks); the only network client is `LocalOpenAITransport` (plus the existing `HttpEmbedder`), both in-boundary only; the model receives no tools, files, browsing or network; page text can neither change a manifest, a budget nor a score; every recommendation is a HYPOTHESIS for mandatory human review.
+
+Studies compare only like with like: `compare_results` refuses to compare studies with different embedders or revisions unless the caller passes `allow_embedder_mismatch=True`, and then the output carries a visible `embedder_mismatch` flag.

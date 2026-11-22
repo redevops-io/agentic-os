@@ -104,6 +104,19 @@ def _hist_pmf(vals: Sequence[int]) -> List[float]:
     return [c.get(i, 0) / n for i in range(1, 6)]
 
 
+def _pooled_entropy(arm, construct, vals_all, primary_pmf, rid_to_resp, variant_ids):
+    if arm != "ssr_paper":
+        return stats.entropy(_hist_pmf([int(round(x)) for x in vals_all]))
+    tot = [0.0] * 5
+    for rid, pmf in primary_pmf.items():
+        r = rid_to_resp[rid]
+        if r.construct == construct and r.variant_id in variant_ids:
+            for i in range(5):
+                tot[i] += pmf[i]
+    t = sum(tot)
+    return stats.entropy([x / t for x in tot]) if t else float("nan")
+
+
 def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants: Sequence[ConceptVariant],
               snapshots: Sequence[SourceSnapshot], transport: Transport, embedder: Any,
               control_personas: Sequence[PersonaSpec] = (), unseen_personas: Sequence[PersonaSpec] = (),
@@ -148,6 +161,8 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
         add(cp, controls, config.control_constructs, "ctrl")
         if unseen_personas:
             add(unseen_personas, [base], ("relevance",), "unseen")
+            if "relevance" not in config.constructs:
+                add(cp, [base], ("relevance",), "unseen_ref")      # in-frame reference for the unseen-niche control
     n_main = len(jobs)
     dlr_jobs: List[Job] = []
     for c in config.arm_constructs:
@@ -342,9 +357,7 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
                 "sd": stats.sd(vals_all), "mean_abs_dev_from_3": stats.mean([abs(x - 3) for x in vals_all]),
                 "share_within_0.5_of_3": sum(1 for x in vals_all if abs(x - 3) <= 0.5) / len(vals_all),
                 "mean_between_variant_spread": stats.mean(spreads) if spreads else None,
-                "pooled_pmf_entropy_bits": stats.entropy(_hist_pmf([int(round(x)) for x in vals_all])) if arm != "ssr_paper" else
-                stats.entropy([sum(primary_pmf[rid][i] for rid in primary_pmf if rid_to_resp[rid].construct == construct
-                                   and rid_to_resp[rid].variant_id in variant_ids) for i in range(5)]),
+                "pooled_pmf_entropy_bits": _pooled_entropy(arm, construct, vals_all, primary_pmf, rid_to_resp, variant_ids),
                 "synthetic": True})
 
     # ── themes and groundedness ──────────────────────────────────────────────────────────────────────────────
@@ -372,8 +385,10 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
     ctrl_records: List[Dict[str, Any]] = []
     if controls:
         cvals: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(dict)
+        unseen_ids = {p.persona_id for p in unseen_personas}
         for r in inc:
-            cvals[(r.variant_id, r.construct)][r.persona_id] = primary_mean[r.response_id]
+            if r.persona_id not in unseen_ids:
+                cvals[(r.variant_id, r.construct)][r.persona_id] = primary_mean[r.response_id]
         # only personas that actually have control responses count as paired
         unseen_vals = {r.persona_id: primary_mean[r.response_id] for r in inc
                        if r.persona_id in {p.persona_id for p in unseen_personas} and r.variant_id == base_id}

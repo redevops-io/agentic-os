@@ -42,7 +42,7 @@ class TransportRefused(RuntimeError):
 class GenerationParams:
     temperature: float = 0.7
     top_p: float = 0.9
-    max_tokens: int = 160
+    max_tokens: int = 120
     enable_thinking: bool = False         # Qwen3: chat_template_kwargs {"enable_thinking": false}
     use_seed: bool = True                 # pass `seed` per call (a server may ignore it: measured, not assumed)
 
@@ -209,7 +209,7 @@ _QUESTIONS: Dict[str, str] = {
         "Based only on the text above, how far do you believe what it says? Say which claims you would "
         "believe or doubt and why, what evidence you would need, and what would stop you relying on it."),
 }
-_STYLE = ("Answer in 2 to 4 sentences, in the first person, in your own words. Do not give a numeric score. "
+_STYLE = ("Answer in 2 or 3 short sentences (under 60 words), in the first person, in your own words. Do not give a numeric score. "
           "If the text does not tell you something you would need, say what is missing instead of assuming it.")
 _RATING_PHRASE: Dict[str, str] = {
     "purchase_intent": "how likely are you to buy or subscribe to this",

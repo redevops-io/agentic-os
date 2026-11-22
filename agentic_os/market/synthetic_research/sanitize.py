@@ -176,8 +176,8 @@ _PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = tuple((k, re.compile(v, r
     ("tool_call", r"(?:\bcall (?:the )?(?:tool|function)\b|\buse (?:the )?(?:tool|function)\b|<tool_call>|</tool_call>|"
                   r"\"tool_calls?\"|\bfunction_call\b|\"name\"\s*:\s*\"[^\"]+\"\s*,\s*\"arguments\")"),
     ("exfiltration", r"\b(?:send|post|upload|forward|email|exfiltrate|transmit)\b[^.\n]{0,60}\b(?:to|at)\b[^.\n]{0,20}"
-                     r"(?:https?://|www\.|[\w.-]+@[\w.-]+)"),
-    ("score_steering", r"\b(?:rate|score|answer|respond|reply|output)\b[^.\n]{0,40}\b(?:5\s*/\s*5|five stars?|"
+                     r"(?:https?://|www\.|[\w.-]+@)\S*"),
+    ("score_steering", r"\b(?:rate|score|answer|respond|reply|output|give|assign|set|mark)\b[^.\n]{0,60}\b(?:5\s*/\s*5|[1-5] out of [1-5]|five stars?|"
                        r"(?:as|with) (?:a )?(?:5|five)|(?:very|extremely|highly) (?:likely|positive)|definitely (?:buy|purchase))\b"),
     ("format_override", r"\b(?:respond|reply|answer|output)\s+(?:only |exactly )?(?:with|in|as)\s+(?:json|xml|html|markdown|a single|the word|yes|no)\b"),
     ("markdown_link", r"!?\[[^\]]{0,200}\]\((?:https?:)?//[^)]*\)"),
@@ -214,9 +214,9 @@ def neutralise(text: str) -> Tuple[str, List[Flag]]:
     clean, _ = strip_invisible(text)
     clean = unicodedata.normalize("NFKC", clean)
     flags = detect_injection(clean)
-    clean = _URL.sub("[link]", clean)                       # URLs first so no URL fragment survives a pattern cut
     for kind, pat in _PATTERNS:
         clean = pat.sub("[removed: instruction-like text]", clean)
+    clean = _URL.sub("[link]", clean)
     clean = clean.replace("<", "(").replace(">", ")")
     return clean, flags
 
