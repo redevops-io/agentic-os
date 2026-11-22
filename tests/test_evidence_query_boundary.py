@@ -397,8 +397,10 @@ def test_unguarded_alpha_worker_holds_no_beta_data_or_names():
 
 
 def test_each_query_runs_in_its_own_worker_process(tmp_path):
-    pids = {W.selftest("pid")["pid"] for _ in range(3)}
-    assert len(pids) == 3 and os.getpid() not in pids
+    results = [W.selftest("pid") for _ in range(3)]
+    pids = {r["pid"] for r in results}
+    tokens = {r["token"] for r in results}             # PIDs can legitimately repeat in a low-PID-count container
+    assert len(tokens) == 3 and os.getpid() not in pids
 
 
 def test_authorization_precedes_data_resolution(tmp_path):
@@ -422,7 +424,13 @@ def test_worker_has_no_inherited_environment_or_cwd_state(monkeypatch):
     monkeypatch.setenv("SECRET_TOKEN_FOR_TEST", "s3cr3t-value")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA-TEST")
     s = W.selftest("env")
-    assert s["env"] == {} or set(s["env"]) <= {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
+    env = dict(s["env"])
+    pwd = env.pop("PWD", None)
+    if pwd is not None:
+        # Linux's bwrap/unshare backend sets PWD itself to its own --chdir target (the worker's private scratch dir) -
+        # that is the sandbox's own bookkeeping, not inherited host state, so only its shape is checked here.
+        assert os.path.basename(pwd).startswith("aos-evq-"), pwd
+    assert env == {} or set(env) <= {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
     assert "s3cr3t" not in repr(s) and "AKIA" not in repr(s)
     c = W.selftest("cwd")
     assert c["listing"] == [] and c["is_private"] is True
