@@ -12,19 +12,23 @@ it does not run the experiment.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Tuple
 
-from ..integrations.business.contracts import BusinessObject
+from ..integrations.business.contracts import BusinessObject, Provenance
 from .experiment_design import CommercialExperiment, ExperimentEvaluation, evaluate
+from .ingestion import METRIC_SOURCES, IngestionRefused, verify_attestation
 
-METRIC_SOURCES = ("umami", "gsc", "marketplace", "crm", "billing", "erp", "analytics")
+_STUDY_REF_PREFIX = "synthetic-study:"
 
 
 @dataclass(frozen=True)
 class FirstPartyMetric(BusinessObject):
-    """One observed first-party metric value for a segment (control/treatment/"") of an experiment or surface."""
+    """One observed first-party metric value for a segment (control/treatment/"") of an experiment or surface.
+
+    ``attestation`` is stamped by the registered source adapter that produced the metric
+    (``register_source_adapter(...).make_metric(...)``, see ``market/ingestion.py``); ``FirstPartyLedger.record``
+    verifies it. It is not part of ``digest()`` / ``to_dict()``, so those are unchanged."""
     KIND: ClassVar[str] = "market.first_party_metric"
     source: str = ""                     # one of METRIC_SOURCES
     metric: str = ""
@@ -34,37 +38,45 @@ class FirstPartyMetric(BusinessObject):
     higher_is_better: bool = True
     period_start_ms: int = 0
     period_end_ms: int = 0
+    attestation: str = ""
+
+    def business_fields(self) -> dict:
+        d = super().business_fields()
+        d.pop("attestation", None)
+        return d
 
 
-_TOKEN = re.compile(r"[a-z0-9]+")
-
-
-def _looks_synthetic(text: str) -> bool:
-    """Naming-convention test on a normalised source / provider string: a token starting with 'synthetic' or
-    'simulat' (simulated, simulation, simulator), the token 'ssr', or the text 'study' / 'study:...'. Word-aware, so
-    'ssrs-reports', 'studio' and 'study-hall' are not caught."""
-    t = text.strip().lower()
-    if t == "study" or t.startswith("study:"):
-        return True
-    return any(tok.startswith(("synthetic", "simulat")) or tok == "ssr" for tok in _TOKEN.findall(t))
+def _is_study_ref(x: object) -> bool:
+    return isinstance(x, str) and x.strip().lower().startswith(_STUDY_REF_PREFIX)
 
 
 def refuse_non_first_party(m: object) -> None:
-    """A NAMING-CONVENTION GUARD plus an allow-list for the first-party ledger; it is not enforcement against a
-    caller who mislabels a metric on purpose. Refuses: anything that is not a ``FirstPartyMetric`` (TypeError); a
-    non-empty source outside METRIC_SOURCES (the empty legacy default is tolerated); and a source or provenance
-    provider that LOOKS synthetic (see ``_looks_synthetic``), including an empty source with such a provider.
-    Mirrors ``outcome_store.refuse_simulated`` for the market plane. Behaviour change for out-of-repo callers: sources
-    such as 'stripe' or 'ga4' that older versions accepted are now refused."""
-    if not isinstance(m, FirstPartyMetric):
-        raise TypeError("FirstPartyLedger accepts FirstPartyMetric objects only")
-    source = str(m.source or "").strip().lower()
-    provider = str(getattr(m.prov, "provider", "") or "").strip().lower()
-    if _looks_synthetic(source) or _looks_synthetic(provider):
-        raise ValueError("a synthetic / simulated / study-named source or provider is refused by the first-party "
-                         "ledger's naming-convention guard")
-    if source and source not in METRIC_SOURCES:
-        raise ValueError(f"unknown first-party metric source {m.source!r}; allowed: {', '.join(METRIC_SOURCES)}")
+    """The gate in front of the first-party ledger. UNCONDITIONAL: no feature flag, independent of
+    AGENTIC_OS_SYNTHETIC_RESEARCH (it refuses exactly the same with SR-04 and the SSR package disabled).
+
+    By CONTENT / TYPE: refuses an object that is not exactly a ``FirstPartyMetric`` (subclasses, duck types, study
+    and synthetic-response objects), anything carrying ``synthetic=True`` or defined in the synthetic-research
+    package, and any metric whose fields or provenance mention a ``synthetic-study:`` reference (any case or
+    surrounding whitespace). By SOURCE: the ``source`` must be exactly one of ``METRIC_SOURCES`` (a missing, empty or
+    whitespace source, a different case, and every unregistered source are refused: strict allow-list, no
+    provider-name heuristics). By ORIGIN: the metric must carry a valid adapter attestation (``ingestion.py``).
+    A defence in depth, not an unforgeable seal against code in the same process."""
+    cls = type(m)
+    if getattr(m, "synthetic", False) or "synthetic_research" in getattr(cls, "__module__", ""):
+        raise ValueError("a synthetic / study object can never be recorded in the first-party ledger")
+    if cls is not FirstPartyMetric:
+        raise TypeError("FirstPartyLedger accepts FirstPartyMetric objects only (no subclasses or duck types)")
+    prov = m.prov
+    if type(prov) is not Provenance:
+        raise TypeError("metric provenance must be a Provenance")
+    texts = [m.source, m.metric, m.segment, m.surface, m.attestation, prov.provider, prov.provider_ref,
+             *prov.evidence_refs]
+    if any(_is_study_ref(t) for t in texts):
+        raise ValueError("a metric that references a synthetic study is refused by the first-party ledger")
+    if not isinstance(m.source, str) or m.source not in METRIC_SOURCES:
+        raise ValueError(f"unregistered first-party metric source {m.source!r}; allowed: {', '.join(METRIC_SOURCES)}"
+                         " (a missing or empty source is refused; register an adapter for one of these sources)")
+    verify_attestation(m)
 
 
 class FirstPartyLedger:
@@ -74,7 +86,7 @@ class FirstPartyLedger:
         self._by_key: Dict[Tuple[str, str], FirstPartyMetric] = {}
 
     def record(self, m: FirstPartyMetric) -> FirstPartyMetric:
-        refuse_non_first_party(m)
+        refuse_non_first_party(m)             # unconditional; may raise ValueError / TypeError / IngestionRefused
         self._by_key[(m.metric, m.segment)] = m
         return m
 

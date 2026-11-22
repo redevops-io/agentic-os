@@ -600,7 +600,7 @@ def test_synthetic_ref_cannot_enter_first_party_ledger_or_outcome_store():
     ref = _ref()
     ledger = outcomes_join.FirstPartyLedger()
     for bad in (ref, ref.to_ref(), ref.to_dict()):
-        with pytest.raises((AttributeError, TypeError)):
+        with pytest.raises((ValueError, TypeError)):                # refused by type/content (see the ledger guard tests)
             ledger.record(bad)                                    # type: ignore[arg-type]
     assert ledger.get("relevance", "") is None
     store = InMemoryOutcomeStore()
