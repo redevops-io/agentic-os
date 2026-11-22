@@ -79,6 +79,20 @@
 # names, nothing loosened, nothing else changed in that script. Verified via its own existing test
 # suite (test_release_signing_package.py, test_signing_procedure_r0prime.py, test_scopefix.py - 262
 # passed, 2 skipped, no regressions).
+#
+# Re-dispatching on that fix (run 44976518820) got past role_of() but died one check later in the same
+# step: "ERROR: ...arm64_en-US.msi could not be inspected for existing signatures (ERR:TypeError)".
+# Downloaded the real built MSI from that run's round2-containers artifact and reproduced locally:
+# signify==0.9.3's SignedMsiFile import silently fails (caught by the script's own
+# `except ImportError: SignedMsiFile = None`) because signify's MSI support needs the `olefile`
+# package (OLE2/Compound File Binary parsing - MSI's own container format) and this workflow's "venv-v"
+# tool venv only ever installed signify, never olefile - windows-signing-r0prime.yml (the x64 pipeline)
+# already installs `"signify==0.9.3" "olefile==0.47"` together in its own equivalent step; this ARM64
+# workflow was missing the second package. Not architecture-specific at all - confirmed by reproducing
+# with olefile installed: the same MSI then correctly raises AuthenticodeNotSignedError (0 existing
+# signatures), exactly what the script's own logic expects for an unsigned input. Fixed by adding
+# "olefile==0.47" to both `pip install` lines below, matching the x64 workflow exactly. Pure
+# workflow-file fix - no packaging/ change, so BUILD_COMMIT is unchanged.
 #   fc254a34 -> 04db1b26  adds the ARCH-gated cryptography-from-sdist branch (the actual fix)
 #            -> 16fa5b08  corrects ARCH's own detection: 04db1b26 read PROCESSOR_ARCHITECTURE from
 #                          git-bash, but git-bash.exe is itself an x86-64 binary that runs under
@@ -414,7 +428,7 @@ jobs:
         run: |
           set -euo pipefail
           /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
-          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3" "olefile==0.47"
           "$RUNNER_TEMP/venv-v/bin/python" -I -c "import signify; print(signify.__version__)"
 
       - name: Build the scope file for stage inner (every value computed live on this runner)
@@ -740,7 +754,7 @@ jobs:
           GOT="$(shasum -a 256 "$TOOLS/jsign/jsign-7.6.jar" | awk '{print $1}')"
           [ "$GOT" = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5" ] || { echo "::error::jsign hash mismatch"; exit 1; }
           /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-v"
-          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3"
+          "$RUNNER_TEMP/venv-v/bin/pip" install --no-cache-dir "signify==0.9.3" "olefile==0.47"
           # same reasoning as sign-inner's own step: the signing script's fixed PATH does not include
           # wherever this runner's az actually lives, only /usr/bin:/bin:/usr/sbin:/sbin + --tools-dir.
           ln -sf "$(command -v az)" "$TOOLS/az"
