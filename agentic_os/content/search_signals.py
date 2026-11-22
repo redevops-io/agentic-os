@@ -293,9 +293,11 @@ def _capped(conf: float, o: SearchObservation) -> float:
 
 def _unknown_gate(o: SearchObservation, aware: bool) -> bool:
     """Should a relevance-gated detector treat this observation as 'relevance unknown'? Flag on: unknown or
-    invalid relevance. Flag off: only a hook-written `unavailable:*` source (its numeric value is a placeholder
-    and must never drive a detector); every legacy observation is judged on its number exactly as before."""
-    return relevance_unknown(o) if aware else _parsed(o).kind == "unavailable"
+    invalid relevance. Flag off: a hook-written `unavailable:*` source (its numeric value is a placeholder and must
+    never drive a detector) and an INVALID source (a malformed, over-long or synthetic-labelled source cannot have
+    been written by any legacy producer, because the field is new: its number is not trusted); every legacy
+    observation (source unset / supplied:*) is judged on its number exactly as before."""
+    return relevance_unknown(o) if aware else _parsed(o).kind in ("unavailable", "invalid")
 
 
 def near_win(o: SearchObservation, *, th: Thresholds = Thresholds()) -> Optional[SearchSignal]:

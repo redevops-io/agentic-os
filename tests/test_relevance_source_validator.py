@@ -122,9 +122,11 @@ def test_flag_on_a_rejected_source_is_not_assessable_and_its_raw_text_never_reac
         assert q["count"] == 0 and q["not_assessable"] == 1
 
 
-def test_flag_off_a_rejected_source_does_not_change_legacy_numeric_decisions():
-    # base behaviour for a row judged on its number is preserved (only hook-written unavailable sources override it)
-    assert near_win(obs("not a valid source!", 0.8)) is not None and near_win(obs("ssr:x", 0.8)) is not None
+def test_flag_off_legacy_numeric_decisions_are_unchanged_and_an_invalid_source_is_not_trusted():
+    # round 5 (VL-1): legacy rows (unset / supplied:*) are judged on their number exactly as before; an INVALID source
+    # cannot have come from a legacy producer, so its number is ignored (tests/test_relevance_invalid_source_flag_off_r5.py)
+    assert near_win(obs("unset", 0.8)) is not None and near_win(obs("supplied:crm", 0.8)) is not None
+    assert near_win(obs("not a valid source!", 0.8)) is None and near_win(obs("ssr:x", 0.8)) is None
 
 
 # ── the hook only produces valid, whitespace-free sources ────────────────────────────────────────────────
