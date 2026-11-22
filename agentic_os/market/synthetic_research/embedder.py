@@ -19,7 +19,8 @@ from urllib.request import Request, urlopen
 
 @runtime_checkable
 class TextEmbedder(Protocol):
-    name: str          # identifies model + revision in provenance; part of every study's reproducibility manifest
+    name: str          # identifies the model in provenance; part of every study's reproducibility manifest
+    # optional ``revision: str`` (model commit hash / version): recorded in every StudyManifest, "unrecorded" if absent
 
     def embed(self, texts: Sequence[str]) -> List[List[float]]:
         ...
@@ -30,8 +31,9 @@ class EmbedderRefused(RuntimeError):
 
 
 class SentenceTransformerEmbedder:
-    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", *, device: str | None = None):
+    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", *, device: str | None = None, revision: str = ""):
         self.model_name = model_name
+        self.revision = revision          # the caller records the model commit hash it pinned (not resolved here)
         self.name = f"sentence-transformers:{model_name}"
         self._device = device
         self._model = None
@@ -55,13 +57,14 @@ class SentenceTransformerEmbedder:
 class HttpEmbedder:
     """OpenAI-compatible embeddings over HTTP to an IN-BOUNDARY host only."""
 
-    def __init__(self, base_url: str, model: str, *, timeout: float = 120.0, _opener=urlopen):
+    def __init__(self, base_url: str, model: str, *, timeout: float = 120.0, _opener=urlopen, revision: str = ""):
         from agentic_os.app.llm import _is_in_boundary_host
         if urlparse(base_url).scheme not in ("http", "https") or not _is_in_boundary_host(base_url):
             raise EmbedderRefused("embedding endpoint is not inside the trust boundary; refusing (fail closed)")
         self._url = base_url.rstrip("/") + "/v1/embeddings"
         self.model = model
         self.name = f"http-embeddings:{model}"
+        self.revision = revision
         self._timeout = timeout
         self._open = _opener
 
