@@ -12,6 +12,7 @@ it does not run the experiment.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Tuple
 
@@ -35,21 +36,33 @@ class FirstPartyMetric(BusinessObject):
     period_end_ms: int = 0
 
 
-_SYNTHETIC_SOURCE_PREFIXES = ("synthetic", "ssr", "simulated", "study")
+_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _looks_synthetic(text: str) -> bool:
+    """Naming-convention test on a normalised source / provider string: a token starting with 'synthetic' or
+    'simulat' (simulated, simulation, simulator), the token 'ssr', or the text 'study' / 'study:...'. Word-aware, so
+    'ssrs-reports', 'studio' and 'study-hall' are not caught."""
+    t = text.strip().lower()
+    if t == "study" or t.startswith("study:"):
+        return True
+    return any(tok.startswith(("synthetic", "simulat")) or tok == "ssr" for tok in _TOKEN.findall(t))
 
 
 def refuse_non_first_party(m: object) -> None:
-    """The ledger holds OBSERVED first-party metrics only (the module's thesis). Refuses anything that is not a
-    FirstPartyMetric, a source outside METRIC_SOURCES (the empty legacy default is tolerated), and any source or
-    provenance provider whose normalised text starts with synthetic / ssr / simulated / study: synthetic buyer
-    research, simulations and study references are hypotheses and can never become a first-party metric. Mirrors
-    ``outcome_store.refuse_simulated`` for the market plane."""
+    """A NAMING-CONVENTION GUARD plus an allow-list for the first-party ledger; it is not enforcement against a
+    caller who mislabels a metric on purpose. Refuses: anything that is not a ``FirstPartyMetric`` (TypeError); a
+    non-empty source outside METRIC_SOURCES (the empty legacy default is tolerated); and a source or provenance
+    provider that LOOKS synthetic (see ``_looks_synthetic``), including an empty source with such a provider.
+    Mirrors ``outcome_store.refuse_simulated`` for the market plane. Behaviour change for out-of-repo callers: sources
+    such as 'stripe' or 'ga4' that older versions accepted are now refused."""
     if not isinstance(m, FirstPartyMetric):
         raise TypeError("FirstPartyLedger accepts FirstPartyMetric objects only")
     source = str(m.source or "").strip().lower()
     provider = str(getattr(m.prov, "provider", "") or "").strip().lower()
-    if source.startswith(_SYNTHETIC_SOURCE_PREFIXES) or provider.startswith(_SYNTHETIC_SOURCE_PREFIXES):
-        raise ValueError("synthetic / simulated / study-derived metrics can never enter the first-party ledger")
+    if _looks_synthetic(source) or _looks_synthetic(provider):
+        raise ValueError("a synthetic / simulated / study-named source or provider is refused by the first-party "
+                         "ledger's naming-convention guard")
     if source and source not in METRIC_SOURCES:
         raise ValueError(f"unknown first-party metric source {m.source!r}; allowed: {', '.join(METRIC_SOURCES)}")
 

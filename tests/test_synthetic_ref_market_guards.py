@@ -1,5 +1,5 @@
 """SR-04 round 2, E2: minimal guards in market/experiments.py (evidence counting) and market/experiment_design.py
-(freeze_experiment): a `synthetic-study:` reference is never counted as an observation and can never be frozen into
+(freeze_experiment): a `synthetic-study:` reference (a prefix convention) is not counted as an observation and is refused as
 sealed experiment evidence."""
 from __future__ import annotations
 

@@ -70,8 +70,8 @@ def freeze_experiment(hypothesis: CommercialHypothesis, *, control: str, treatme
     the goalposts. The seal is a content hash over exactly the fields evaluation is allowed to read."""
     guardrails = dict(guardrails or {})
     if any(str(r).strip().lower().startswith("synthetic-study:") for r in hypothesis.evidence_refs):
-        raise ValueError("a synthetic study reference is a hypothesis pointer and can never be frozen into an "
-                         "experiment's sealed evidence")
+        raise ValueError("a synthetic study reference is a hypothesis pointer and is refused as sealed "
+                         "experiment evidence")
     evidence_snapshot = tuple(hypothesis.evidence_refs)
     seal = content_hash({
         "hypothesis": hypothesis.digest(), "control": control, "treatment": treatment,

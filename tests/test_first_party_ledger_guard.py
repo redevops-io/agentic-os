@@ -1,9 +1,11 @@
-"""SR-04 round 2, E1: the first-party ledger refuses anything that is not an observed first-party metric.
+"""SR-04 round 2/3, E1: a naming-convention guard plus an allow-list in FirstPartyLedger.record
+(market/outcomes_join.py). It is NOT enforcement against a caller who mislabels a metric on purpose.
 
-This is the ONLY edit outside agentic_os/content/ and agentic_os/market/synthetic_research/ besides the E2 guards:
-a minimal guard in FirstPartyLedger.record (market/outcomes_join.py). Every source used by existing code and tests
-("umami") is inside METRIC_SOURCES, so the guard is an allow-list (plus a deny-list for synthetic-looking
-sources/providers); the empty legacy default source is still accepted."""
+It refuses: non-FirstPartyMetric objects; a non-empty source outside METRIC_SOURCES (the empty legacy default is
+tolerated); and a source or provenance provider that looks synthetic (a token starting with 'synthetic' or
+'simulat', the token 'ssr', or 'study' / 'study:...'), including an empty source with such a provider. Behaviour
+change for out-of-repo callers: sources such as 'stripe' or 'ga4' that older versions accepted are refused.
+Every source used by existing code and tests ('umami') is inside METRIC_SOURCES."""
 from __future__ import annotations
 
 import pytest
@@ -49,3 +51,30 @@ def test_e1_every_real_source_and_the_empty_default_are_still_accepted():
     assert OJ.METRIC_SOURCES == ("umami", "gsc", "marketplace", "crm", "billing", "erp", "analytics")
 
 
+
+
+# ── round 3: the two false negatives the reviewer found, and the false positives the guard must avoid ──────────
+@pytest.mark.parametrize("provider", ["simulation", "Simulator", "simulated", "synthetic.ledger", "ssr", "SSR-panel",
+                                      "study", "study:abc", "synthetic-research"])
+def test_e1_deny_listed_providers_are_refused_even_with_an_empty_or_valid_source(provider):
+    for source in ("", "umami"):
+        led = OJ.FirstPartyLedger()
+        with pytest.raises(ValueError):
+            led.record(metric(source=source, provider=provider))
+        assert led.get("signup", "treatment") is None
+
+
+@pytest.mark.parametrize("provider", ["ssrs", "SSRS-reports", "study-hall", "studio", "umami", "analytics-pipeline",
+                                      "internal", "buyer-panel"])
+def test_e1_ordinary_providers_are_not_caught_by_the_word_aware_deny_list(provider):
+    # 'buyer-panel' with an empty source is a KNOWN false negative of a naming-convention guard (option B in the
+    # PR description, `source in METRIC_SOURCES` only, would close it); it is pinned here so the limit is explicit.
+    led = OJ.FirstPartyLedger()
+    assert led.record(metric(source="umami", provider=provider)).source == "umami"
+
+
+def test_e1_out_of_repo_sources_the_allow_list_refuses_are_the_documented_behaviour_change():
+    led = OJ.FirstPartyLedger()
+    for source in ("stripe", "ga4", "internal", "analytics_v2", "umami:site"):
+        with pytest.raises(ValueError):
+            led.record(metric(source=source))
