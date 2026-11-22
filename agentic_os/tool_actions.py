@@ -123,7 +123,7 @@ TOOL_ACTIONS: dict[str, dict[str, str]] = {
         "outreach.discover": "write", "outreach.approve": "write", "outreach.send_all": "write",
     },
     "social-autopilot": {
-        "social.activity": "read", "social.vibex_trends": "read", "social.draft": "write", "social.draft_visual": "write",
+        "social.activity": "read", "social.vibex_trends": "read", "social.draft": "write", "social.draft_visual": "write", "social.revise_draft": "write",
         "social.publish": "write", "social.record_reel": "write", "social.vibex_generate": "write",
     },
     "agentic-crm": {

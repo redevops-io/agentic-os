@@ -83,7 +83,8 @@ def compile_intent(
                                              for c in step.constraints)
         node = Node(
             capability=cap.name, operator=cap.operator, produces=step.outcome,
-            approval_required=human, side_effecting=cap.side_effecting, undo=declared_undo(cap),
+            approval_required=human or bool(cap.revision_bound), side_effecting=cap.side_effecting, undo=declared_undo(cap),
+            revision_bound=cap.revision_bound, revision_produces=cap.revision_produces,
             irreversible=reversibility_of(cap) is Reversibility.IRREVERSIBLE,
             # The sealed intent's verified fields, when there was one, under a
             # key of their own. Flat would collide: the second pass writes

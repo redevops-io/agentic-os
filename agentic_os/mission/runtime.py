@@ -219,8 +219,14 @@ class MissionRuntime:
         secure_executor_for=None,
         authority=None,
         authority_key=None,
+        revision_ledger=None,
     ):
         from .profile import assert_authority  # noqa: PLC0415
+        # Revision-aware approvals (docs/REVISION_AWARE_APPROVALS.md): None -> a revision_bound capability fails closed.
+        if revision_ledger is None:
+            from .revisions import revision_ledger_from_env  # noqa: PLC0415
+            revision_ledger = revision_ledger_from_env()
+        self.revisions = revision_ledger
         if authority is not None:
             self.authority = authority
         if authority_key is not None:
@@ -699,6 +705,11 @@ class MissionRuntime:
         if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED,
                        MissionState.SUCCEEDED, MissionState.CANCELLED):
             return m
+        if self.revisions is not None:
+            from . import revision_gate  # noqa: PLC0415
+            revision_gate.reconcile(self, held=mission_id)
+            if m.state is MissionState.CANCELLED:
+                return m
         if self.repo.pending_reconciliation(mission_id) and not self._independent_work(mission_id, self._plans[mission_id]):
             # A dispatched node's outcome is unknown and nothing independent of it can run: wait. Derived from the log (not from
             # `m.state`), so a restart, a suspend/resume or any state overwrite cannot skip it, and it writes nothing while waiting.
@@ -1195,6 +1206,20 @@ class MissionRuntime:
         concurrent paths, so a refusal costs no network and no partial side effect."""
         return True
 
+    def _revision_admit(self, m: Mission, plan: ExecutionPlan, node) -> bool:
+        """Second admission seam (kept apart from ``_pre_exec_ok`` so an overlay that overrides that one cannot drop it): a capability that declares
+        ``revision_bound`` runs only under a GRANTED, current ledger approval for exactly this artifact revision/action/target, consumed by CAS here."""
+        if not getattr(node, "revision_bound", None):
+            return True
+        from . import revision_gate  # noqa: PLC0415
+        return revision_gate.admit(self, m, plan, node)
+
+    def reconcile_revisions(self) -> list[str]:
+        """Tell missions in this runtime that an approval they were waiting on was superseded by a newer artifact revision (idempotent; also runs at the
+        start of every ``run`` and after every revision this runtime registers). Returns the approval ids reconciled."""
+        from . import revision_gate  # noqa: PLC0415
+        return revision_gate.reconcile(self)
+
     def _inputs_unavailable(self, m: Mission, plan: ExecutionPlan, node) -> bool:
         """True (and the mission is failed with a clear reason) when the selected capability's node would run
         without the scope its decision supplied: the mission was rehydrated from a ledger that records only an
@@ -1221,6 +1246,8 @@ class MissionRuntime:
         if self._inputs_unavailable(m, plan, node):
             return False
         if not self._pre_exec_ok(m, plan, node):
+            return False
+        if not self._revision_admit(m, plan, node):      # revision-bound: revalidate + consume the approval atomically, before any dispatch
             return False
         inputs = self._resolve_inputs(m, world, node)
         # The reservation is taken BEFORE the dispatch is recorded: a refused re-dispatch must not look like another attempt, or the
@@ -1318,6 +1345,9 @@ class MissionRuntime:
                           source_ref=obs.get("source_ref", ""))
         self.store.append("NodeSucceeded", m.id,
                           {"node_id": node.id, "capability": node.capability, "result": result})
+        if getattr(node, "revision_produces", None):    # register the revision this node produced; supersedes approvals of older ones
+            from . import revision_gate  # noqa: PLC0415
+            revision_gate.after_success(self, m, node, result)
         self._meter(m, node, "ok")              # one usage event per executed node (overlay hook; no-op by default)
         self.learning.record_capability(node.capability, True)
         self._observe_routing(node, True)
@@ -1367,6 +1397,8 @@ class MissionRuntime:
             if self._inputs_unavailable(m, plan, node):
                 return False
             if not self._pre_exec_ok(m, plan, node):     # admit (fail-closed) before any dispatch, like serial
+                return False
+            if not self._revision_admit(m, plan, node):
                 return False
             inputs = self._resolve_inputs(m, world, node)
             claims = self._lease_dispatched(m, node, inputs)         # before the event: see `_execute`
@@ -1494,8 +1526,19 @@ class MissionRuntime:
         summary = self._action_summary(m, world, node)
         if summary:
             task.evidence.append("action=" + ", ".join(f"{k}={v}" for k, v in summary.items()))
+        rev_binding = None
+        if getattr(node, "revision_bound", None):    # the approval is opened against the HEAD revision, and carried on the event
+            from . import revision_gate  # noqa: PLC0415
+            try:
+                rev_binding = revision_gate.on_park(self, m, world, node)
+            except revision_gate.RevisionError as e:       # cannot bind (stale content, no ledger, foreign tenant ...): never park an unbound gate
+                self.store.append("RevisionApprovalRefused", m.id, {"node_id": node.id, "capability": node.capability, "code": e.code, "detail": e.detail})
+                self._fail(m, self._plans[m.id], reason=f"revision_approval_refused: {e.code}")
+                return
+            task.evidence.append(f"artifact={rev_binding['artifact_key']} revision={rev_binding['rev']}")
         self.store.append("NodeParked", m.id,
                           {"node_id": node.id, "capability": node.capability,
+                           **({"revision": rev_binding} if rev_binding else {}),
                            "inputs_sha256": self._node_inputs_digest(m, world, node),
                            "action_summary": summary,
                            "rules": rules,
@@ -1689,12 +1732,19 @@ class MissionRuntime:
             # swap is exactly when a human's yes should stop applying, because
             # what they approved is not what would run.
             _shown = self._parked_digest(mission_id, node_id)
+            from . import revision_gate  # noqa: PLC0415
+            try:                      # revision-bound gate: the ledger decides first; a superseded/stale/expired approval grants nothing
+                _rev = revision_gate.on_decision(self, m, node_id, approve=True, actor=actor)
+            except revision_gate.ApprovalRefused as e:
+                raise ApprovalError(f"approval for {node_id!r} refused: {e.code}: {e.detail}") from e
             self.store.append("ApprovalGranted", mission_id, {
-                "node_id": node_id, "edit": edit, **({"approver": actor} if actor else {}),
+                "node_id": node_id, "edit": edit, **({"approver": actor} if actor else {}), **({"revision": _rev} if _rev else {}),
                 **({"inputs_sha256": _shown} if _shown else {}),
                 "capability": self._capability_of(mission_id, node_id)})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
+        from . import revision_gate  # noqa: PLC0415
+        revision_gate.on_decision(self, m, node_id, approve=False, actor=actor)
         self.store.append("ApprovalRejected", mission_id, {"node_id": node_id})
         self.store.append("NodeSkipped", mission_id, {"node_id": node_id})
         plan = self._plans[mission_id]

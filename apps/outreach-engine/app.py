@@ -461,7 +461,7 @@ def draft_pitch(body: dict | None = None) -> dict:
     draft = {"subject": tmpl["subject"], "body": text, "draft_source": "llm" if out else "template"}
     draft["html"] = core.render_pitch_html(draft["subject"], draft["body"], row)
     row["draft"] = draft
-    return {"ok": True, "action": "draft_pitch", "account": acct, **draft}
+    return {"ok": True, "action": "draft_pitch", "account": acct, "pitch_drafted": True, **draft}
 
 
 def follow_up(body: dict | None = None) -> dict:
