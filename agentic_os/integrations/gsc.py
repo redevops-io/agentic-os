@@ -18,7 +18,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, List, Optional, Tuple
 
 from agentic_os.content.search_signals import (
-    SearchObservation, SearchSignal, Thresholds, cannibalization, ctr_opportunity, near_win,
+    SearchObservation, SearchSignal, SignalType, Thresholds, _norm, cannibalization, conflict_key, ctr_opportunity,
+    hook_originated, near_win, relevance_conflicts, relevance_unknown_aware,
 )
 
 _SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
@@ -117,15 +118,20 @@ def apply_relevance(o: SearchObservation, relevance_fn: Callable[[SearchObservat
         return replace(o, relevance_source=f"unavailable:relevance_fn_error:{_safe_token(type(exc).__name__)}")
     value = getattr(res, "value", None)
     source = str(getattr(res, "source", "") or "")
+    detail_fn = getattr(res, "provenance", None)
     if value is None:
         src = source if source.startswith("unavailable:") else "unavailable:no_value"
-        return replace(o, relevance_source=src)
+        detail = ""
+        try:
+            detail = str(detail_fn()) if callable(detail_fn) and src == source else ""
+        except Exception:  # noqa: BLE001
+            detail = ""
+        return replace(o, relevance_source=src, relevance_detail=detail)
     if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
             or not 0.0 <= value <= 1.0 or not source.startswith("embedding:")):
         return replace(o, relevance_source="unavailable:invalid_result")
-    detail = getattr(res, "provenance", None)
     return replace(o, relevance=float(value), relevance_source=source,
-                   relevance_detail=str(detail() if callable(detail) else ""))
+                   relevance_detail=str(detail_fn() if callable(detail_fn) else ""))
 
 
 def collect_search_observations(client: GscClient, site_url: str, *, days: int = 28,
@@ -147,13 +153,28 @@ def collect_search_observations(client: GscClient, site_url: str, *, days: int =
 def search_signals_from_observations(observations: List[SearchObservation], *,
                                      th: Thresholds = Thresholds()) -> List[SearchSignal]:
     """Run the self-contained search detectors (near-win, CTR opportunity, cannibalization) over a property's
-    observations. (missing_page / emergent_intent need extra context and are driven separately.)"""
+    observations. (missing_page / emergent_intent need extra context and are driven separately.)
+
+    Relevance conflicts: when the same query/page was read more than once with DIFFERING relevance (two measured
+    values, or a measured value next to an unknown one) and either the unknown-aware flag is on or the hook wrote
+    one of the readings, a WATCH `RELEVANCE_CONFLICT` signal lists every reading, and any PROPOSE signal that
+    depends on relevance for that pair is held at WATCH with the conflict stated. Nothing is averaged or
+    overwritten. With no hook readings and the flag off the output is exactly what it always was."""
+    guard = relevance_unknown_aware() or any(hook_originated(o) for o in observations)
+    conflicts = relevance_conflicts(observations) if guard else []
+    conflicted = {(_norm(c.query), c.affected_pages[0]) for c in conflicts}
     out: List[SearchSignal] = []
     for o in observations:
+        held = conflict_key(o) in conflicted
         for sig in (near_win(o, th=th), ctr_opportunity(o, th=th)):
             if sig is not None:
+                if held and sig.signal_type is SignalType.NEAR_WIN and sig.status == "PROPOSE":
+                    sig = replace(sig, status="WATCH", evidence=sig.evidence + (
+                        "relevance conflict: differing relevance readings exist for this query/page; held at "
+                        "WATCH (see RELEVANCE_CONFLICT)",))
                 out.append(sig)
     out.extend(cannibalization(observations, th=th))
+    out.extend(conflicts)
     return out
 
 

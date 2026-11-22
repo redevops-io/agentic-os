@@ -30,8 +30,39 @@
 * With the flag ON a relevance value must carry a source: a caller that supplies `relevance=0.8` with the default `unset` source is treated as unknown. Label caller-supplied values (for example `relevance_source="supplied:<label>"`).
 * Changing the default to ON is a behaviour change and needs its own approval.
 
+## Where unknown is distinguished (pipeline and consumers)
+Unknown (`relevance_source` of `unset` or `unavailable:*`, `relevance` is a `0.0` placeholder) is kept distinct from measured low (`embedding:*`, any value in [0, 1], including exactly `0.0`) at every stage:
+
+| Stage | Treatment |
+|---|---|
+| `SearchObservation` construction / `to_observation` | default source `unset`; a hook-written `0.0` carries `embedding:*` so the two observations are never equal |
+| `collect_search_observations(..., relevance_fn)` | `None` fn: untouched. A failure, `None`, NaN, out-of-range, non-numeric or non-embedding source becomes `unavailable:<reason>` (with the embedder provenance when the hook supplied it), never a value |
+| `relevance_state(o)` | `unknown` / `low` / `ok`; explains why a relevance-gated detector stayed silent |
+| `near_win`, `missing_page`, `emergent_intent` | flag off: unknown and low are both silent (as before). Flag on: unknown gives WATCH "not assessable: relevance unknown"; low gives no signal; ok gives the normal signal |
+| `ctr_opportunity`, `cannibalization` | do not need relevance and decide exactly as before; their evidence states the relevance source (hook-written sources always; every source when the flag is on); cannibalization lists each competing page's reading and notes a measured/unknown mix |
+| `search_signals_from_observations` | differing readings of the same query/page (two measured values, or measured next to unknown) yield a WATCH `RELEVANCE_CONFLICT` signal listing every reading; a `near_win` PROPOSE that depends on a conflicted reading is held at WATCH. Nothing is averaged or overwritten. Active when the flag is on or a hook reading is present |
+| `content_intervention_queue` | only PROPOSE signals become candidates, so not-assessable and conflict WATCH signals are never actions; they are counted in `watching` and broken out as `not_assessable` / `relevance_conflicts` (keys present only when non-zero) |
+| `growth/goals.py` (`measure_*`) | read query, page, position, impressions and CTR only: goal progress is identical whatever the relevance source (tested). Signal kinds in `_ADVANCES` are unchanged; `RELEVANCE_CONFLICT` advances no goal |
+| `growth/loop.py`, `content/portfolio.py` | call `collect_search_observations` without `relevance_fn`: observations stay `unset`, so with the flag off the output is bit-identical to before and with it on they report "not assessable" |
+| `sidekick/catalog.py` | a code reference string only |
+| Projects UI tab | fetched at build time; not verifiable here |
+
+### Behaviour matrix (outcome per cell; asserted in `tests/test_search_relevance_matrix.py`)
+| Case | Flag OFF | Flag ON |
+|---|---|---|
+| Embedder raises / wrong shape / NaN / zero vectors | source `unavailable:embedder_error:*` or `unavailable:degenerate_embedding`; gated detectors silent | WATCH not assessable naming that source and the embedder; no action |
+| Page text None / empty / only invisible characters | `unavailable:no_page_text`; silent | WATCH not assessable |
+| Oversized or hostile page text | bounded and sanitised, measured value; the injected instruction does not raise the score | same |
+| Same pair read as 0.8, unknown, 0.1 | one `RELEVANCE_CONFLICT` listing all three; the 0.8 near-win held at WATCH; 0.1 no signal; unknown silent | same, plus WATCH not assessable for the unknown reading |
+| Same query, two embedders, different values | `RELEVANCE_CONFLICT` listing both embedders and values | same |
+| Identical readings, equal values from two embedders, or only unknown readings | no conflict | no conflict |
+| Cannibalization with an unknown member | still PROPOSE; per-page sources and the measured/unknown mix in the evidence | same |
+| Legacy input (no hook, source `unset`/`supplied:*`) | bit-identical to the base output on 300 seeded observations plus the mapper | decisions unchanged except relevance-gated detectors report not assessable for `unset`; evidence gains a `relevance_source=` line |
+| Unset / unavailable / measured 0.05 / measured 0.8 | silent / silent / silent / PROPOSE | WATCH not assessable / WATCH not assessable (source differs) / no signal, state `low` / PROPOSE with provenance |
+| Hook-computed `0.0` vs the legacy default `0.0` | different observations: `embedding:*` (state `low`) vs `unset` (state `unknown`) | `near_win`: no signal vs WATCH not assessable |
+
 ## Provenance
-Every `RelevanceResult` records `embedder_name`, `embedder_revision` (the `embedder_revision` argument, else the embedder's own `revision` attribute, else a behavioural fingerprint `probe:<sha256[:12]>` of the embedding of a fixed probe string), the similarity map, `page_text_hash` and `query_text_hash` (SHA-256 of the exact sanitised texts embedded; never the text), and the text policy id. The observation keeps this in `relevance_detail`, and when a value came from the hook a `relevance provenance: ...` line is appended to the evidence of `near_win`, `missing_page` and `emergent_intent` signals. That evidence line is the only output difference for hook-supplied observations; with no hook nothing is appended.
+Every `RelevanceResult` records `embedder_name`, `embedder_revision` (the `embedder_revision` argument, else the embedder's own `revision` attribute, else a behavioural fingerprint `probe:<sha256[:12]>` of the embedding of a fixed probe string), the similarity map, `page_text_hash` and `query_text_hash` (SHA-256 of the exact sanitised texts embedded; never the text), and the text policy id. The observation keeps this in `relevance_detail`, and when a value came from the hook a `relevance provenance: ...` line is appended to the evidence of `near_win`, `missing_page` and `emergent_intent` signals. Hook-written sources add this line to every signal that observation produces (including `ctr_opportunity` and `cannibalization`); with no hook and the flag off nothing is appended. With the flag on every signal states its relevance source.
 
 ## Method and the cosine map
 Cosine similarity `c` of the query and page-representation embeddings, mapped to [0, 1] by a monotone map recorded in every result:

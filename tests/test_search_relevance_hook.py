@@ -186,8 +186,6 @@ def test_embedding_sourced_observation_flag_off_differs_only_by_one_provenance_l
             g = got[k]
             if b is None:
                 assert g is None
-            elif k == "ctr":
-                assert g == b                                       # ctr does not use relevance: untouched
             else:
                 n += 1
                 assert g["e"][:-1] == b["e"] and g["e"][-1].startswith("relevance provenance: embedding:fake@r1")
@@ -239,25 +237,45 @@ def test_flag_on_does_not_invent_signals_where_relevance_is_not_the_blocker(flag
     assert emergent_intent(obs(impressions=5), baseline_impressions=0) is None     # too little signal
 
 
+_SRC_PREFIXES = ("relevance_source=", "relevance[", "relevance mixed")
+
+
+def strip_src(d):
+    """Drop the relevance-source evidence lines that flag ON adds to every signal (the only permitted difference)."""
+    if d is None:
+        return None
+    return {**d, "e": [x for x in d["e"] if not x.startswith(_SRC_PREFIXES)]}
+
+
 @pytest.mark.parametrize("i", range(0, 300, 2))
-def test_flag_on_known_sources_identical_to_base_and_unrelated_detectors_untouched(flag_on, i):
+def test_flag_on_known_sources_identical_to_base_except_source_evidence(flag_on, i):
     base = GOLDEN["per_observation"][i]
     known = SearchObservation(**dict(GOLDEN["observations"][i], relevance_source="supplied:upstream"))
-    assert detectors(known) == base                             # a labelled value behaves exactly as before
+    got = detectors(known)
+    for k in base:
+        assert strip_src(got[k]) == base[k]                      # same decisions, confidence, status, action
+        if got[k] is not None:                                   # ...and the source is stated in the evidence
+            assert any(x.startswith("relevance_source=supplied:upstream") for x in got[k]["e"])
     unknown = SearchObservation(**GOLDEN["observations"][i])
     got = detectors(unknown)
-    assert got["ctr"] == base["ctr"]                            # ctr_opportunity never needs relevance
+    assert strip_src(got["ctr"]) == base["ctr"]                  # ctr_opportunity never needs relevance
+    if got["ctr"] is not None:
+        assert got["ctr"]["e"][-1] == "relevance_source=unset (unknown, never measured); not used by this detector"
     for k in ("near_win", "missing", "missing_nocanon", "emergent0", "emergent500"):
-        if got[k] != base[k]:                                   # the only difference: not-assessable WATCH
-            assert got[k]["s"] == "WATCH" and got[k]["e"][0] == "not assessable: relevance unknown"
+        if got[k] != base[k]:                                    # the only difference: not-assessable WATCH
+            # (a legacy upstream value with the default 'unset' source counts as unknown once the flag is on)
+            assert got[k]["s"] == "WATCH" and got[k]["c"] == 0.0
+            assert got[k]["e"][0] == "not assessable: relevance unknown"
 
 
-def test_flag_on_aggregate_cannibalization_unchanged(flag_on):
+def test_flag_on_aggregate_cannibalization_decisions_unchanged(flag_on):
     objs = [SearchObservation(**d) for d in GOLDEN["observations"]]
-    assert [sig(s) for s in cannibalization(objs)] == GOLDEN["cannibalization"]
-    got = [sig(s) for s in search_signals_from_observations(objs)]
-    assert [g for g in got if g["e"][0] != "not assessable: relevance unknown"] == [
-        g for g in GOLDEN["aggregate"] if g["t"] in ("CTR_OPPORTUNITY", "CANNIBALIZATION")]
+    assert [strip_src(sig(s)) for s in cannibalization(objs)] == GOLDEN["cannibalization"]
+    got = [strip_src(sig(s)) for s in search_signals_from_observations(objs)]
+    keep = ("CTR_OPPORTUNITY", "CANNIBALIZATION")
+    assert [g for g in got if g["t"] in keep] == [g for g in GOLDEN["aggregate"] if g["t"] in keep]
+    # near-win decisions differ ONLY by becoming 'not assessable' (legacy 'unset' values count as unknown under the flag)
+    assert all(g["e"][0] == "not assessable: relevance unknown" for g in got if g["t"] == "NEAR_WIN")
 
 
 def test_not_assessable_never_becomes_a_governed_action(flag_on):
