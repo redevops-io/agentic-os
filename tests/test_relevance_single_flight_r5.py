@@ -316,3 +316,28 @@ def test_sf4_thread_affine_mode_does_not_enforce_the_timeout_and_still_shares_re
     [t.start() for t in ts]
     [t.join(10) for t in ts]
     assert len(prov.calls) == 2 and all(r.available or r.source.endswith("timeout") for r in out)
+
+
+# ── SF-1 follow-up: a leftover flight (the cleanup itself was interrupted) never blocks a key ────────────
+def test_sf1_a_flight_left_behind_by_a_dead_leader_is_replaced_immediately():
+    sf = R._SingleFlight()
+    t = threading.Thread(target=lambda: sf._flights.setdefault("k", R._Flight()))
+    t.start()
+    t.join()                                                         # the leader thread is gone, the flight stays
+    assert "k" in sf._flights and not sf._flights["k"].leader.is_alive()
+    t0 = time.time()
+    assert sf.run("k", lambda: ("ok", 2), 30.0) == ("ok", 2) and time.time() - t0 < 1.0
+
+
+def test_sf1_a_flight_older_than_the_timeout_plus_margin_is_replaced_even_if_its_leader_is_alive():
+    sf = R._SingleFlight()
+    stale = R._Flight()                                              # leader = this (alive) thread
+    stale.started -= 100.0
+    sf._flights["k"] = stale
+    t0 = time.time()
+    assert sf.run("k", lambda: ("ok", 3), 0.5) == ("ok", 3) and time.time() - t0 < 1.0
+    assert stale.outcome == ("error", "interrupted") and stale.done.is_set()
+    fresh = R._Flight()                                              # a young flight of a live leader is NOT replaced
+    sf._flights["j"] = fresh
+    assert sf.run("j", lambda: ("ok", 4), 0.3) == ("error", "timeout")
+    sf._flights.pop("j", None)
