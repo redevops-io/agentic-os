@@ -149,7 +149,7 @@ def test_the_plan_pins_the_dev_extra_and_constrains_to_the_lockfile():
     assert {g["name"] for g in plan["git"]} == {"runtime-contracts", "discovery-runtime", "knowledge-frontier"}
 
 
-def test_run_tests_refuses_an_environment_made_for_another_worktree_or_another_history(tmp_path):
+def test_run_tests_refuses_an_environment_made_for_another_worktree_or_another_history(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("envtool", TESTENV / "envtool.py")
     envtool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(envtool)
@@ -158,6 +158,10 @@ def test_run_tests_refuses_an_environment_made_for_another_worktree_or_another_h
     _git(wt, "add", "-A")
     _git(wt, "commit", "-q", "-m", "one")
     envdir = _bound_env(tmp_path, "env", wt)
+    # write_env() is called in-process here (not through make_env.sh, which refuses to even start with
+    # PYTHONPATH set), so its own probe subprocess would otherwise inherit this test runner's ambient
+    # PYTHONPATH (the tests.yml pytest job sets one) and report a false "not bound" problem.
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     envtool.write_env(str(envdir / "venv" / "bin" / "python"), wt, envdir)
     rec = json.loads((envdir / "env.json").read_text())
     assert rec["worktree"] == str(wt.resolve()) and rec["git_head"] == _git(wt, "rev-parse", "HEAD") and rec["agentic_os_file"].startswith(str(wt.resolve()))
