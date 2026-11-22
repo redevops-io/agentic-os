@@ -35,6 +35,25 @@ class FirstPartyMetric(BusinessObject):
     period_end_ms: int = 0
 
 
+_SYNTHETIC_SOURCE_PREFIXES = ("synthetic", "ssr", "simulated", "study")
+
+
+def refuse_non_first_party(m: object) -> None:
+    """The ledger holds OBSERVED first-party metrics only (the module's thesis). Refuses anything that is not a
+    FirstPartyMetric, a source outside METRIC_SOURCES (the empty legacy default is tolerated), and any source or
+    provenance provider whose normalised text starts with synthetic / ssr / simulated / study: synthetic buyer
+    research, simulations and study references are hypotheses and can never become a first-party metric. Mirrors
+    ``outcome_store.refuse_simulated`` for the market plane."""
+    if not isinstance(m, FirstPartyMetric):
+        raise TypeError("FirstPartyLedger accepts FirstPartyMetric objects only")
+    source = str(m.source or "").strip().lower()
+    provider = str(getattr(m.prov, "provider", "") or "").strip().lower()
+    if source.startswith(_SYNTHETIC_SOURCE_PREFIXES) or provider.startswith(_SYNTHETIC_SOURCE_PREFIXES):
+        raise ValueError("synthetic / simulated / study-derived metrics can never enter the first-party ledger")
+    if source and source not in METRIC_SOURCES:
+        raise ValueError(f"unknown first-party metric source {m.source!r}; allowed: {', '.join(METRIC_SOURCES)}")
+
+
 class FirstPartyLedger:
     """Observed first-party metrics, keyed by (metric, segment). Last write wins per key (latest observation)."""
 
@@ -42,6 +61,7 @@ class FirstPartyLedger:
         self._by_key: Dict[Tuple[str, str], FirstPartyMetric] = {}
 
     def record(self, m: FirstPartyMetric) -> FirstPartyMetric:
+        refuse_non_first_party(m)
         self._by_key[(m.metric, m.segment)] = m
         return m
 
