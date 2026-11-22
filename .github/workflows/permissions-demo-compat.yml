@@ -56,7 +56,7 @@ jobs:
       - name: "Install the kernel, dev extras and the tool-gate harness (pinned to a commit, so a moving dependency cannot weaken this gate)"
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,duckdb]" "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@052d54fb4fb9a70f561867b59a1d8cdcb6ff3051"
+          pip install -e ".[dev,duckdb]" "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@10e5c2ae7419e096630fb031ef8204fede125ec9"
       - name: Demo compatibility gate
         run: pytest -q -p no:cacheprovider tests/test_demo_compatibility.py tests/test_deployment_paths.py tests/test_tool_actions_complete.py tests/test_sc*.py
       - name: Permissions regression suites (authorisation, scope, write authorisation, roles/columns, storage, concurrency)
