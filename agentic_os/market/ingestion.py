@@ -107,36 +107,55 @@ class SourceAdapter:
         return replace(m, attestation=self.attest(m))
 
 
+_BUILTIN_PREFIX = "repo:"
+MAX_REGISTRATIONS = 64                      # caller registrations; the built-ins do not count
+_IDS: Dict[str, str] = {}                   # adapter id -> source: an id belongs to ONE source, forever (no unregister)
+_REPO_ADAPTERS: Dict[str, SourceAdapter] = {}
+
+
+def _register(source: str, adapter_id: str, *, builtin: bool = False) -> SourceAdapter:
+    """The single place a key is created; everything happens under ONE lock hold (check and insert are atomic)."""
+    with _LOCK:
+        if adapter_id in _IDS:
+            raise IngestionRefused(f"adapter {adapter_id!r} is already registered"
+                                   + (f" for source {_IDS[adapter_id]!r}" if _IDS[adapter_id] != source else
+                                      f" for source {source!r}"))
+        if not builtin and len(_IDS) - len(_REPO_ADAPTERS) >= MAX_REGISTRATIONS:
+            raise IngestionRefused(f"adapter registration limit ({MAX_REGISTRATIONS}) reached")
+        key = secrets.token_bytes(32)
+        _KEYS[(source, adapter_id)] = key
+        _IDS[adapter_id] = source
+        return SourceAdapter(source, adapter_id, key)
+
+
 def register_source_adapter(source: str, adapter_id: str, *, owner: str = "") -> SourceAdapter:
-    """Register an ingestion adapter for ``source`` (which must be one of ``METRIC_SOURCES``). The id is unique per
-    source and cannot be registered twice. ``owner`` is a free-text audit note. Adding a NEW source name is not
-    possible here: that needs a reviewed change to ``METRIC_SOURCES``."""
+    """Register an ingestion adapter for ``source`` (which must be one of ``METRIC_SOURCES``). An id belongs to ONE
+    source and can never be registered twice (not even for another source: ``repo:umami`` cannot be reused for
+    ``billing``); the ``repo:`` prefix is reserved for the built-in adapters that exist from import time; at most
+    ``MAX_REGISTRATIONS`` caller adapters can exist and there is no unregister. ``owner`` is a free-text audit note.
+    Adding a NEW source name is not possible here: that needs a reviewed change to ``METRIC_SOURCES``."""
     if source not in METRIC_SOURCES:
         raise IngestionRefused(f"source {source!r} is not a registered first-party source; "
                                f"allowed: {', '.join(METRIC_SOURCES)}")
     if not isinstance(adapter_id, str) or not _ADAPTER_ID.match(adapter_id) or _synthetic_name(adapter_id):
         raise IngestionRefused("adapter_id must match [a-z][a-z0-9_.:-]{2,63} and must not name a synthetic / "
                                "simulated / study producer")
-    with _LOCK:
-        if (source, adapter_id) in _KEYS:
-            raise IngestionRefused(f"adapter {adapter_id!r} is already registered for source {source!r}")
-        key = secrets.token_bytes(32)
-        _KEYS[(source, adapter_id)] = key
-    return SourceAdapter(source, adapter_id, key)
+    if adapter_id.startswith(_BUILTIN_PREFIX):
+        raise IngestionRefused("the 'repo:' adapter id prefix is reserved for the built-in adapters")
+    return _register(source, adapter_id)
 
 
-_REPO_ADAPTERS: Dict[str, SourceAdapter] = {}
+for _src in METRIC_SOURCES:                 # built-ins: one per source, created atomically at import
+    _REPO_ADAPTERS[_src] = _register(_src, f"{_BUILTIN_PREFIX}{_src}", builtin=True)
 
 
 def repo_adapter(source: str) -> SourceAdapter:
-    """The built-in adapter (id ``repo:<source>``) for an in-repo producer of ``source``, registered on first use."""
-    with _LOCK:
-        existing = _REPO_ADAPTERS.get(source)
-    if existing is not None:
-        return existing
-    adapter = register_source_adapter(source, f"repo:{source}", owner=IN_REPO_SOURCE_OWNERS.get(source, ""))
-    with _LOCK:
-        return _REPO_ADAPTERS.setdefault(source, adapter)
+    """The built-in adapter (id ``repo:<source>``) for an in-repo producer of ``source``. They are created at import,
+    so there is no first-use race and no id to squat."""
+    try:
+        return _REPO_ADAPTERS[source]
+    except (KeyError, TypeError):
+        raise IngestionRefused(f"source {source!r} is not a registered first-party source") from None
 
 
 def registered_adapters() -> Tuple[Tuple[str, str], ...]:
