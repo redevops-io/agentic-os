@@ -34,6 +34,14 @@
       "rationale": "Router startup/shutdown: rehydrates parked missions and starts/stops the optional observer above. No request-reachable effect."
     },
     {
+      "app": "deploy-scan",
+      "file": "jobs.py",
+      "kind": "background_thread_or_task",
+      "name": "threading.Thread",
+      "classification": "reviewed",
+      "rationale": "Runs one scan profile (an allowlisted nmap/k8s scanner module) after server.py's handler has already called is_allowed(profile, target) against the operator-configured allowlist; the thread only ever scans a target and profile the operator already permitted, and its result lands in an in-memory JobStore the client polls - no further effect, no external write."
+    },
+    {
       "app": "edge-sentinel",
       "file": "app.py",
       "kind": "lifecycle_hook",
