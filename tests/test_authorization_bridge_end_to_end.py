@@ -172,3 +172,72 @@ class TestTheWrapperItself:
         assert wrapped(_P(), _Spec(WRITE), {}).allowed is True
         assert plane(_P(), _Spec("delete_customer"), {}) == "no delete grant"
         assert wrapped(_P(), _Spec("delete_customer"), {}).allowed is False
+
+
+@needs_engine
+class TestExecutionAfterTheServiceHasStarted:
+    """The state a deployment actually spends its life in: the plane arrives, changes, or goes away.
+
+    The stack is installed once at start-up and consulted on every call, so what matters is not only what
+    the bridge answers but whether an answer stays true. An authorization that outlives the grant behind it
+    — because a registry cached it, because a wrapper closed over it, because the plane was removed and
+    nobody noticed — is the same class of bug this seam was built to close, just one start-up later.
+    """
+
+    def test_a_plane_withdrawn_after_start_up_authorizes_nothing_further(self, store, plane_slot):
+        """The grant walks out of the room; the call does not stay allowed because it once was."""
+        _grant_write(store)
+        plane_slot(make_engine_authorizer(_gate(store)))
+        registry = _registry()
+        assert registry.run(WRITE, {"id": 7}, principal=_P()).ok
+
+        plane_slot(None)                                      # operator removes the plane / it fails over
+        withdrawn = registry.run(WRITE, {"id": 7}, principal=_P())
+        assert not withdrawn.ok
+        assert registry.audit[-1]["allowed"] is False
+        assert "no authorizer is installed" in (withdrawn.error or "")
+
+    def test_a_plane_installed_after_the_registry_was_built_governs_it(self, store, plane_slot):
+        """The ordering ``app_gate`` depends on: the console is imported, then the gate installs the plane.
+
+        The registry holds no authorizer of its own, so the plane is resolved per call — which is what makes
+        "built before the gate existed" a sequencing detail rather than a permanently unguarded registry.
+        """
+        registry = _registry()
+        assert not registry.run(WRITE, {"id": 7}, principal=_P()).ok    # too early: nothing to ask
+
+        _grant_write(store)
+        plane_slot(make_engine_authorizer(_gate(store)))
+        assert registry.run(WRITE, {"id": 7}, principal=_P()).ok        # same object, now governed
+
+    def test_a_revoked_grant_stops_the_next_call_not_just_the_next_process(self, store, plane_slot):
+        """Revocation is a fact about the store, read at call time — no cache sits between them."""
+        grant = store.add("app", "support", "table", TABLE, actions=["write"])
+        assert grant.id, "the store must hand back the grant it can later revoke by id"
+        plane_slot(make_engine_authorizer(_gate(store)))
+        registry = _registry()
+        assert registry.run(WRITE, {"id": 7}, principal=_P()).ok
+
+        assert store.remove(grant.id) is True
+        denied = registry.run(WRITE, {"id": 7}, principal=_P())
+        assert not denied.ok and registry.audit[-1]["allowed"] is False
+
+    def test_a_plane_that_goes_unreachable_denies_and_recovering_it_grants_nothing_back(self, store,
+                                                                                         plane_slot):
+        """An unreadable store is a denial with a reason, and the earlier allow is not a credit."""
+        _grant_write(store)
+        gate = _gate(store)
+        plane_slot(make_engine_authorizer(gate))
+        registry = _registry()
+        assert registry.run(WRITE, {"id": 7}, principal=_P()).ok
+
+        def unreachable(principal, spec, args):
+            raise ConnectionError("the grant store is unreachable")
+
+        plane_slot(make_engine_authorizer(unreachable))
+        broken = registry.run(WRITE, {"id": 7}, principal=_P())
+        assert not broken.ok
+        assert registry.audit[-1]["policy_reason"] == "no_resource_plane"
+
+        plane_slot(make_engine_authorizer(gate))
+        assert registry.run(WRITE, {"id": 7}, principal=_P()).ok, "the plane works again, so the call may"
