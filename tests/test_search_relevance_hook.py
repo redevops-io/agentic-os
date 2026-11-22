@@ -22,6 +22,7 @@ from agentic_os.content.interventions import content_intervention_queue
 from agentic_os.content.relevance import (
     PageText, RelevanceResult, make_relevance_fn, page_text_from_html, sanitize_text)
 from agentic_os.content.search_signals import (
+    HOOK_CONFIDENCE_CAP, UNVALIDATED_EVIDENCE,
     RELEVANCE_UNKNOWN_AWARE_ENV, SearchObservation, SignalType, Thresholds, cannibalization, ctr_opportunity,
     emergent_intent, is_not_assessable, missing_page, near_win, relevance_unknown)
 from agentic_os.integrations.gsc import (
@@ -188,8 +189,15 @@ def test_embedding_sourced_observation_flag_off_differs_only_by_one_provenance_l
                 assert g is None
             else:
                 n += 1
-                assert g["e"][:-1] == b["e"] and g["e"][-1].startswith("relevance provenance: embedding:fake@r1")
-                assert {**g, "e": None} == {**b, "e": None}         # type/confidence/status/action identical
+                extra = 1 if k == "ctr" else 2                       # provenance (+ the unvalidated line when relevance is used)
+                assert g["e"][:-extra] == b["e"]
+                assert g["e"][len(b["e"])].startswith("relevance provenance: embedding:fake@r1")
+                if k != "ctr":
+                    assert g["e"][-1] == UNVALIDATED_EVIDENCE
+                    assert g["c"] == min(b["c"], HOOK_CONFIDENCE_CAP)    # the documented cap, nothing else
+                else:
+                    assert g["c"] == b["c"]
+                assert {**g, "e": None, "c": None} == {**b, "e": None, "c": None}   # type/status/action identical
     assert n > 100
 
 
@@ -328,7 +336,7 @@ def test_signal_evidence_carries_embedder_provenance():
     o = apply_relevance(obs(position=8.0), fn)
     s = near_win(o)
     assert s is not None
-    line = s.evidence[-1]
+    line = next(e for e in s.evidence if e.startswith("relevance provenance:"))
     assert line.startswith("relevance provenance: embedding:fake-bow@rev-7;")
     assert "revision=rev-7" in line and "map=halfcosine" in line and "text_policy=visible-text-v2" in line
 

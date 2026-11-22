@@ -29,6 +29,13 @@ from agentic_os.content.relevance import ParsedSource, parse_relevance_source, s
 RELEVANCE_UNKNOWN_AWARE_ENV = "AGENTIC_OS_RELEVANCE_UNKNOWN_AWARE"
 _TRUTHY = {"1", "true", "yes", "on"}
 NOT_ASSESSABLE = "not assessable: relevance unknown"
+#: A signal that depends on a HOOK-COMPUTED relevance (source 'embedding:*') has its confidence capped here and
+#: carries the evidence line below. Embedding similarity is susceptible to keyword stuffing and has not been
+#: validated against real Search Console data (docs/SEARCH_RELEVANCE.md): it must not drive automatic publication or
+#: high-confidence SEO recommendations. Confidence for legacy / supplied relevance is unchanged.
+HOOK_CONFIDENCE_CAP = 0.5
+UNVALIDATED_EVIDENCE = ("relevance unvalidated: susceptible to keyword stuffing; human review required; "
+                        "not for automatic publication")
 
 
 def relevance_unknown_aware() -> bool:
@@ -143,7 +150,8 @@ def _relevance_lines(o: SearchObservation, *, used: bool = True) -> Tuple[str, .
     src = _source(o)
     kind = _parsed(o).kind
     if kind == "embedding":
-        return (_join(f"relevance provenance: {src}", _detail(o)),)
+        line = _join(f"relevance provenance: {src}", _detail(o))
+        return (line, UNVALIDATED_EVIDENCE) if used else (line,)
     if kind == "unavailable":
         return (_join(f"relevance unknown: relevance_source={src}", _detail(o)),)
     if relevance_unknown_aware():
@@ -277,6 +285,12 @@ def _status(o: SearchObservation, th: Thresholds) -> str:
     return "PROPOSE" if o.days_observed >= th.min_observation_days else "WATCH"
 
 
+def _capped(conf: float, o: SearchObservation) -> float:
+    """Confidence of a signal that depends on relevance: capped at HOOK_CONFIDENCE_CAP when the relevance came from
+    the embedding hook; unchanged otherwise (bit-identical for legacy / supplied relevance)."""
+    return min(conf, HOOK_CONFIDENCE_CAP) if _parsed(o).kind == "embedding" else conf
+
+
 def _unknown_gate(o: SearchObservation, aware: bool) -> bool:
     """Should a relevance-gated detector treat this observation as 'relevance unknown'? Flag on: unknown or
     invalid relevance. Flag off: only a hook-written `unavailable:*` source (its numeric value is a placeholder
@@ -299,7 +313,7 @@ def near_win(o: SearchObservation, *, th: Thresholds = Thresholds()) -> Optional
         return None
     conf = round(min(0.9, 0.4 + 0.3 * o.relevance + min(0.2, o.impressions / (5 * th.min_impressions))), 3)
     return SearchSignal(
-        SignalType.NEAR_WIN, o.query, (o.page_url,), conf, _status(o, th),
+        SignalType.NEAR_WIN, o.query, (o.page_url,), _capped(conf, o), _status(o, th),
         proposed_action="Strengthen the ranking page for this near-win query "
                         "(exact-query section / title / FAQ / internal links)",
         evidence=(f"position {o.position:.1f} in near-win band, {o.impressions} impressions, "
@@ -325,7 +339,7 @@ def emergent_intent(current: SearchObservation, *, baseline_impressions: int,
         return None                                   # need at least some signal
     return SearchSignal(
         SignalType.EMERGENT_INTENT, current.query, (current.page_url,),
-        round(min(0.8, 0.4 + 0.4 * current.relevance), 3), "WATCH",
+        _capped(round(min(0.8, 0.4 + 0.4 * current.relevance), 3), current), "WATCH",
         proposed_action="Watch — Google is testing this page for a new query; promote to an intervention "
                         "only when the evidence threshold is met",
         evidence=(f"new query/page pairing, {current.impressions} impressions "
@@ -350,7 +364,7 @@ def missing_page(o: SearchObservation, *, canonical_pages: Iterable[str] = (),
         return None
     return SearchSignal(
         SignalType.MISSING_PAGE, o.query, (o.page_url,),
-        round(min(0.9, 0.5 + 0.4 * o.relevance), 3), _status(o, th),
+        _capped(round(min(0.9, 0.5 + 0.4 * o.relevance), 3), o), _status(o, th),
         proposed_action=f"CREATE_CANONICAL_PAGE for '{o.query}' — currently ranking a non-canonical page; "
                         f"link the existing page + related pages to it",
         evidence=(f"non-canonical page ranks for a high-fit intent ({o.impressions} impressions, "

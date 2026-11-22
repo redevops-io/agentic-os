@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from agentic_os.content.interventions import content_intervention_queue
+from agentic_os.priority_engine import PriorityPolicy
 from agentic_os.content.relevance import PageText, make_relevance_fn
 from agentic_os.content.search_signals import (
     RELEVANCE_UNKNOWN_AWARE_ENV, SearchObservation, SignalType, cannibalization, emergent_intent, is_not_assessable,
@@ -393,4 +394,10 @@ def test_consumers_never_read_relevance_and_treat_unknown_as_watch_only(monkeypa
         if name == "low":
             assert "not_assessable" not in q                                    # measured low is not "unknown"
         if name == "high":
-            assert any(d["signal"] == "NEAR_WIN" for d in q["decisions"])
+            # hook-derived confidence is capped at 0.5 (< the default 0.55 min_confidence): the near-win abstains
+            # from the action queue under the default policy and only reaches it, still approval-gated, when an
+            # operator deliberately lowers min_confidence (see tests/test_hook_confidence_cap.py)
+            assert all(d["signal"] != "NEAR_WIN" for d in q["decisions"])
+            lowered = content_intervention_queue(search_signals_from_observations(obs),
+                                                 policy=PriorityPolicy(min_confidence=0.3))
+            assert any(d["signal"] == "NEAR_WIN" for d in lowered["decisions"])
