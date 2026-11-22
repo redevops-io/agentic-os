@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Shared helpers for the packaging scripts (sourced, not executed). Bash 3.2 / git-bash safe.
-# Provides: ROOT, PK, OS (macos|windows|linux), the pinned versions from toolchain.env, venv_bin, and
-# assert_python (the interpreter must be exactly PYTHON_VERSION).
+# Provides: ROOT, PK, OS (macos|windows|linux), ARCH (windows only; empty elsewhere - unused by any
+# existing script, added only for the windows-arm64 cryptography source-build carve-out in
+# build-wheelhouse.sh), the pinned versions from toolchain.env, venv_bin, and assert_python (the
+# interpreter must be exactly PYTHON_VERSION).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PK="$ROOT/packaging"
 set -a; . "$PK/toolchain.env"; set +a
@@ -11,7 +13,37 @@ case "$(uname -s)" in
   Linux) OS=linux ;;
   *) echo "unsupported OS $(uname -s)"; exit 1 ;;
 esac
+# git-bash's uname -m does not reliably report the real CPU on Windows: Git for Windows ships bash.exe
+# as an x86-64 binary, which Windows runs under its x64-on-arm64 emulation layer on an ARM64 host —
+# so PROCESSOR_ARCHITECTURE inside THAT process reports AMD64 (its own emulated identity), not the
+# real host (confirmed empirically on windows-11-arm: `uname -m` -> x86_64, PROCESSOR_ARCHITECTURE ->
+# AMD64, while RUNNER_ARCH, set by the Actions runner itself before launching any shell, correctly
+# says ARM64). Prefer RUNNER_ARCH; fall back to PROCESSOR_ARCHITECTURE only outside Actions.
+ARCH=""
+if [ "$OS" = windows ]; then
+  case "${RUNNER_ARCH:-}" in
+    ARM64) ARCH=arm64 ;;
+    X64) ARCH=amd64 ;;
+    *)
+      case "${PROCESSOR_ARCHITECTURE:-}" in
+        ARM64) ARCH=arm64 ;;
+        AMD64|x86|IA64) ARCH=amd64 ;;
+        *) ARCH="" ;;
+      esac
+      ;;
+  esac
+fi
 LOCKS="$PK/locks"
+# effective_lock: the requirements-$OS.lock to use for a hash-checked install from the wheelhouse.
+# Normally that's just locks/requirements-$OS.lock. But build-wheelhouse.sh's windows-arm64 carve-out
+# (cryptography has no win_arm64 wheel on PyPI, so it's built from source) writes a wheelhouse-relative
+# copy with that one package's hash corrected to the wheel actually in the wheelhouse — every OTHER
+# script that re-installs the shipped set (build-sidecar.sh, build-notices.sh) must use that corrected
+# copy too, or pip's hash check fails against the original win_amd64-wheel hash. The override lives
+# inside $PK/wheelhouse (wiped and rewritten every time build-wheelhouse.sh runs, so it can't go stale
+# across CI runs) rather than a $TMP of build-wheelhouse.sh's own, which is deleted before these other
+# scripts, in separate `run:` steps, ever get to read it.
+effective_lock() { local f="$PK/wheelhouse/requirements-$OS.lock.effective"; [ -f "$f" ] && echo "$f" || echo "$LOCKS/requirements-$OS.lock"; }
 # uv venv puts executables in bin/ on POSIX and Scripts/ on Windows git-bash.
 venv_bin() { if [ -d "$1/bin" ]; then echo "$1/bin"; else echo "$1/Scripts"; fi; }
 # On Windows git-bash `[ -x "$b/python" ]` is TRUE for an existing python.exe (MSYS resolves the missing .exe), so testing the bare name

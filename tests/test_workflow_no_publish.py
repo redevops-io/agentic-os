@@ -65,7 +65,10 @@ READ_ONLY_SECRET_WORKFLOWS = {"pin-currency.yml": "weekly pin-currency report; o
 # id-token: write used ONLY to authenticate to a real signing service via OIDC (azure/login) - never to publish a
 # release, push an image or write any secret. The exception lifts just the one "write permission" finding; a
 # publish action, a release-shaped job name, or secrets.* usage in the same file would still fail this test.
-OIDC_SIGNING_WORKFLOWS = {"windows-signing-r0prime.yml": "Azure Trusted Signing OIDC login for the two real-signing jobs; no stored secret, no publish action"}
+OIDC_SIGNING_WORKFLOWS = {
+    "windows-signing-r0prime.yml": "Azure Trusted Signing OIDC login for the two real-signing jobs; no stored secret, no publish action",
+    "windows-signing-r0prime-arm64.yml": "same as windows-signing-r0prime.yml, second architecture (ARM64) of the same release; no stored secret, no publish action",
+}
 
 # Owner-approved, narrow reversal of pins-05 (2026-11-19): these named workflows MAY publish - each one is
 # workflow_dispatch-only, requires a typed confirmation input (a person acts, not a push/PR/schedule), and
