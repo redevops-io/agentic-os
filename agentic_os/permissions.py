@@ -69,6 +69,90 @@ SUBJECT_KINDS = ("app", "role", "user")
 RESOURCE_KINDS = ("database", "table", "corpus", "tool")
 ROW_SCOPES = ("all", "own", "in")
 
+#: How much a grant action permits, weakest first. Used to compare the action a tool is REGISTERED for with
+#: the action its own spec carries: the two may disagree, and the only safe reading of a disagreement is the
+#: stricter one. ``delete`` outranks ``write`` because that is the difference between changing what exists and
+#: removing what a grant was written about.
+_ACTION_RANK = {action: rank for rank, action in enumerate(ACTIONS)}
+
+
+#: Who decided, as the tool engine's audit line names it. The engine writes ``plane`` on every authorization
+#: record, so this is how a reviewer tells a decision from this plane apart from one the enterprise gate made.
+ENGINE_PLANE = "agentic_os.permissions"
+
+_ENGINE_AUTHZ: object = "unset"      # resolved once: the installed engine's (Authorization, PolicyReason), or None/False
+
+
+def _engine_authz():
+    """The installed tool engine's ``(Authorization, PolicyReason)``, or None when nothing that speaks ``authz/v1`` is installed.
+
+    agent-harness changed what an authorizer's answer MEANS. Under the old seam ``None`` was "allowed" and a
+    non-empty string a denial; from the authz seam on, silence is the one answer that must not be read as consent —
+    ``None`` is "no decision", and the registry denies the call. An authorizer cannot answer both ways at once: no
+    value is falsy for the old engine AND a recognised decision for the new one. So the installed engine is asked
+    which contract it speaks — once, and only from an installed distribution (``trusted_import``), because a
+    decision wrapper taken from whatever directory happens to be on ``sys.path`` would let a planted module turn a
+    denial into an allow."""
+    global _ENGINE_AUTHZ
+    if _ENGINE_AUTHZ != "unset":
+        return _ENGINE_AUTHZ or None
+    from . import trusted_import
+    pair = None
+    if trusted_import.package_status("agent_harness") == "trusted":
+        try:
+            from agent_harness.tools import Authorization, PolicyReason
+            pair = (Authorization, PolicyReason)
+        except Exception:  # noqa: BLE001 — an engine without the authz/v1 types speaks the old contract
+            pair = None
+    _ENGINE_AUTHZ = pair or False
+    return pair
+
+
+def make_engine_authorizer(authorizer, *, label: str = "the app's permissions plane"):
+    """The authorizer to hand a TOOL ENGINE: the same decisions, in the shape that engine reads.
+
+    ``make_authorizer`` answers with the kernel's contract — ``None`` means allowed, a string is the deny reason —
+    and half of this repository reads it that way (``app_gate.tool_denial``, the route guards, the operator seam),
+    so that contract stays. An engine from the authz seam on reads the same ``None`` as "nobody decided" and denies
+    the call. This wraps one into the other at the seam, in the one place that can tell which engine is installed::
+
+        set_default_authorizer(make_engine_authorizer(make_authorizer(store, ...)))
+
+    A denial carries its full human-readable reason as ``detail``, so the person asking still reads why. An allow is
+    reported as an explicit grant with this plane named, but WITHOUT grant ids — the plane does not return them yet.
+    The registry writes an allow into its audit trail only when the call is gated or the decision is not an ordinary
+    named grant, so the missing attribution is currently invisible rather than flagged: naming the plane on both
+    sides is what keeps a decision traceable today, and carrying grant ids across the seam is the follow-up that
+    would let ``ToolRegistry.unattributed_allows()`` speak about allows at all. With an older engine, or none
+    installed, the authorizer comes back unchanged."""
+    pair = _engine_authz()
+    if pair is None or getattr(authorizer, "_agentic_os_engine_shaped", False):
+        return authorizer
+    authorization, reason_vocabulary = pair
+
+    def engine_authorizer(principal, spec, args):
+        reason = authorizer(principal, spec, args)
+        if reason is not None:
+            return authorization.deny(reason=reason_vocabulary.MISSING_EXPLICIT_GRANT, detail=str(reason),
+                                      plane=ENGINE_PLANE)
+        return authorization.allow(reason=reason_vocabulary.EXPLICIT_GRANT,
+                                   detail=f"{label}: the grant check passed", plane=ENGINE_PLANE)
+
+    engine_authorizer.__name__ = engine_authorizer.__qualname__ = (
+        f"{getattr(authorizer, '__name__', 'authorizer')}_engine_shaped")
+    engine_authorizer.__doc__ = (f"{getattr(authorizer, '__name__', 'authorizer')} in the installed engine's return "
+                                 f"contract (see ``make_engine_authorizer``).")
+    engine_authorizer._agentic_os_engine_shaped = True
+    engine_authorizer.kernel_authorizer = authorizer       # the plain str|None shape, for anything that wants it
+    # Scoped tools reach their scope through the authorizer they were called with (``authorizer.slice_for(...)`` /
+    # ``permits_row(...)`` / ``decide(...)``), and in a real deployment the one they hold IS this wrapper — so the
+    # whole surface of the plane travels with it, rather than a scoped tool failing at its first row.
+    for _attribute in ("decide", "slice_for", "permits_row"):
+        _attached = getattr(authorizer, _attribute, None)
+        if _attached is not None:
+            setattr(engine_authorizer, _attribute, _attached)
+    return engine_authorizer
+
 
 class GrantError(RuntimeError, ValueError):
     """A grant that cannot be stored as given. A RuntimeError so the admin routers answer 409 like they do
@@ -1291,10 +1375,23 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
        classified ``write``/``delete`` (ValueError). The first denial of each unmapped tool is logged.
     2. **Action.** ``tool_actions[name]`` — ``"read"``, ``"write"`` or ``"delete"`` — is the grant action the
        tool requires. It comes ONLY from this registration, which the registering code controls: never from the
-       tool's name, its description, or an MCP ``readOnlyHint``. A tool with no entry is DENIED. If the
-       tool's own spec says ``side_effecting`` but it was registered ``read``, the classification is
-       ambiguous and the call is DENIED; a spec can tighten, never downgrade. Authorisation is separate from
-       approval: an approved action without the grant is still denied (the authorizer runs first).
+       tool's name, its description, or an MCP ``readOnlyHint`` (an approval hint, never read here). A tool with
+       no entry is DENIED. The spec's OWN risk class IS read, and only ever to make a call harder to authorize:
+
+        * a spec with no ``action`` axis, or with the harness's empty (unclassified) action, says nothing — the
+          registration decides for it;
+        * a spec naming an action outside ``ACTIONS`` is DENIED: a tool's own metadata cannot invent a class;
+        * a spec naming an action WEAKER than its registration is DENIED as a contradiction. Running it on the
+          weaker reading is the one way a self-describing tool could downgrade a reviewed classification, and
+          quietly using the stronger one would hide the drift instead of reporting it;
+        * a spec naming an action STRICTER than its registration is authorized at the STRICTER action — a mount
+          that over-declares only ever asks for more than it needs;
+        * a spec that says ``side_effecting`` while registered ``read`` is ambiguous and DENIED, and a public
+          tool whose spec asks for ``write``/``delete`` is DENIED: "touches no controlled data" is what the
+          registration says about a tool, not what the tool claims about itself.
+
+       In short: a spec can tighten, never downgrade. Authorisation is separate from approval: an approved
+       action without the grant is still denied (the authorizer runs first).
     3. **Scope.** The seam can only allow or deny — it cannot hand a row filter or column mask to the tool. A
        grant that carries one (``row_scope`` own/in, or ``masked_columns``) is honoured only for a tool
        declared in ``scoped_tools``: one that applies the WHOLE decision itself, through
@@ -1341,15 +1438,72 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
             warned.add(name)
             _log.warning("tool %r denied: %s", name, why)
 
-    def _decide(principal, name: str) -> AccessDecision:
+    def _spec_field(spec, field: str):
+        """One field of the spec, which the seam hands over as an object (a harness ``ToolSpec``) or a dict."""
+        return spec.get(field) if isinstance(spec, dict) else getattr(spec, field, None)
+
+    def _declared_action(spec) -> str | None:
+        """The risk class the spec carries, or None when the spec makes no claim at all.
+
+        A spec with no ``action`` attribute (an older caller, the gate's own probe, another engine's spec) and
+        the harness's empty action (``ToolSpec.action == ""``, which means "nobody has classified this") say the
+        same thing here: the registration decides. Anything else is a CLAIM, and a claim is measured against the
+        registration — never believed, and never ignored."""
+        declared = _spec_field(spec, "action")
+        if declared is None or declared == "":
+            return None
+        return declared if isinstance(declared, str) else repr(declared)
+
+    def _effective_action(name: str, declared: str | None) -> tuple:
+        """``(action_to_ask_the_plane_for, deny_reason)`` for one call: the spec may RAISE the bar, never lower it.
+
+        * a claim outside ``ACTIONS`` is refused — a tool cannot invent its own grant action;
+        * a claim WEAKER than the registration is refused. Honouring it would let the thing asking to run pick
+          its own authority; silently asking for the registered one instead would keep the app working while
+          hiding the drift between a tool and its classification, which is the failure this whole seam exists to
+          catch. Either way the call is denied and the mismatch is logged once;
+        * a claim STRICTER than the registration is honoured: over-declaring can only ever ask for more
+          authority than the tool needs, so the plane is asked for the stricter class.
+
+        The first element is None whenever the registration decides for itself (no claim, the same class, or a
+        tool the table does not know yet — an unknown tool is denied for want of a classification below)."""
+        if declared is None:
+            return None, None
+        if declared not in ACTIONS:
+            reason = (f"denied: tool '{name}' declares action {declared!r}, which is not one of the vocabulary "
+                      f"{ACTIONS} — a tool cannot invent its own grant action")
+            _warn_once(name, "declares an action outside the vocabulary")
+            return None, reason
+        registered = tool_actions.get(name)
+        if registered is None or registered == declared:
+            return None, None
+        if _ACTION_RANK[declared] < _ACTION_RANK[registered]:
+            _warn_once(name, f"declares action {declared!r} against its registered {registered!r}: a spec can "
+                             f"tighten its classification, never downgrade it")
+            return None, (f"denied: tool '{name}' declares action {declared!r} but is registered as "
+                          f"{registered!r} — a spec can tighten its classification, never downgrade it. Fix the "
+                          f"registration (agentic_os/tool_actions.py) or the tool: the call does not run on the "
+                          f"weaker reading")
+        _warn_once(name, f"declares action {declared!r}, tighter than its registered {registered!r}: the call is "
+                         f"authorized at {declared!r}")
+        return declared, None
+
+    def _decide(principal, name: str, action: str | None = None) -> AccessDecision:
         """The plane's decision for this tool at the action its registration requires. A public tool is
-        allowed unrestricted; an unmapped or unclassified tool is denied."""
+        allowed unrestricted; an unmapped or unclassified tool is denied. ``action`` is the stricter class this
+        call's spec asked for (see :meth:`_effective_action`); None asks for the registered class."""
         ident = _identity(principal)
         if name in public:
             if tool_actions.get(name) != "read":
                 _warn_once(name, "a public tool must still be listed in tool_actions, as read")
                 return AccessDecision(False, f"denied: public tool '{name}' is not listed in tool_actions (every executable tool "
                                              f"declares its action; a public tool is listed as read)")
+            if action is not None and action != "read":
+                # "touches no controlled data" is what the registration says about the tool, not what the tool
+                # claims about itself: one that asks for write or delete is not a public tool.
+                return AccessDecision(False, f"denied: public tool '{name}' declares action {action!r}, but a public tool "
+                                             f"touches no controlled data and is listed as read — map it to a resource "
+                                             f"and register its action if that has changed")
             return AccessDecision(True, "public tool — touches no controlled data")
         invalid = ident.invalid_reason()
         if invalid:
@@ -1365,7 +1519,7 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
         target = _resource(res)
         if target is None:
             return AccessDecision(False, f"denied: tool '{name}' has a malformed resource mapping")
-        action = tool_actions.get(name)
+        action = action or tool_actions.get(name)
         if action is None:
             _warn_once(name, "no registered action classification; add it to tool_actions as read, write or delete")
             return AccessDecision(False, f"denied: tool '{name}' has no registered action classification "
@@ -1374,11 +1528,14 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
 
     def authorizer(principal, spec, args) -> str | None:
         name = _name(spec)
-        self_declared = getattr(spec, "side_effecting", None) if not isinstance(spec, dict) else spec.get("side_effecting")
+        self_declared = _spec_field(spec, "side_effecting")
         if self_declared and tool_actions.get(name) == "read":      # public tools included: a spec cannot contradict its registration
             return (f"denied: tool '{name}' is registered as read but declares side effects — ambiguous "
                     f"classification, register it as write or delete")
-        d = _decide(principal, name)
+        action, deny = _effective_action(name, _declared_action(spec))
+        if deny is not None:
+            return deny                                  # the classification itself is the failure: no principal gets past it
+        d = _decide(principal, name, action)
         if not d.allowed:
             return d.reason
         if d.row_filter is not None or d.masked_columns:

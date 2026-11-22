@@ -85,6 +85,25 @@ def _start(monkeypatch, app):
     return importlib.import_module(f"{app}.app")
 
 
+def _executions(attempts):
+    """The caught attempts that would have RUN something the gate governs.
+
+    Asking an MCP server which tools it has means starting that server, and asking is how a mounted tool gets
+    registered — registration is allowed, the tool's own execution still needs its class and a grant. So the one
+    spawn this is not evidence of is the discovery of the bundled, reviewed MCP servers (this list, in this test
+    file — not something an app can add itself). A scanner, a bouncer call, a core request: all still caught."""
+    discovery = ("context_runtime.tools.mcp_servers.",)
+    kept = []
+    for attempt in attempts:
+        if isinstance(attempt, tuple) and attempt and attempt[0] == "process":
+            argv = attempt[1]
+            if isinstance(argv, (list, tuple)) and any(
+                    isinstance(part, str) and part.startswith(discovery) for part in argv):
+                continue
+        kept.append(attempt)
+    return kept
+
+
 def _operator(app):
     m = importlib.import_module(f"{app}.operator")
     return getattr(m, next(n for n in dir(m) if n.startswith("build_") and n.endswith("operator")))()
@@ -129,7 +148,7 @@ class TestEveryApp:
             assert _denied(r, kind), (method, path, tool, r.status_code, r.text[:200])
             if kind != "console":
                 assert "agentic-os permissions init" in r.text, (method, path)            # actionable
-        assert net == []                                                                    # nothing executed
+        assert _executions(net) == []                                                     # nothing executed
 
     def test_every_operator_capability_is_denied_and_nothing_executes(self, monkeypatch, app, net):
         _start(monkeypatch, app)
@@ -138,7 +157,7 @@ class TestEveryApp:
         for cap in op.manifest.capabilities:
             out = op.invoke(cap.name, {"tenant": "t", "doc_id": "d", "cloud": "aws"})
             assert out["status"] == "denied" and out["executed"] is False and "[blocked]" in out["error"], cap.name
-        assert net == []
+        assert _executions(net) == []
 
     def test_every_capability_and_route_tool_is_classified_and_matches_what_it_is_registered_as(self, monkeypatch, app):
         """Evidence cross-check: the trusted table classifies every capability, and read <=> not side_effecting."""
@@ -179,7 +198,7 @@ class TestEveryApp:
         client = TestClient(mod.app, raise_server_exceptions=False)
         for method, path, body, tool, kind in ROUTES[app]:
             assert _denied(_call(client, method, path, body), kind), (method, path, tool)
-        assert net == []
+        assert _executions(net) == []
 
     def test_request_headers_cannot_choose_the_principal_or_gain_an_admin_bypass(self, monkeypatch, app, tmp_path, net):
         init_local_profile(str(tmp_path / "perm"), user="alice")                           # read only
