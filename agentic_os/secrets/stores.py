@@ -24,7 +24,39 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from .._platform import files as _files
 from runtime_contracts.protocol.secrets import SecretDescriptor, SecretRef
+from runtime_contracts.secrets_local.store import FileSecretStore as _RCFileSecretStore
 from runtime_contracts.secrets_local.store import SecretAccessError
+
+
+# ── dev plaintext file store, made safe on Windows too ────────────────────────────────────────────────
+
+class WindowsSafeFileSecretStore(_RCFileSecretStore):
+    """``runtime_contracts``' dev-grade ``FileSecretStore``, with the "is this file private" check made to work
+    on Windows. The upstream check tests POSIX group/other mode bits (``S_IRWXG | S_IRWXO``); Windows' ``os.stat``
+    emulation does not model real POSIX permissions, so that check is never meaningfully satisfiable there and the
+    store would refuse every secret it had just written. This repo already carries the Windows-aware answer
+    (``agentic_os._platform.files``, built for :class:`EncryptedFileSecretStore` below) — reuse it here instead of
+    duplicating it. On POSIX, behaviour is unchanged: both methods delegate straight to the upstream implementation."""
+
+    def _check_safe(self, target: str) -> None:
+        if _files.HAS_POSIX_MODES:
+            super()._check_safe(target)
+            return
+        if not os.path.exists(target):
+            raise SecretAccessError("secret not found")
+        why = _files.private_file_problem(target)
+        if why:
+            raise SecretAccessError(f"refusing a secret file that is not private to the running user: it {why}")
+
+    def put(self, *, namespace: str, path: str, value: bytes,
+            classifications: Tuple[str, ...] = (), metadata: Optional[Dict[str, str]] = None) -> SecretRef:
+        if _files.HAS_POSIX_MODES:
+            return super().put(namespace=namespace, path=path, value=value,
+                               classifications=classifications, metadata=metadata)
+        target = self._resolve(namespace, path)
+        _files.ensure_private_dir(os.path.dirname(target))
+        _files.atomic_write(target, value)
+        return SecretRef(provider="file", namespace=namespace, path=path, version="1")
 
 
 # ── local encrypted file store (single-user desktop) ───────────────────────────────────────────────────

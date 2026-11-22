@@ -4,7 +4,7 @@ One factory chooses the SecretStore backend by config/env so a deployment picks 
 any capability code:
 
     dev / CI            → env               (EnvironmentSecretStore, development)
-    local plaintext     → file              (FileSecretStore, development)
+    local plaintext     → file              (WindowsSafeFileSecretStore, development)
     single-user desktop → encrypted-file    (AES-GCM at rest, production-grade)
                         or keyring           (OS keychain: DPAPI / Keychain / Secret Service)
     server / enterprise → vault              (Vault / OpenBao KV v2, production-grade)
@@ -19,10 +19,12 @@ import os
 from typing import Any, Tuple
 
 from runtime_contracts.secrets_local.broker import LocalCredentialBroker
-from runtime_contracts.secrets_local.store import EnvironmentSecretStore, FileSecretStore
+from runtime_contracts.secrets_local.store import EnvironmentSecretStore
 
 from .keepassxc import KeePassXCSecretStore
-from .stores import EncryptedFileSecretStore, KeyringSecretStore, VaultSecretStore
+from .stores import (
+    EncryptedFileSecretStore, KeyringSecretStore, VaultSecretStore, WindowsSafeFileSecretStore,
+)
 
 
 class ProductionCredentialBroker(LocalCredentialBroker):
@@ -40,7 +42,7 @@ class ProductionCredentialBroker(LocalCredentialBroker):
 
 _STORES = {
     "env": lambda **c: EnvironmentSecretStore(),
-    "file": lambda **c: FileSecretStore(c.get("root")),
+    "file": lambda **c: WindowsSafeFileSecretStore(c.get("root")),
     "encrypted-file": lambda **c: EncryptedFileSecretStore(c.get("root"), key=c.get("key")),
     # `keyring_backend` (not `backend`) so the injected keychain never collides with the factory's own
     # `backend` selector argument.
