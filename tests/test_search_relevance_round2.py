@@ -565,10 +565,12 @@ def test_round3_apply_relevance_still_accepts_a_real_embedding_source():
     assert o.relevance_source.startswith("embedding:crossroads")
 
 
-def test_round3_docs_do_not_overstate_thread_safety_or_the_ledger_guard():
+def test_round3_docs_do_not_overstate_the_ledger_guard():
     import pathlib
     text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "SEARCH_RELEVANCE.md").read_text()
     low = text.lower()
-    assert "thread-safe" not in low and "one provider call per page" not in low
+    # round 4 implemented single-flight (tests/test_relevance_single_flight.py), so the doc may claim it
+    assert "thread-safe" not in low
     assert "real sources and refs are unaffected" not in low and "can never enter" not in low
-    assert "naming-convention" in low and "single-flight" in low
+    assert "adapter attestation" in low and "single-flight" in low and "no single-flight" not in low
+    assert "unresolved quality limitation" in low and "validation gates (open)" in low
