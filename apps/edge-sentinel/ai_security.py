@@ -17,6 +17,8 @@ AI_SECURITY case; any response goes through the same governed path as everything
 """
 from __future__ import annotations
 
+import re
+
 from agentic_os.mission.events import EventType, ResultStatus, RuntimeEvent
 
 from .evidence import (
@@ -39,6 +41,16 @@ _INJECTION_MARKERS = (
     "print your instructions", "leak", "sudo make me",
 )
 
+# Each marker matched as a DELIMITED unit, never a raw substring — the convention attack.py already uses
+# for scenario tokens, and for the same reason. Measured on the negative controls in evaluation.py: the raw
+# substring scan flagged {"cache_bypass": true} and "the layout disregards the aspect ratio" as
+# prompt-injection attempts. A marker that fires on ordinary config keys and ordinary English produces
+# findings that open cases and train humans to dismiss them, so the list is only usable because it is
+# bounded: `_` counts as part of a word (snake_case keys are one token), so `cache_bypass` is not
+# `bypass`. Residual false positives on ordinary English remain — named, in evaluation.FP_LEDGER.
+_INJECTION_RES = tuple(re.compile(r"(?<!\w)" + re.escape(m) + r"(?!\w)", re.ASCII)
+                       for m in _INJECTION_MARKERS)
+
 
 def security_projection(evt: RuntimeEvent) -> dict:
     """The security-relevant view of a runtime event (a projection, not a copy of the whole envelope)."""
@@ -55,7 +67,7 @@ def security_projection(evt: RuntimeEvent) -> dict:
 
 def _has_injection(payload: dict) -> bool:
     blob = canonical_json(payload).lower()
-    return any(m in blob for m in _INJECTION_MARKERS)
+    return any(rx.search(blob) for rx in _INJECTION_RES)
 
 
 def observation_from_runtime_event(store, evt: RuntimeEvent) -> SecurityObservation:
