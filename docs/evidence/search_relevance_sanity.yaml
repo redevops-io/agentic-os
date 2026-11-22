@@ -1,0 +1,13 @@
+claim_id: search_relevance_sanity
+claim: "With the local bge-small embedder and the default clamp01 map, the SR-04 relevance hook scored 12 invented queries against their own invented page 0.655-0.866 (mean 0.766, n=12 pairs) and against the 5 other invented pages 0.354-0.603 (mean 0.475, n=60 pairs); each query's top-scoring page was its own page in 12 of 12 cases. One unrelated pair reached 0.603, above the 0.6 detector threshold. With the halfcosine map every unrelated pair was at least 0.677, so all 60 would clear 0.6."
+status: Illustrative/synthetic
+code_commit: "4a16abd78739e456aad0f5e3deda47a3ef134138"
+dataset: "None external. Six invented pages (title, H1, meta description, two sentences of body) and twelve invented queries written for scripts/search_relevance_sanity.py. No real site, no Search Console data, no customer text. The author decided which page each query is about."
+protocol: "HF_HUB_OFFLINE=1 python scripts/search_relevance_sanity.py --json, 2026-11-22, one run, CPU, macOS arm64, Python 3.15.2, sentence-transformers 6.3.0, torch 2.15.0. Embedder BAAI/bge-small-en-v1.5 (cached snapshot 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a; the hook recorded revision probe:02f095e02af6). Each query is scored against all six pages with make_relevance_fn (maps clamp01 and halfcosine)."
+model: "BAAI/bge-small-en-v1.5 via sentence-transformers, embeddings only; no chat model"
+metrics: "clamp01: related mean 0.766 (min 0.655, max 0.866, n=12), unrelated mean 0.475 (min 0.354, max 0.603, n=60), pairwise related>unrelated 1.000, top page correct 12/12, unrelated pairs >= 0.6: 1, related pairs >= 0.6: 12. halfcosine: related mean 0.883 (0.827-0.933), unrelated mean 0.737 (0.677-0.801), pairwise 1.000, top page correct 12/12, unrelated pairs >= 0.6: 60."
+baselines: "NOT_IN_REPO. No lexical or other baseline was run."
+reproduce: "pip install sentence-transformers (cache BAAI/bge-small-en-v1.5), then HF_HUB_OFFLINE=1 python scripts/search_relevance_sanity.py --json"
+artifacts: "scripts/search_relevance_sanity.py; agentic_os/content/relevance.py; tests/test_search_relevance_hook.py (unit tests use a deterministic fake embedder, not this model)"
+limitations: "n is tiny (12 queries, 6 pages), the pages and queries are author-written and topically very distinct, so separation is easy by construction; the author assigned the ground truth. It says nothing about real pages, real queries, near-duplicate topics, rankings, CTR or conversion, and does not validate the 0.6 / 0.9 detector thresholds, which pre-date any relevance supplier. Validation against real Search Console data is unperformed (docs/SEARCH_RELEVANCE.md)."
+review: "none; no external review"
