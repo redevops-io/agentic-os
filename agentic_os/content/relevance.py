@@ -439,6 +439,7 @@ def collapse_repeats(text: str) -> str:
 MAX_RETRY_SECONDS = 300.0            # hard cap for failure TTLs and call timeouts
 DEFAULT_RETRY_SECONDS = 30.0
 DEFAULT_CALL_TIMEOUT_SECONDS = 120.0
+DEFAULT_MAX_ABANDONED = 8
 
 
 def _cap_seconds(value: float, default: float) -> float:
@@ -450,33 +451,73 @@ def _cap_seconds(value: float, default: float) -> float:
 
 
 class _Flight:
-    __slots__ = ("done", "outcome")
+    __slots__ = ("done", "outcome", "committed", "abandoned", "leader", "started")
 
     def __init__(self) -> None:
         self.done = threading.Event()
         self.outcome: Optional[tuple] = None
+        self.committed = False            # the worker finished and owns the (cache-writing) completion
+        self.abandoned = False            # the leader gave up on it (timeout); a late result is discarded
+        self.leader = threading.current_thread()
+        self.started = time.monotonic()
 
 
 class _SingleFlight:
-    """Concurrent identical requests share ONE in-flight call. The first caller (the leader) runs ``fn`` in a daemon
-    worker thread and waits at most ``timeout`` seconds; every other caller with the same key waits on the leader's
-    outcome (also at most ``timeout``) and receives the SAME outcome, including the same failure. A hung call
-    therefore blocks nobody forever: the leader and the waiters get ``("error", "timeout")``, the stale flight is
-    dropped so the next request starts a new one, and a late result of the abandoned worker is discarded. Distinct
-    keys never block each other (the lock only guards the table, never a call)."""
+    """Concurrent identical requests share ONE in-flight call.
+
+    The first caller (the leader) registers the flight, runs ``fn`` in a daemon worker thread (or inline when
+    ``inline`` is set, for thread-affine dependencies) and waits at most ``timeout`` seconds; every other caller with
+    the same key waits on the leader's outcome (also bounded) and receives the SAME outcome, including the same
+    failure. Guarantees:
+
+    * the cache lookup (``cached``) and the registration of a new flight are ONE atomic step, and the cache write
+      (``on_done``) happens INSIDE the flight, before the flight is removed, so a request can never slip between "the
+      flight finished" and "the result is cached" and start a duplicate call;
+    * the leader ALWAYS removes the flight and wakes the waiters, even when a BaseException (for example a
+      KeyboardInterrupt delivered while it waits) interrupts it: it publishes ``("error", "interrupted")`` and
+      re-raises. A flight whose leader thread died, or that is older than ``timeout`` plus a margin, is treated as
+      stale and replaced by the next caller, so a leftover flight (an asynchronous exception can arrive anywhere,
+      even inside the cleanup) never blocks a key for longer than the timeout;
+    * a call that does not finish in time is abandoned: leader and waiters get ``("error", "timeout")``, a late
+      result of the abandoned worker is discarded (never cached) and the abandoned thread is counted;
+    * distinct keys never block each other (the lock only guards the table, never a call)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._flights: Dict[object, _Flight] = {}
+        self._abandoned: List[threading.Thread] = []
 
-    def run(self, key: object, fn: Callable[[], tuple], timeout: float) -> tuple:
+    def abandoned_alive(self) -> int:
+        with self._lock:
+            self._abandoned = [t for t in self._abandoned if t.is_alive()]
+            return len(self._abandoned)
+
+    def _stale(self, flight: _Flight, timeout: float) -> bool:
+        return (flight.outcome is None and not flight.committed
+                and (not flight.leader.is_alive() or time.monotonic() - flight.started > timeout + 1.0))
+
+    def run(self, key: object, fn: Callable[[], tuple], timeout: float, *,
+            cached: Optional[Callable[[], Optional[tuple]]] = None,
+            on_done: Optional[Callable[[tuple], None]] = None, inline: bool = False) -> tuple:
         with self._lock:
             flight = self._flights.get(key)
-            leader = flight is None
-            if leader:
+            if flight is not None and self._stale(flight, timeout):
+                flight.abandoned = True
+                flight.outcome = ("error", "interrupted")
+                flight.done.set()
+                del self._flights[key]
+                flight = None
+            if flight is None:
+                hit = cached() if cached is not None else None      # atomic with registration (cache lock inside)
+                if hit is not None:
+                    return hit
                 flight = self._flights[key] = _Flight()
+                leader = True
+            else:
+                leader = False
         if not leader:
-            return flight.outcome if flight.done.wait(timeout) and flight.outcome is not None else ("error", "timeout")
+            ok = flight.done.wait(timeout)
+            return flight.outcome if ok and flight.outcome is not None else ("error", "timeout")
 
         def work() -> None:
             try:
@@ -484,19 +525,48 @@ class _SingleFlight:
             except BaseException as exc:  # noqa: BLE001 — fn should return outcomes; never lose a failure
                 out = ("error", "exception:" + _safe_token(type(exc).__name__))
             with self._lock:
-                if flight.outcome is None:           # an abandoned (timed-out) flight keeps its timeout outcome
-                    flight.outcome = out
+                if flight.abandoned:
+                    return                                   # late result of an abandoned call: discarded
+                flight.committed = True
+            if on_done is not None:
+                try:
+                    on_done(out)                             # cache write, INSIDE the flight
+                except BaseException:  # noqa: BLE001
+                    pass
+            with self._lock:
+                flight.outcome = out
 
-        worker = threading.Thread(target=work, daemon=True)
-        worker.start()
-        worker.join(timeout)
-        with self._lock:
-            if flight.outcome is None:
-                flight.outcome = ("error", "timeout")
-            if self._flights.get(key) is flight:
-                del self._flights[key]
-            out = flight.outcome
-        flight.done.set()
+        worker: Optional[threading.Thread] = None
+        completed = False
+        try:
+            if inline:
+                work()
+            else:
+                worker = threading.Thread(target=work, daemon=True)
+                worker.start()
+                worker.join(timeout)
+                if flight.committed:
+                    worker.join(timeout)                     # the commit (a cache write) is quick
+            completed = True
+        finally:
+            # ALWAYS reached, also when a BaseException interrupts the wait: no flight is ever left behind
+            with self._lock:
+                if worker is not None and worker.is_alive() and not flight.committed:
+                    flight.abandoned = True                  # a late result will be discarded
+                    self._abandoned.append(worker)
+                if flight.outcome is None:
+                    flight.outcome = ("error", "timeout" if completed else "interrupted")
+                out = flight.outcome
+                cache_it = flight.abandoned and out == ("error", "timeout")
+            if cache_it and on_done is not None:
+                try:
+                    on_done(out)                             # a timeout is cached before the flight is removed
+                except BaseException:  # noqa: BLE001
+                    pass
+            with self._lock:
+                if self._flights.get(key) is flight:
+                    del self._flights[key]
+            flight.done.set()
         return out
 
 
@@ -508,6 +578,7 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                       cache_size: int = 256, probe_retry_seconds: float = DEFAULT_RETRY_SECONDS,
                       failure_ttl_seconds: float = DEFAULT_RETRY_SECONDS,
                       call_timeout_seconds: float = DEFAULT_CALL_TIMEOUT_SECONDS,
+                      thread_affine: bool = False, max_abandoned_threads: int = DEFAULT_MAX_ABANDONED,
                       _clock: Callable[[], float] = time.monotonic) -> Callable[["SearchObservation"], RelevanceResult]:
     """Build ``relevance_fn(observation) -> RelevanceResult`` for ``collect_search_observations``.
 
@@ -518,11 +589,27 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
     score every pair 1.0). The embedder is trusted code; its name/revision are sanitised and a name containing an
     'ssr'/'synthetic' token is refused.
 
-    SINGLE FLIGHT. Concurrent identical requests share one in-flight call: one provider call per page and one embed
-    call per distinct text (key: embedder name + configured revision + normalised text hash), whatever the number of
-    threads; waiters receive the leader's result or the same failure. A call that does not finish within
-    ``call_timeout_seconds`` (default 120, capped at 300) yields ``unavailable:..._timeout`` for the leader and the
-    waiters and never blocks others; distinct keys never block each other.
+    SINGLE FLIGHT. Concurrent identical requests share one in-flight call (one provider call per page and one embed
+    call per distinct text; key: embedder name + configured revision + normalised text hash): the cache lookup and the
+    registration of a flight are one atomic step and the cache write happens inside the flight, so duplicate calls
+    are not expected under any thread interleaving (see tests/test_relevance_single_flight.py for the stress result).
+    Waiters receive the leader's result or the same failure. The leader always removes its flight, even when it is
+    interrupted by a BaseException. A call that does not finish within ``call_timeout_seconds`` (default 120, capped
+    at 300) is abandoned: leader and waiters get ``unavailable:..._timeout``, a late result is discarded, and
+    distinct keys never block each other.
+
+    CIRCUIT BREAKER. After a timeout the breaker for that dependency (embedder or page provider) opens for the
+    failure TTL for ALL keys: new cache misses get an explicit ``unavailable:embedder_circuit_open`` /
+    ``unavailable:page_text_provider_circuit_open`` immediately (never a zero), so a hung dependency costs one
+    timeout per TTL, not one per row. After the TTL one trial call is allowed; a success closes the breaker. At most
+    ``max_abandoned_threads`` (default 8) abandoned worker threads may be alive: beyond that new calls are refused
+    with ``unavailable:..._busy``. ``cache_info()`` exposes the abandoned-thread count and the breaker state.
+
+    THREADS. By default every call runs on a fresh daemon worker thread so that it can be abandoned on timeout. That
+    breaks thread-affine providers or embedders (for example a sqlite3 connection created on the caller thread, a
+    GPU context bound to one thread). With ``thread_affine=True`` calls run in the CALLER's thread: nothing can be
+    abandoned, so the call timeout is NOT enforced for the leader (waiters still stop waiting after the timeout), the
+    circuit breaker cannot protect against a hung dependency and no worker threads are created.
 
     BOUNDED FAILURE CACHE. A failed probe, provider call, embed call or timeout is remembered for
     ``probe_retry_seconds`` / ``failure_ttl_seconds`` (default 30 s, capped at 300 s, injectable clock), so a
@@ -548,8 +635,12 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
     pos: Dict[object, object] = {}                       # successful results (page text / vectors)
     neg: Dict[object, Tuple[float, str]] = {}            # key -> (expires_at, failure reason)
     key_prefix = f"{name}|{given_rev or 'fingerprint'}|"
+    breaker: Dict[str, float] = {}                       # dependency -> open until (clock time)
+    max_abandoned = max(0, int(max_abandoned_threads)) if isinstance(max_abandoned_threads, int) else DEFAULT_MAX_ABANDONED
 
     def remember(key: object, outcome: tuple, ttl: float) -> None:
+        if outcome[0] == "error" and outcome[1] in ("interrupted", "circuit_open", "busy"):
+            return                                       # transient refusals are never cached
         with lock:
             if outcome[0] == "error" or outcome[0] == "none":
                 if len(neg) >= cache_size:
@@ -565,26 +656,38 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                 pos[key] = outcome[1]
                 neg.pop(key, None)
 
-    def lookup(key: object):
-        """('hit', value) | ('fail', reason) | None (miss or expired failure)."""
+    def cached_outcome(key: object) -> Optional[tuple]:
+        """('ok', value) | ('none',) | ('error', reason) from the caches, or None (miss or expired failure)."""
         with lock:
             if key in pos:
-                return ("hit", pos[key])
+                return ("ok", pos[key])
             entry = neg.get(key)
             if entry is not None:
                 if entry[0] > _clock():
-                    return ("fail", entry[1])
+                    return ("none",) if entry[1] == "none" else ("error", entry[1])
                 del neg[key]
         return None
 
-    def fetch(key: object, fn: Callable[[], tuple], ttl: float) -> tuple:
-        cached = lookup(key)
-        if cached is not None:
-            if cached[0] == "hit":
-                return ("ok", cached[1])
-            return ("none",) if cached[1] == "none" else ("error", cached[1])
-        outcome = flights.run(key, fn, call_timeout)
-        remember(key, outcome, ttl)
+    def breaker_is_tripped(dep: str) -> bool:
+        with lock:
+            until = breaker.get(dep)
+            return until is not None and until > _clock()
+
+    def fetch(key: object, fn: Callable[[], tuple], ttl: float, dep: str) -> tuple:
+        hit = cached_outcome(key)
+        if hit is not None:
+            return hit
+        if breaker_is_tripped(dep):
+            return ("error", "circuit_open")
+        if not thread_affine and flights.abandoned_alive() >= max_abandoned:
+            return ("error", "busy")
+        outcome = flights.run(key, fn, call_timeout, cached=lambda: cached_outcome(key),
+                              on_done=lambda o: remember(key, o, ttl), inline=thread_affine)
+        with lock:
+            if outcome == ("error", "timeout"):
+                breaker[dep] = _clock() + fail_ttl       # a hung dependency: refuse ALL keys for the TTL
+            elif outcome[0] == "ok":
+                breaker.pop(dep, None)                   # a success closes the breaker
         return outcome
 
     def probe() -> None:
@@ -606,7 +709,7 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                 return ("ok", (f"probe:{digest}", va == vb or cos >= 1.0 - 1e-12))
             except Exception as exc:  # noqa: BLE001
                 return ("error", "probe_error:" + _safe_token(type(exc).__name__))
-        outcome = fetch("probe", run_probe, probe_ttl)
+        outcome = fetch("probe", run_probe, probe_ttl, "embedder")
         if outcome[0] == "ok":
             with lock:
                 state["probe_rev"], state["degenerate"] = outcome[1]
@@ -638,8 +741,10 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                 return ("ok", [float(x) for x in vecs[0]])
             except Exception as exc:  # noqa: BLE001
                 return ("error", "embedder_error:" + _safe_token(type(exc).__name__))
-        out = fetch(("vec", key_prefix + _hex_sha256(text)), run_embed, fail_ttl)
-        return ("error", "embedder_timeout") if out == ("error", "timeout") else out
+        out = fetch(("vec", key_prefix + _hex_sha256(text)), run_embed, fail_ttl, "embedder")
+        if out[0] == "error" and out[1] in ("timeout", "circuit_open", "busy"):
+            return ("error", "embedder_" + out[1])
+        return out
 
     def relevance_fn(observation: "SearchObservation") -> RelevanceResult:
         query = sanitize_text(getattr(observation, "query", ""), max_query_chars)
@@ -655,9 +760,9 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
             except Exception as exc:  # noqa: BLE001 — never propagate provider failures as a number
                 return ("error", "page_text_provider_error:" + _safe_token(type(exc).__name__))
             return ("ok", pg) if isinstance(pg, PageText) else ("none",)
-        got = fetch(("page", url), run_page, fail_ttl)
+        got = fetch(("page", url), run_page, fail_ttl, "provider")
         if got[0] == "error":
-            reason = "page_text_provider_timeout" if got[1] == "timeout" else got[1]
+            reason = ("page_text_provider_" + got[1]) if got[1] in ("timeout", "circuit_open", "busy") else got[1]
             return _unavailable(reason, query_hash=q_hash, **common)
         if got[0] != "ok":
             return _unavailable("no_page_text", query_hash=q_hash, **common)
@@ -685,9 +790,12 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
         return RelevanceResult(to_unit(cos), f"{EMBEDDING_SOURCE_PREFIX}{name_token}@{rev_token}", name, rev, p_hash,
                                q_hash, similarity_map, provenance_incomplete=incomplete)
 
-    def cache_info() -> Dict[str, int]:
+    def cache_info() -> Dict[str, object]:
         with lock:
-            return {"cached": len(pos), "cached_failures": len(neg), "in_flight": len(flights._flights)}
+            info = {"cached": len(pos), "cached_failures": len(neg), "in_flight": len(flights._flights),
+                    "breaker_open": sorted(d for d, u in breaker.items() if u > _clock())}
+        info["abandoned_threads"] = flights.abandoned_alive()
+        return info
 
     relevance_fn.cache_info = cache_info                  # type: ignore[attr-defined]
     return relevance_fn
