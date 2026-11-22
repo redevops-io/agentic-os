@@ -93,7 +93,9 @@ def test_the_signing_test_that_used_to_close_it_leaves_pytests_descriptors_alone
     r = subprocess.run([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", CULPRIT], capture_output=True, text=True, env=child_env(), cwd=ROOT, timeout=300)
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
-    assert "1 passed" in out and "Bad file descriptor" not in out and "ERROR at teardown" not in out, out
+    # CULPRIT's own module is macOS-only (pytestmark skipif in test_signing_procedure_r0prime.py): on any other
+    # platform it legitimately reports "1 skipped", never "1 passed" - that is not a sign of this guard failing.
+    assert ("1 passed" in out or "1 skipped" in out) and "Bad file descriptor" not in out and "ERROR at teardown" not in out, out
 
 
 def test_the_descriptor_the_guard_watches_is_open_and_is_a_copy_of_standard_error(request):
