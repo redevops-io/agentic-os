@@ -84,8 +84,10 @@ class AnchorFile:
         if not os.path.exists(self.path):
             return None
         try:
-            with open(self.path, "rb") as fh:
-                rec = json.loads(fh.read().decode("utf-8"))
+            # a concurrent writer replaces this file atomically (`write()` -> `_files.replace_file`); on Windows that
+            # atomic rename can make a lock-free reader's own open() meet a transient sharing violation for about a
+            # moment, which `read_regular` already retries for (built for exactly this race) instead of raw open()
+            rec = json.loads(_files.read_regular(self.path).decode("utf-8"))
         except (OSError, ValueError) as e:
             raise IntegrityError(f"anchor {self.path!r} is unreadable: {e}") from None
         if (not isinstance(rec, dict) or rec.get("version") != ANCHOR_VERSION or not isinstance(rec.get("count"), int)

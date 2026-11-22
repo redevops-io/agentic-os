@@ -341,6 +341,17 @@ def _host_platform() -> str:
     return sys.platform
 
 
+def _resource_importable() -> bool:
+    """Whether the POSIX-only ``resource`` module is importable here (a second seam, independent of
+    :func:`_host_platform`: the real interpreter either has this module or it does not, regardless of
+    which platform a test is simulating via that seam)."""
+    try:
+        import resource  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def containment_unsupported_reason() -> str:
     """Why the rootless membrane cannot enforce its ceilings on this host, or "" if it can.
 
@@ -352,11 +363,12 @@ def containment_unsupported_reason() -> str:
     if plat.startswith(_MEMORY_CEILING_UNENFORCEABLE):
         return (f"{plat}: the kernel refuses a finite RLIMIT_AS/RLIMIT_DATA/RLIMIT_RSS, so a "
                 "memory ceiling cannot be enforced (no containment backend; run on Linux)")
-    if os.name != "posix" or plat.startswith(("win", "cygwin")):
+    if plat.startswith(("win", "cygwin")):
+        # `os.name` is deliberately not consulted here: unlike `plat` (via `_host_platform`), it is
+        # the real interpreter's OS and is not part of the seam tests mock, so checking it would make
+        # this always report "unsupported" on a real Windows host regardless of the platform under test.
         return f"{plat}: the rootless membrane needs a POSIX host (on Windows run inside WSL2)"
-    try:
-        import resource  # noqa: F401
-    except ImportError:
+    if not _resource_importable():
         return f"{plat}: the `resource` module is unavailable"
     return ""
 

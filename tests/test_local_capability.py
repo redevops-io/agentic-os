@@ -523,7 +523,9 @@ def test_sr02_a_hostile_local_server_on_another_port_receives_nothing_it_can_rep
     try:
         # the victim navigates to the hostile page: the browser attaches every cookie it holds for 127.0.0.1
         # (the jar is shared with the sidecar's origin because cookies ignore the port)
-        with httpx.Client(cookies=victim.cookies) as browser:
+        # dict(...), not the Cookies object itself: starlette's TestClient now backs .cookies with httpx2's Cookies
+        # class, which plain httpx's own Cookies.__init__ does not recognise via isinstance (cross-library mismatch).
+        with httpx.Client(cookies=dict(victim.cookies)) as browser:
             browser.get(f"http://127.0.0.1:{srv.server_address[1]}/")
     finally:
         srv.shutdown()

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests"
 
 #: importable module -> distribution. Absent => the suite is broken, not "skipped".
-REQUIRED = {"jsonschema": "jsonschema", "duckdb": "duckdb", "yaml": "pyyaml", "httpx": "httpx", "fastapi": "fastapi",
+REQUIRED = {"jsonschema": "jsonschema", "duckdb": "duckdb", "yaml": "pyyaml", "httpx": "httpx", "httpx2": "httpx2", "fastapi": "fastapi",
             "uvicorn": "uvicorn", "cryptography": "cryptography", "pydantic": "pydantic", "runtime_contracts": "runtime-contracts"}
 #: modules a test may legitimately skip on (optional extras / external tooling), each with the reason it is optional.
 OPTIONAL = {"psycopg": "postgres extra; needs a server", "playwright": "browser tests; opt-in", "agent_harness": "external repository",

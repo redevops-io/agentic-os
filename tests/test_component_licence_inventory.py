@@ -35,7 +35,7 @@ def test_every_tracked_file_is_classified():
 def test_apps_carry_the_plain_agpl_text_and_no_commons_clause():
     root_text = (ROOT / "LICENSE").read_bytes()
     apps = sorted(p for p in (ROOT / "apps").iterdir() if p.is_dir() and not p.name.startswith("__"))
-    assert len(apps) == 21
+    assert len(apps) == 22
     for a in apps:
         assert (a / "LICENSE").read_bytes() == root_text, a.name
         assert not (a / "LICENSE-COMMONS-CLAUSE").exists(), a.name

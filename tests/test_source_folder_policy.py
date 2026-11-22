@@ -425,7 +425,9 @@ def test_a_refusal_for_unusable_text_echoes_no_path_at_all():
 def test_a_path_the_policy_cannot_examine_is_refused_not_crashed(home, monkeypatch):
     def boom(_p):
         raise OSError(13, "denied")
-    d = check_folder("/tmp", home=str(home), env={}, realpath=boom)
+    # a fixed, clearly-nonexistent path: must not be an ancestor of `home` on any platform. "/tmp" fails this on Linux,
+    # where pytest's own tmp_path (and so `home`) lives under /tmp, making /tmp a real "contains_protected_location" parent.
+    d = check_folder("/this-path-should-never-exist-anywhere-x7q9kf2", home=str(home), env={}, realpath=boom)
     assert not d.ok and d.code in ("not_found", "invalid_path")
 
 

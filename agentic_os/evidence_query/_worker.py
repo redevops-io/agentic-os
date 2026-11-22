@@ -11,10 +11,14 @@ from __future__ import annotations
 import json
 import os
 import re
-import resource
 import sys
 import threading
 import time
+
+try:
+    import resource                            # POSIX only; absent on Windows, where this module is still importable
+except ImportError:
+    resource = None
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SOCKET_MODULES = ("socket", "_socket", "ssl", "_ssl", "http", "urllib", "ftplib", "smtplib", "telnetlib")
@@ -35,6 +39,8 @@ def _block_network(keep_raw: bool = False) -> None:
 
 
 def _apply_rlimits(req: dict) -> None:
+    if resource is None:                       # no POSIX rlimits on this platform (e.g. Windows)
+        return
     lim = req.get("limits", {})
     cpu = int(lim.get("timeout_s", 10)) + 2
     for name, val in (("RLIMIT_CORE", 0), ("RLIMIT_FSIZE", 0), ("RLIMIT_CPU", cpu), ("RLIMIT_NOFILE", 256)):
@@ -49,6 +55,8 @@ def _apply_rlimits(req: dict) -> None:
 
 def _start_watchdog(memory_mb: int) -> None:
     """RSS watchdog: DuckDB's memory_limit does not cover every allocation, and RLIMIT_AS is not enforced on macOS."""
+    if resource is None:                       # no POSIX rusage on this platform (e.g. Windows)
+        return
     cap = (memory_mb * 2 + 200) * 1024 * 1024
     div = 1 if sys.platform == "darwin" else 1024
 
@@ -126,6 +134,8 @@ def _selftest(req: dict) -> dict:
     if probe == "env":
         return {"env": dict(os.environ)}
     if probe == "rlimits":
+        if resource is None:                   # no POSIX rlimits on this platform (e.g. Windows)
+            return {"unsupported": True}
         return {"fsize": resource.getrlimit(resource.RLIMIT_FSIZE)[0], "core": resource.getrlimit(resource.RLIMIT_CORE)[0],
                 "nofile": resource.getrlimit(resource.RLIMIT_NOFILE)[0], "cpu": resource.getrlimit(resource.RLIMIT_CPU)[0]}
     if probe == "alloc":                                  # exercises the RSS watchdog (the watchdog kills this process)
@@ -137,7 +147,9 @@ def _selftest(req: dict) -> dict:
         time.sleep(0.3)
         return {"allocated": len(hold)}
     if probe == "pid":
-        return {"pid": os.getpid()}
+        # `token` proves a fresh worker ran (random per process start); raw PIDs can legitimately repeat across
+        # short-lived spawns under a low-PID-count container, so callers must not rely on PID uniqueness alone.
+        return {"pid": os.getpid(), "token": os.urandom(16).hex()}
     if probe == "cwd":
         return {"cwd": os.getcwd(), "listing": sorted(os.listdir(".")),
                 "is_private": (os.stat(".").st_mode & 0o077) == 0}

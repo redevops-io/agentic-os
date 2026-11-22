@@ -138,6 +138,9 @@ def test_membrane_is_supported_on_linux_and_not_on_macos():
 @pytest.mark.parametrize("plat, supported", [("linux", True), ("darwin", False), ("win32", False)])
 def test_support_probe_by_platform(monkeypatch, plat, supported):
     monkeypatch.setattr(device_posture, "_host_platform", lambda: plat)
+    # a second, independent seam: the real interpreter may lack `resource` (e.g. this test
+    # itself running on windows-latest) regardless of which platform `plat` simulates here
+    monkeypatch.setattr(device_posture, "_resource_importable", lambda: True)
     assert membrane_supported() is supported
     assert (device_posture.containment_unsupported_reason() == "") is supported
 

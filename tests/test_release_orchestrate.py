@@ -39,9 +39,16 @@ def test_a_real_run_without_an_approval_stops_at_s0(tmp_path):
 
 def _tree_before_the_waiver(tmp_path):
     """A clone of the commit BEFORE the owner's decision without counsel was recorded. Once that signature is in the tree the committed gate
-    allows every platform, so a test about 'the counsel decisions still block' has to run on the commit that precedes it."""
+    allows every platform, so a test about 'the counsel decisions still block' has to run on the commit that precedes it. Found by locating the
+    commit that ADDED the waiver file, not "HEAD^" - every commit landed after the waiver moves HEAD^ to something unrelated."""
     waiver = ROOT / "docs" / "legal" / "approved" / "OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md"
-    rev = subprocess.run(["git", "rev-parse", "HEAD^" if waiver.is_file() else "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    if waiver.is_file():
+        added = subprocess.run(["git", "log", "--format=%H", "--diff-filter=A", "--", str(waiver.relative_to(ROOT))],
+                               cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip().splitlines()
+        assert added, f"{waiver} exists but no commit adding it was found"
+        rev = subprocess.run(["git", "rev-parse", f"{added[-1]}^"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    else:
+        rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     dest = tmp_path / "pre-waiver"
     subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(dest)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(dest), "checkout", "-q", "--detach", rev], check=True, capture_output=True)
