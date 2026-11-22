@@ -126,17 +126,44 @@ def make_engine_authorizer(authorizer, *, label: str = "the app's permissions pl
     would let ``ToolRegistry.unattributed_allows()`` speak about allows at all. With an older engine, or none
     installed, the authorizer comes back unchanged."""
     pair = _engine_authz()
+    if authorizer is None:
+        # An absent plane is not a plane that allows. Handed on as ``None``, the registry answers the call with
+        # its own ``missing_authorizer`` denial and says so in the audit; wrapped, it would raise inside the
+        # wrapper and arrive as a crash the reader has to guess a reason for.
+        return None
     if pair is None or getattr(authorizer, "_agentic_os_engine_shaped", False):
         return authorizer
     authorization, reason_vocabulary = pair
 
     def engine_authorizer(principal, spec, args):
-        reason = authorizer(principal, spec, args)
-        if reason is not None:
+        """Translate one kernel answer into the engine's contract. Every path but one is a denial.
+
+        The kernel answers ``None`` for allowed and a string for denied; the engine needs a decision object.
+        The three ways this could go quietly wrong are answered here rather than left to the caller's luck:
+        a plane that cannot be consulted is ``no_resource_plane`` (not a crash the registry has to
+        interpret), an answer that is neither of the two kernel shapes is ``malformed_request`` (never an
+        allow), and the allow itself names this plane so the decision stays traceable.
+        """
+        try:
+            reason = authorizer(principal, spec, args)
+        except Exception as exc:  # noqa: BLE001 — an unreachable authority refuses; it never passes
+            return authorization.deny(reason=reason_vocabulary.NO_RESOURCE_PLANE,
+                                      detail=f"{label} could not answer ({type(exc).__name__}: {exc})",
+                                      plane=ENGINE_PLANE)
+        if reason is None:
+            return authorization.allow(reason=reason_vocabulary.EXPLICIT_GRANT,
+                                       detail=f"{label}: the grant check passed", plane=ENGINE_PLANE)
+        if isinstance(reason, str):
+            if not reason.strip():
+                # An empty deny reason is the plane failing to answer, not an answer. It stays a denial —
+                # the question is only whether the reader learns that the plane misbehaved.
+                return authorization.deny(reason=reason_vocabulary.MALFORMED_REQUEST,
+                                          detail=f"{label} returned an empty deny reason", plane=ENGINE_PLANE)
             return authorization.deny(reason=reason_vocabulary.MISSING_EXPLICIT_GRANT, detail=str(reason),
                                       plane=ENGINE_PLANE)
-        return authorization.allow(reason=reason_vocabulary.EXPLICIT_GRANT,
-                                   detail=f"{label}: the grant check passed", plane=ENGINE_PLANE)
+        return authorization.deny(reason=reason_vocabulary.MALFORMED_REQUEST,
+                                  detail=f"{label} returned {type(reason).__name__}, not the kernel's "
+                                         f"None-or-string answer", plane=ENGINE_PLANE)
 
     engine_authorizer.__name__ = engine_authorizer.__qualname__ = (
         f"{getattr(authorizer, '__name__', 'authorizer')}_engine_shaped")
