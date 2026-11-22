@@ -14,26 +14,46 @@ It lets a human reviewer see "a synthetic study exists for this hypothesis" next
 
 Two seams, both through existing contracts: :class:`StudyEvidenceWriter` plugs into
 ``plan_experiments(..., writer=...)`` and labels the proposed change text; :func:`attach_study_refs` appends the
-serialised refs to an already planned ``Experiment`` (attach AFTER planning so ``explain``'s count of supporting
-observations is not inflated by a synthetic ref).
+serialised refs to an already planned ``Experiment`` and to nothing else (an ``Opportunity`` or a
+``CommercialHypothesis`` feeds counts and sealed evidence, so attaching there is refused). Anything that counts
+or seals ``evidence_refs`` ignores or refuses refs starting with ``synthetic-study:``.
 """
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass, replace
-from typing import Any, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Optional, Sequence, Tuple
+
+from ..contracts import Experiment
 
 __all__ = ["StudyEvidenceRef", "StudyEvidenceWriter", "attach_study_refs", "split_refs", "is_synthetic_ref",
            "SYNTHETIC_REF_SCHEME", "SYNTHETIC_LABEL"]
 
 SYNTHETIC_LABEL = "HYPOTHESIS, synthetic, unvalidated"
 SYNTHETIC_REF_SCHEME = "synthetic-study:v1:"
-
-T = TypeVar("T")
+_SYNTHETIC_PREFIX = "synthetic-study:"     # any version; also what market/experiments.py and experiment_design.py test
 
 
 def is_synthetic_ref(ref: object) -> bool:
-    return isinstance(ref, str) and ref.startswith(SYNTHETIC_REF_SCHEME)
+    """True for anything that looks like a synthetic-study ref (any version, any case/leading blanks): it is then
+    never treated as a first-party reference, even when it turns out to be malformed."""
+    return isinstance(ref, str) and ref.strip().lower().startswith(_SYNTHETIC_PREFIX)
+
+
+def _clean(text: object, cap: int = 80) -> str:
+    """Plain single-line text for rendering into a proposed-change note: no control, zero-width or bidi
+    characters, no newlines, brackets neutralised (they delimit the label), bounded length."""
+    out = []
+    for ch in str(text):
+        cat = unicodedata.category(ch)
+        if cat[0] == "Z" or ch in "\t\n\r\x0b\x0c":
+            out.append(" ")
+        elif cat[0] == "C":
+            continue
+        else:
+            out.append({"[": "(", "]": ")"}.get(ch, ch))
+    return " ".join("".join(out).split())[:cap]
 
 
 @dataclass(frozen=True)
@@ -71,20 +91,40 @@ class StudyEvidenceRef:
 
     @classmethod
     def parse(cls, ref: str) -> "StudyEvidenceRef":
-        if not is_synthetic_ref(ref):
-            raise ValueError("not a synthetic-study ref")
-        return cls.from_dict(json.loads(ref[len(SYNTHETIC_REF_SCHEME):]))
+        """Parse a serialised ref. Raises exactly one documented exception type, ``ValueError``, for ANY malformed
+        input (wrong scheme/version, bad JSON, wrong types, missing fields, synthetic != True, wrong label)."""
+        try:
+            if not isinstance(ref, str) or not ref.startswith(SYNTHETIC_REF_SCHEME):
+                raise ValueError("not a synthetic-study v1 ref")
+            data = json.loads(ref[len(SYNTHETIC_REF_SCHEME):])
+            if not isinstance(data, dict):
+                raise ValueError("synthetic-study ref payload is not an object")
+            return cls.from_dict(data)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — TypeError, RecursionError, ...: one exception type for callers
+            raise ValueError(f"malformed synthetic-study ref ({type(exc).__name__})") from None
 
     def note(self) -> str:
-        return (f"[{self.label}: pre-test evidence from synthetic study {self.study_id} "
-                f"(construct {self.construct}); not first-party evidence]")
+        return (f"[{self.label}: pre-test evidence from synthetic study {_clean(self.study_id)} "
+                f"(construct {_clean(self.construct)}); not first-party evidence]")
 
 
-def split_refs(evidence_refs: Sequence[str]) -> Tuple[Tuple[str, ...], Tuple[StudyEvidenceRef, ...]]:
-    """(first-party/other refs unchanged, parsed synthetic refs). A malformed synthetic ref raises."""
-    plain = tuple(r for r in evidence_refs if not is_synthetic_ref(r))
-    synth = tuple(StudyEvidenceRef.parse(r) for r in evidence_refs if is_synthetic_ref(r))
-    return plain, synth
+def split_refs(evidence_refs: Sequence[str]
+               ) -> Tuple[Tuple[str, ...], Tuple[StudyEvidenceRef, ...], Tuple[str, ...]]:
+    """(first-party/other refs unchanged, parsed synthetic refs, malformed synthetic refs). One bad ref never
+    breaks the list: anything that looks like a synthetic ref but does not parse is returned in the third element
+    (never in the first), so it can be flagged without being mistaken for first-party evidence."""
+    plain, synth, malformed = [], [], []
+    for r in evidence_refs:
+        if not is_synthetic_ref(r):
+            plain.append(r)
+            continue
+        try:
+            synth.append(StudyEvidenceRef.parse(r))
+        except ValueError:
+            malformed.append(r)
+    return tuple(plain), tuple(synth), tuple(malformed)
 
 
 class StudyEvidenceWriter:
@@ -101,16 +141,19 @@ class StudyEvidenceWriter:
         return base if not self.refs else base + " " + " ".join(r.note() for r in self.refs)
 
 
-def attach_study_refs(obj: T, refs: Sequence[StudyEvidenceRef]) -> T:
-    """Return a copy of an ``Experiment`` (or ``Opportunity``) whose ``evidence_refs`` additionally lists the
-    serialised synthetic refs; for an object with an ``explain`` field a labelled sentence is appended. Existing
-    refs are kept; duplicates are not added. No existing field is removed or re-typed."""
+def attach_study_refs(experiment: Experiment, refs: Sequence[StudyEvidenceRef]) -> Experiment:
+    """Return a copy of a PLANNED ``Experiment`` whose ``evidence_refs`` additionally lists the serialised
+    synthetic refs, with a labelled sentence appended to ``explain``. Existing refs are kept; duplicates are not
+    added; no existing field is removed or re-typed. Anything that is not an ``Experiment`` (an ``Opportunity``,
+    whose evidence is counted, or a ``CommercialHypothesis``, whose evidence is sealed) raises ``TypeError``."""
+    if not isinstance(experiment, Experiment):
+        raise TypeError("synthetic study refs can only be attached to a planned Experiment")
     new = [r.to_ref() for r in refs]
-    existing = tuple(getattr(obj, "evidence_refs", ()) or ())
+    existing = tuple(experiment.evidence_refs or ())
     merged = existing + tuple(r for r in dict.fromkeys(new) if r not in existing)
-    changes = {"evidence_refs": merged}
-    if hasattr(obj, "explain") and refs and merged != existing:
-        added = [r for r in refs if r.to_ref() not in existing]
-        changes["explain"] = (getattr(obj, "explain") + f" | {SYNTHETIC_LABEL}: {len(added)} synthetic study "
-                              f"ref(s) attached; not counted as observations and never first-party evidence.")
-    return replace(obj, **changes)  # type: ignore[type-var]
+    if merged == existing:
+        return experiment
+    added = [r for r in refs if r.to_ref() not in existing]
+    explain = (experiment.explain + f" | {SYNTHETIC_LABEL}: {len(set(r.to_ref() for r in added))} synthetic study "
+               f"ref(s) attached; not counted as observations and never first-party evidence.")
+    return replace(experiment, evidence_refs=merged, explain=explain)

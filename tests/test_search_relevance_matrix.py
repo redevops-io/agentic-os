@@ -330,7 +330,9 @@ def test_matrix_6_hook_low_value_is_distinguishable_from_the_legacy_default(monk
     assert not relevance_unknown(hooked) and relevance_unknown(legacy)
     set_flag(monkeypatch, True)
     assert near_win(hooked) is None and is_not_assessable(near_win(legacy))
-    assert relevance_conflicts([hooked, legacy])[0].evidence[0].startswith("relevance conflict: measured and unknown")
+    assert relevance_conflicts([hooked, legacy]) == []              # legacy 'unset' rows never enter conflict logic
+    gone = apply_relevance(legacy, lambda o: SimpleNamespace(value=None, source="unavailable:no_page_text"))
+    assert relevance_conflicts([hooked, gone])[0].evidence[0].startswith("relevance conflict: measured and unknown")
     low = apply_relevance(dataclasses.replace(legacy, query="agent zzz qqq"), fn)
     assert 0.0 < low.relevance < 0.6 and relevance_state(low) == "low" and near_win(low) is None
 

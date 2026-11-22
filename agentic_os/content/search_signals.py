@@ -15,12 +15,15 @@ observations is the sensor slice.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, List, Optional, Tuple
+
+from agentic_os.content.relevance import sanitize_text
 
 
 RELEVANCE_UNKNOWN_AWARE_ENV = "AGENTIC_OS_RELEVANCE_UNKNOWN_AWARE"
@@ -64,39 +67,77 @@ class SearchObservation:
     relevance_detail: str = ""       # provenance of an embedding value (embedder, map, text hashes); "" otherwise
 
 
+def _source(o: object) -> str:
+    """The observation's relevance source, normalised (stripped; None/empty -> 'unset'). Read with getattr so that
+    duck-typed observation objects that predate the field keep working."""
+    s = getattr(o, "relevance_source", None)
+    s = "unset" if s is None else str(s).strip()
+    return s or "unset"
+
+
+def _detail(o: object) -> str:
+    d = getattr(o, "relevance_detail", "")
+    return "" if d is None else str(d).strip()
+
+
+def _kind(src: str) -> str:
+    """'unset' | 'unavailable' | 'embedding' | 'labelled' (case-insensitive on the reserved prefixes)."""
+    low = src.lower()
+    if low == "unset":
+        return "unset"
+    if low.startswith("unavailable:"):
+        return "unavailable"
+    if low.startswith("embedding:"):
+        return "embedding"
+    return "labelled"
+
+
+def _value(o: object) -> Optional[float]:
+    try:
+        return float(getattr(o, "relevance", 0.0))
+    except (TypeError, ValueError):
+        return None
+
+
+def relevance_state(o: SearchObservation, th: Optional["Thresholds"] = None) -> str:
+    """'unknown' | 'invalid' | 'low' | 'ok'. The SOURCE is authoritative:
+    * `unavailable:*` is always 'unknown' whatever number sits in `relevance` (it is only a placeholder);
+    * a value that is NaN/inf/outside [0, 1] is 'invalid' under any source (treated as unknown by the
+      unknown-aware detectors; flag-off numeric behaviour is untouched);
+    * source 'unset' with the default 0.0 is 'unknown'; 'unset' with a NON-zero value is a supplied, unlabelled
+      value and is judged on that value, exactly as before the source field existed;
+    * everything else is measured: 'low' below `min_relevance`, else 'ok'. A measured 0.0 is 'low', never unknown."""
+    th = th or Thresholds()
+    kind = _kind(_source(o))
+    if kind == "unavailable":
+        return "unknown"
+    v = _value(o)
+    if v is None or not math.isfinite(v) or v < 0.0 or v > 1.0:
+        return "invalid"
+    if kind == "unset" and v == 0.0:
+        return "unknown"
+    return "low" if v < th.min_relevance else "ok"
+
+
 def relevance_unknown(o: SearchObservation) -> bool:
-    """True when the observation's relevance was never measured (source 'unset' or 'unavailable:*')."""
-    src = o.relevance_source or "unset"
-    return src == "unset" or src.startswith("unavailable:")
+    """True when relevance cannot be relied on: state 'unknown' or 'invalid'."""
+    return relevance_state(o) in ("unknown", "invalid")
 
 
 def hook_originated(o: SearchObservation) -> bool:
     """True when the source was written by the relevance hook (embedding value or explicit unavailable)."""
-    src = o.relevance_source or "unset"
-    return src.startswith("embedding:") or src.startswith("unavailable:")
+    return _kind(_source(o)) in ("embedding", "unavailable")
 
 
 def relevance_reading(o: SearchObservation) -> Tuple[str, Optional[float], str]:
-    """(source, value or None, provenance detail). The value is None whenever the relevance is UNKNOWN, so the
-    placeholder 0.0 of an unset/unavailable observation can never be read as a measured-low value."""
-    return (o.relevance_source or "unset", None if relevance_unknown(o) else float(o.relevance),
-            o.relevance_detail or "")
+    """(source, value or None, provenance detail). The value is None whenever the relevance is UNKNOWN or
+    invalid, so a placeholder 0.0 can never be read as a measured-low value."""
+    state = relevance_state(o)
+    return (_source(o), None if state in ("unknown", "invalid") else float(_value(o)), _detail(o))
 
 
-def relevance_state(o: SearchObservation, th: Optional["Thresholds"] = None) -> str:
-    """'unknown' (never measured / unavailable), 'low' (measured, below `min_relevance`) or 'ok'. Explains why a
-    relevance-gated detector stayed silent: 'low' is a statement about the page, 'unknown' is not."""
-    th = th or Thresholds()
-    if relevance_unknown(o):
-        return "unknown"
-    return "low" if o.relevance < th.min_relevance else "ok"
-
-
-def _fmt_reading(o: SearchObservation, *, with_page: bool = False) -> str:
-    src, val, detail = relevance_reading(o)
-    head = f"relevance[{o.page_url}]: " if with_page else "relevance: "
-    body = f"{src} (unknown, not measured)" if val is None else f"{src} value={val:.3f}"
-    return head + body + (f"; {detail}" if detail else "")
+def _join(*parts: str) -> str:
+    return "; ".join(p for p in parts if p)
 
 
 def _relevance_lines(o: SearchObservation, *, used: bool = True) -> Tuple[str, ...]:
@@ -104,42 +145,54 @@ def _relevance_lines(o: SearchObservation, *, used: bool = True) -> Tuple[str, .
     produce exactly the evidence they always did while the unknown-aware flag is off (bit-identical); an
     observation the hook wrote (embedding / unavailable) always states its source + provenance; with the flag on
     every signal states its relevance source, whichever detector produced it."""
-    src = o.relevance_source or "unset"
-    if src.startswith("embedding:"):
-        return (f"relevance provenance: {src}; {o.relevance_detail}",)
-    if src.startswith("unavailable:"):
-        return (f"relevance unknown: relevance_source={src}" + (f"; {o.relevance_detail}" if o.relevance_detail
-                                                                  else ""),)
+    src = _source(o)
+    kind = _kind(src)
+    if kind == "embedding":
+        return (_join(f"relevance provenance: {src}", _detail(o)),)
+    if kind == "unavailable":
+        return (_join(f"relevance unknown: relevance_source={src}", _detail(o)),)
     if relevance_unknown_aware():
-        kind = "unknown, never measured" if src == "unset" else "supplied upstream"
-        return (f"relevance_source={src} ({kind})" + ("" if used else "; not used by this detector"),)
+        state = relevance_state(o)
+        if state == "invalid":
+            how = "invalid value, treated as unknown"
+        elif kind == "unset":
+            how = ("unknown, never measured" if state == "unknown"
+                   else "supplied, unlabelled; label supplied values 'supplied:<label>'")
+        else:
+            how = "supplied upstream"
+        return (f"relevance_source={src} ({how})" + ("" if used else "; not used by this detector"),)
     return ()
 
 
-def conflict_key(o: SearchObservation) -> Tuple[str, str]:
-    return (_norm(o.query), o.page_url)
+def conflict_key(o: SearchObservation) -> Tuple[str, str, str]:
+    """Identity of one reading target: (site_id, page_url, the exact sanitised query text). Only readings of the
+    SAME site, page and query can conflict; distinct queries (including all non-Latin ones) never do."""
+    return (str(getattr(o, "site_id", "") or ""), str(getattr(o, "page_url", "") or ""),
+            sanitize_text(str(getattr(o, "query", "") or ""), 10_000))
 
 
-def _same_reading(a: Tuple[str, Optional[float], str], b: Tuple[str, Optional[float], str]) -> bool:
-    return a[0] == b[0] and a[1] == b[1]
+_ROUND = 9      # readings closer than 1e-9 are the same reading (float jitter is not a conflict)
 
 
-def relevance_conflicts(observations: Iterable[SearchObservation]) -> List["SearchSignal"]:
-    """WATCH signals for a query/page pair that was read more than once with DIFFERING relevance: two measured
-    values that differ (same or different embedder), or a measured value next to an unknown one. Nothing is
-    averaged, chosen or overwritten: every reading is listed in the evidence and each observation is still
-    judged on its own reading. Identical repeated readings are not a conflict."""
-    groups: dict = defaultdict(list)
+def _conflict_groups(observations: Iterable[SearchObservation], require_hook: bool
+                     ) -> List[Tuple[Tuple[str, str, str], "SearchSignal"]]:
+    groups: dict = {}
     for o in observations:
-        groups[conflict_key(o)].append(o)
-    out: List[SearchSignal] = []
-    for members in groups.values():
-        readings = sorted({relevance_reading(m) for m in members},
-                          key=lambda r: (r[0], -1.0 if r[1] is None else r[1], r[2]))
-        if len(readings) < 2:
+        if _kind(_source(o)) == "unset":
             continue
-        measured = {r[1] for r in readings if r[1] is not None}
-        has_unknown = any(r[1] is None for r in readings)
+        groups.setdefault(conflict_key(o), []).append(o)
+    out: List[Tuple[Tuple[str, str, str], SearchSignal]] = []
+    for key in sorted(groups):
+        members = groups[key]
+        if require_hook and not any(hook_originated(m) for m in members):
+            continue
+        readings = set()
+        for m in members:
+            src, val, detail = relevance_reading(m)
+            readings.add((src, None if val is None else round(val, _ROUND), detail))
+        ordered = sorted(readings, key=lambda r: (r[0], r[1] is None, 0.0 if r[1] is None else r[1], r[2]))
+        measured = {r[1] for r in ordered if r[1] is not None}
+        has_unknown = any(r[1] is None for r in ordered)
         kinds = []
         if len(measured) >= 2:
             kinds.append("measured values differ")
@@ -147,16 +200,28 @@ def relevance_conflicts(observations: Iterable[SearchObservation]) -> List["Sear
             kinds.append("measured and unknown readings mixed")
         if not kinds:
             continue
-        first = members[0]
-        lines = tuple(f"reading: {src}; " + ("unknown" if val is None else f"value={val:.3f}")
-                      + (f"; {detail}" if detail else "") for src, val, detail in readings)
-        out.append(SearchSignal(
-            SignalType.RELEVANCE_CONFLICT, first.query, (first.page_url,), 0.0, "WATCH",
+        lines = tuple(_join(f"reading: {src}", "unknown" if val is None else f"value={val:.3f}", detail)
+                      for src, val, detail in ordered)
+        out.append((key, SearchSignal(
+            SignalType.RELEVANCE_CONFLICT, min(str(getattr(m, "query", "")) for m in members), (key[1],), 0.0,
+            "WATCH",
             proposed_action="Relevance conflict: several readings disagree for this query/page; none was averaged "
                             "or chosen — resolve (same page text, one embedder) before acting on relevance",
-            evidence=(f"relevance conflict: {'; '.join(kinds)} ({len(readings)} distinct readings)",) + lines,
-            site_id=first.site_id))
+            evidence=(f"relevance conflict: {'; '.join(kinds)} ({len(ordered)} distinct readings)",) + lines,
+            site_id=key[0])))
     return out
+
+
+def relevance_conflicts(observations: Iterable[SearchObservation], *, require_hook: bool = False
+                        ) -> List["SearchSignal"]:
+    """WATCH signals for a (site, page, query) read more than once with DIFFERING relevance: two measured values
+    that differ by more than 1e-9 (same or different embedder), or a measured value next to an unknown one.
+    Nothing is averaged, chosen or overwritten: every reading is listed in the evidence and each observation is
+    still judged on its own reading. Identical repeated readings are not a conflict, and neither are equal values
+    from different embedders (the provenance differs, the claim does not; both are listed if another reading
+    conflicts). Legacy rows (source 'unset') are never part of the conflict logic. With `require_hook`, only
+    groups containing a hook-written reading are examined. The result does not depend on input order."""
+    return [sig for _, sig in _conflict_groups(observations, require_hook)]
 
 
 def _not_assessable(signal_type: "SignalType", o: SearchObservation, basis: str, *,
@@ -165,8 +230,8 @@ def _not_assessable(signal_type: "SignalType", o: SearchObservation, basis: str,
         signal_type, o.query, (o.page_url,), 0.0, status,
         proposed_action="Not assessable: relevance unknown — no query↔page relevance was measured for this "
                         "observation, so this detector cannot judge it (a low value would be a different statement)",
-        evidence=(NOT_ASSESSABLE, f"relevance_source={o.relevance_source or 'unset'}"
-                  + (f"; {o.relevance_detail}" if o.relevance_detail else ""), basis), site_id=o.site_id)
+        evidence=(NOT_ASSESSABLE, _join(f"relevance_source={_source(o)}", _detail(o)), basis),
+        site_id=getattr(o, "site_id", ""))
 
 
 def is_not_assessable(signal: "SearchSignal") -> bool:
@@ -215,11 +280,19 @@ def _status(o: SearchObservation, th: Thresholds) -> str:
     return "PROPOSE" if o.days_observed >= th.min_observation_days else "WATCH"
 
 
+def _unknown_gate(o: SearchObservation, aware: bool) -> bool:
+    """Should a relevance-gated detector treat this observation as 'relevance unknown'? Flag on: unknown or
+    invalid relevance. Flag off: only a hook-written `unavailable:*` source (its numeric value is a placeholder
+    and must never drive a detector); every legacy observation is judged on its number exactly as before."""
+    return relevance_unknown(o) if aware else _kind(_source(o)) == "unavailable"
+
+
 def near_win(o: SearchObservation, *, th: Thresholds = Thresholds()) -> Optional[SearchSignal]:
     """§3.2: a page ranking ~5–20 with enough impressions and strong query fit — one push could win it.
     Position alone never triggers this (§9): impressions + relevance are required."""
-    if relevance_unknown_aware() and relevance_unknown(o):
-        if o.impressions >= th.min_impressions and th.near_win_pos_min <= o.position <= th.near_win_pos_max:
+    aware = relevance_unknown_aware()
+    if _unknown_gate(o, aware):
+        if aware and o.impressions >= th.min_impressions and th.near_win_pos_min <= o.position <= th.near_win_pos_max:
             return _not_assessable(SignalType.NEAR_WIN, o, f"position {o.position:.1f} in near-win band, "
                                                            f"{o.impressions} impressions")
         return None
@@ -240,8 +313,9 @@ def emergent_intent(current: SearchObservation, *, baseline_impressions: int,
                     th: Thresholds = Thresholds()) -> Optional[SearchSignal]:
     """§3.3: Google recently started testing a page for a query that was absent/negligible before. Low
     sample + very high fit → WATCH (record, don't rewrite yet); promote only when the threshold is met."""
-    if relevance_unknown_aware() and relevance_unknown(current):
-        if baseline_impressions < th.min_impressions and current.impressions >= th.emergent_min_impressions:
+    aware = relevance_unknown_aware()
+    if _unknown_gate(current, aware):
+        if aware and baseline_impressions < th.min_impressions and current.impressions >= th.emergent_min_impressions:
             return _not_assessable(SignalType.EMERGENT_INTENT, current,
                                    f"new query/page pairing, {current.impressions} impressions "
                                    f"(baseline {baseline_impressions})")
@@ -266,8 +340,9 @@ def missing_page(o: SearchObservation, *, canonical_pages: Iterable[str] = (),
                  th: Thresholds = Thresholds()) -> Optional[SearchSignal]:
     """§3.4: a strong-fit intent ranks on a related but NON-canonical page (e.g. a blog post) — it deserves
     its own canonical page. Skip if a canonical page is already the one ranking."""
-    if relevance_unknown_aware() and relevance_unknown(o):
-        if (o.impressions >= th.min_impressions and o.page_url not in set(canonical_pages)
+    aware = relevance_unknown_aware()
+    if _unknown_gate(o, aware):
+        if (aware and o.impressions >= th.min_impressions and o.page_url not in set(canonical_pages)
                 and _NONCANONICAL.search(o.page_url)):
             return _not_assessable(SignalType.MISSING_PAGE, o, f"non-canonical page ranks, "
                                                                f"{o.impressions} impressions")
@@ -329,13 +404,13 @@ def _cannibalization_relevance_lines(obs: List[SearchObservation]) -> Tuple[str,
     observations that never touched the hook while the unknown-aware flag is off (bit-identical to before)."""
     if not (relevance_unknown_aware() or any(hook_originated(o) for o in obs)):
         return ()
-    readings = sorted({(o.page_url, relevance_reading(o)) for o in obs}, key=lambda t: (t[0], t[1][0], t[1][2],
-                                                                                         -1.0 if t[1][1] is None else t[1][1]))
+    readings = sorted({(str(o.page_url), *relevance_reading(o)) for o in obs},
+                      key=lambda t: (t[0], t[1], t[3], t[2] is None, 0.0 if t[2] is None else t[2]))
     lines: List[str] = []
-    for page, (src, val, detail) in readings:
+    for page, src, val, detail in readings:
         body = f"{src} (unknown, not measured)" if val is None else f"{src} value={val:.3f}"
-        lines.append(f"relevance[{page}]: {body}" + (f"; {detail}" if detail else ""))
-    unknown = sum(1 for _, r in readings if r[1] is None)
+        lines.append(_join(f"relevance[{page}]: {body}", detail))
+    unknown = sum(1 for r in readings if r[2] is None)
     if 0 < unknown < len(readings):
         lines.append(f"relevance mixed across competing pages: {len(readings) - unknown} measured, {unknown} unknown")
     return tuple(lines)

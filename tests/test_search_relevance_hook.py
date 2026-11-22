@@ -254,28 +254,33 @@ def test_flag_on_known_sources_identical_to_base_except_source_evidence(flag_on,
     got = detectors(known)
     for k in base:
         assert strip_src(got[k]) == base[k]                      # same decisions, confidence, status, action
-        if got[k] is not None:                                   # ...and the source is stated in the evidence
+        if got[k] is not None:
             assert any(x.startswith("relevance_source=supplied:upstream") for x in got[k]["e"])
-    unknown = SearchObservation(**GOLDEN["observations"][i])
-    got = detectors(unknown)
-    assert strip_src(got["ctr"]) == base["ctr"]                  # ctr_opportunity never needs relevance
-    if got["ctr"] is not None:
-        assert got["ctr"]["e"][-1] == "relevance_source=unset (unknown, never measured); not used by this detector"
-    for k in ("near_win", "missing", "missing_nocanon", "emergent0", "emergent500"):
-        if got[k] != base[k]:                                    # the only difference: not-assessable WATCH
-            # (a legacy upstream value with the default 'unset' source counts as unknown once the flag is on)
-            assert got[k]["s"] == "WATCH" and got[k]["c"] == 0.0
-            assert got[k]["e"][0] == "not assessable: relevance unknown"
+    d = GOLDEN["observations"][i]
+    unlabelled = detectors(SearchObservation(**d))
+    for k in base:
+        if d["relevance"] != 0.0:                                # supplied-unlabelled (non-zero): behaves as today
+            assert strip_src(unlabelled[k]) == base[k]
+            if unlabelled[k] is not None:
+                assert any("supplied, unlabelled" in x for x in unlabelled[k]["e"]) or k == "ctr"
+        elif unlabelled[k] != base[k]:                           # unset + 0.0 is unknown: only not-assessable differs
+            assert unlabelled[k]["s"] == "WATCH" and unlabelled[k]["c"] == 0.0
+            assert unlabelled[k]["e"][0] == "not assessable: relevance unknown"
 
 
 def test_flag_on_aggregate_cannibalization_decisions_unchanged(flag_on):
     objs = [SearchObservation(**d) for d in GOLDEN["observations"]]
     assert [strip_src(sig(s)) for s in cannibalization(objs)] == GOLDEN["cannibalization"]
     got = [strip_src(sig(s)) for s in search_signals_from_observations(objs)]
-    keep = ("CTR_OPPORTUNITY", "CANNIBALIZATION")
-    assert [g for g in got if g["t"] in keep] == [g for g in GOLDEN["aggregate"] if g["t"] in keep]
-    # near-win decisions differ ONLY by becoming 'not assessable' (legacy 'unset' values count as unknown under the flag)
-    assert all(g["e"][0] == "not assessable: relevance unknown" for g in got if g["t"] == "NEAR_WIN")
+    # legacy rows are never part of the conflict logic, so flag on adds no conflict signals for them
+    assert not [g for g in got if g["t"] == "RELEVANCE_CONFLICT"]
+    na = [g for g in got if g["e"][0] == "not assessable: relevance unknown"]
+    assert all(g["t"] == "NEAR_WIN" for g in na)
+    rest = [g for g in got if g["e"][0] != "not assessable: relevance unknown"]
+    # everything else is the base output; the only base signals that vanish are the near-wins whose legacy
+    # relevance was the unlabelled default 0.0 (now reported as not assessable instead of... nothing: they were
+    # never emitted at 0.0), so the sets are equal
+    assert rest == GOLDEN["aggregate"]
 
 
 def test_not_assessable_never_becomes_a_governed_action(flag_on):
@@ -325,7 +330,7 @@ def test_signal_evidence_carries_embedder_provenance():
     assert s is not None
     line = s.evidence[-1]
     assert line.startswith("relevance provenance: embedding:fake-bow@rev-7;")
-    assert "revision=rev-7" in line and "map=halfcosine" in line and "text_policy=visible-text-v1" in line
+    assert "revision=rev-7" in line and "map=halfcosine" in line and "text_policy=visible-text-v2" in line
 
 
 def test_apply_relevance_never_turns_failure_into_zero_evidence():
@@ -467,7 +472,7 @@ def test_page_representation_is_title_h1_meta_and_bounded_body_only():
     emb = FakeEmbedder()
     big = PageText(title="T" * 1000, h1="Heading", meta_description="Meta", body_text="word " * 100_000)
     make_relevance_fn(emb, DictProvider({"u": big}))(obs(page_url="u"))
-    query, page = next(c for c in emb.calls if len(c) == 2)
+    query, page = next(c for c in emb.calls if len(c) == 2 and c[0] == "agent memory")
     assert query == "agent memory"
     parts = page.split("\n")
     assert len(parts[0]) == 300 and parts[1] == "Heading" and parts[2] == "Meta"
@@ -585,10 +590,10 @@ def test_attach_study_refs_adds_to_evidence_refs_without_inflating_observation_c
     assert "2 supporting observation(s)" in out.explain            # computed before attach: not inflated
     assert out.explain.startswith(exp.explain) and "HYPOTHESIS, synthetic, unvalidated" in out.explain
     assert attach_study_refs(out, [ref]) == out                    # idempotent
-    first_party, synthetic = split_refs(out.evidence_refs)
-    assert first_party == exp.evidence_refs and synthetic == (ref,)
-    opp = attach_study_refs(_opp(), [ref])                         # Opportunity evidence works too
-    assert isinstance(opp, Opportunity) and is_synthetic_ref(opp.evidence_refs[-1])
+    first_party, synthetic, malformed = split_refs(out.evidence_refs)
+    assert first_party == exp.evidence_refs and synthetic == (ref,) and malformed == ()
+    with pytest.raises(TypeError):                                 # Opportunity evidence is counted: refused
+        attach_study_refs(_opp(), [ref])                           # type: ignore[arg-type]
 
 
 def test_synthetic_ref_cannot_enter_first_party_ledger_or_outcome_store():

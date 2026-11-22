@@ -62,6 +62,32 @@ class _Provider:
         return PAGES.get(page_url)
 
 
+def stuffing(emb) -> dict:
+    """Keyword stuffing residual (illustrative): one honest page (the 'backup' page) against all 12 queries, and the
+    same page whose body is stuffed with every query (twice, then once), with the repeat-collapse mitigation on
+    and off. A page that literally contains each query once is 'relevant' to it by this measure; the mitigation
+    only removes repetition."""
+    import agentic_os.content.relevance as rel
+    qs = list(QUERIES)
+    honest = PAGES["backup"]
+    base = ("Kubernetes backup and restore", "Back up your cluster state", "Scheduled snapshots")
+    variants = {"honest_backup_page": honest,
+                "stuffed_body_twice": PageText(*base, " ".join(qs) + " " + " ".join(qs)),
+                "stuffed_body_once": PageText(*base, " ".join(qs))}
+    out = {}
+    original = rel.collapse_repeats
+    for label, fn in (("mitigation_on", original), ("mitigation_off", lambda t: t)):
+        rel.collapse_repeats = fn
+        out[label] = {}
+        for name, page in variants.items():
+            f = make_relevance_fn(emb, type("P", (), {"page_text": lambda self, u, pg=page: pg})())
+            vals = [f(SearchObservation(query=q, page_url="u")).value for q in qs]
+            out[label][name] = {"mean": round(statistics.mean(vals), 3), "queries_at_or_above_0.6":
+                                f"{sum(v >= 0.6 for v in vals)}/{len(vals)}"}
+    rel.collapse_repeats = original
+    return out
+
+
 def main(as_json: bool = False) -> int:
     from agentic_os.market.synthetic_research.embedder import SentenceTransformerEmbedder
     emb = SentenceTransformerEmbedder("BAAI/bge-small-en-v1.5")
@@ -88,6 +114,7 @@ def main(as_json: bool = False) -> int:
         }
         out["embedder_revision_recorded"] = fn(SearchObservation(query="invoice software", page_url="invoicing")
                                                ).embedder_revision
+    out["keyword_stuffing"] = stuffing(emb)
     print(json.dumps(out, indent=2) if as_json else json.dumps(out))
     return 0
 
