@@ -19,7 +19,7 @@ from .elicitation import ChatRequest, Transport, strip_reasoning
 
 THEMES: Dict[str, "re.Pattern[str]"] = {k: re.compile(v, re.I) for k, v in {
     "price_cost": r"\b(?:price|pricing|cost|costs|expensive|afford|budget|subscription|fee|fees|roi|worth the money|per month|per seat|hidden cost)\b",
-    "security_data": r"\b(?:security|secure|privacy|confidential\w*|breach|encrypt\w*|access control|data (?:protection|privacy|security|residency|leak\w*|goes|is stored)|(?:my|our|their|customer|client|tenant)(?: \w+)? data|leak\w*)\b",
+    "security_data": r"\b(?:security|secure|privacy|confidential\w*|breach|encrypt\w*|access control|data (?:protection|privacy|security|residency|leak\w*|goes|is stored)|(?:my|our|their|customer|client|tenant)(?: \w+)? data|data (?:breach|leak)\w*)\b",
     "compliance_legal": r"\b(?:complian\w*|legal|licen[cs]e\w*|regulat\w*|audit\w*|gdpr|hipaa|soc ?2|iso ?27001|liabilit\w*|contract\w*|certif\w*)\b",
     "evidence_proof": r"\b(?:proof|evidence|case stud\w*|references?|testimonial\w*|benchmark\w*|results|track record|independent|verif\w*|demonstrat\w*|numbers)\b",
     "integration_fit": r"\b(?:integrat\w*|connect\w*|compatib\w*|existing (?:tools?|systems?|stack|setup|software|apps?)|plug into|work(?:s)? with)\b",

@@ -6,8 +6,8 @@ full local pack, paper-cosine, epsilon 0, T 1):
 * ``leave_one_set_out`` — drop each anchor set in turn;
 * ``single_set`` — each anchor set alone;
 * ``shuffled_within_set`` — NEGATIVE CONTROL: anchors permuted inside each set (seeded), destroying the Likert
-  ordering; a working scorer must collapse (per-response correlation with the primary near zero, no stable
-  between-variant spread);
+  ordering; a working scorer must collapse: the MEDIAN per-response correlation with the primary over many
+  permutations should be near zero (``shuffle_null``); one permutation alone can keep much of the order;
 * ``wrong_construct`` — NEGATIVE CONTROL: the same texts scored with another construct's pack;
 * ``paraphrase_pack`` — a second, independently worded pack for the same construct (``anchors_alt``);
 * ``eps_T`` sweeps — epsilon in {0, .01, .05, .1} x {paper-cosine, ref-halfcosine}, T in {0.5, 1, 2}.
@@ -70,7 +70,7 @@ def _compare(name: str, rows, scores, primary_scores, primary_means, *, note: st
 
 
 def anchor_sensitivity(rows: Sequence[Mapping[str, Any]], sets: Sets, *, alt_sets: Optional[Sets] = None,
-                       wrong_sets: Optional[Sets] = None, seed: int = 0) -> Dict[str, Any]:
+                       wrong_sets: Optional[Sets] = None, seed: int = 0, n_shuffles: int = 20) -> Dict[str, Any]:
     """``rows``: dicts with ``variant_id`` and ``vec`` (the response embedding)."""
     if not rows:
         raise ValueError("no rows")
@@ -86,7 +86,12 @@ def anchor_sensitivity(rows: Sequence[Mapping[str, Any]], sets: Sets, *, alt_set
     for k in range(len(sets)):
         add(_compare(f"single_set_{k}", rows, _scores(rows, [sets[k]], VARIANT_PAPER, 0.0, 1.0), prim, pm))
     add(_compare("shuffled_within_set (NEGATIVE CONTROL)", rows, _scores(rows, _shuffle_sets(sets, seed), VARIANT_PAPER, 0.0, 1.0),
-                 prim, pm, note="anchor order destroyed; the score should decorrelate from the primary"))
+                 prim, pm, note="anchor order destroyed (one seeded permutation: a single permutation can preserve much of the order, "
+                                "so see the permutation null below)"))
+    nulls = sorted(stats.spearman(_scores(rows, _shuffle_sets(sets, seed * 1000 + k + 1), VARIANT_PAPER, 0.0, 1.0), prim)
+                   for k in range(n_shuffles))
+    out["shuffle_null"] = {"n_shuffles": n_shuffles, "per_response_spearman_median": nulls[len(nulls) // 2],
+                           "per_response_spearman_min": nulls[0], "per_response_spearman_max": nulls[-1]}
     if wrong_sets is not None:
         add(_compare("wrong_construct_pack (NEGATIVE CONTROL)", rows, _scores(rows, wrong_sets, VARIANT_PAPER, 0.0, 1.0), prim, pm,
                      note="texts scored with another construct's anchors"))
@@ -99,8 +104,9 @@ def anchor_sensitivity(rows: Sequence[Mapping[str, Any]], sets: Sets, *, alt_set
                 if variant == VARIANT_PAPER and eps == 0.0 and temp == 1.0:
                     continue
                 add(_compare(f"{variant} eps={eps} T={temp}", rows, _scores(rows, sets, variant, eps, temp), prim, pm))
-    neg = [s for s in out["schemes"] if "NEGATIVE CONTROL" in s["scheme"]]
-    out["negative_controls_collapse"] = all(abs(s["per_response_spearman_vs_primary"]) < 0.5 for s in neg) if neg else None
+    neg = [s for s in out["schemes"] if "NEGATIVE CONTROL" in s["scheme"] and "shuffled" not in s["scheme"]]
+    out["negative_controls_collapse"] = (abs(out["shuffle_null"]["per_response_spearman_median"]) < 0.5
+                                         and all(abs(s["per_response_spearman_vs_primary"]) < 0.5 for s in neg))
     out["n_unstable_schemes"] = sum(1 for s in out["schemes"] if s["unstable"] and "NEGATIVE" not in s["scheme"])
     out["n_schemes"] = len([s for s in out["schemes"] if "NEGATIVE" not in s["scheme"]])
     return out

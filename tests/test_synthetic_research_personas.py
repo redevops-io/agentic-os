@@ -232,6 +232,26 @@ def test_unsupported_claim_detector_on_crafted_cases_has_a_measured_false_positi
     assert G.find_unsupported("It integrates with Salesforce.", CORP)[0].kind in ("feature", "entity")
 
 
+AUDITED_FALSE_POSITIVES = [      # real dry-run answers flagged by the first detector version and judged NOT unsupported claims by manual audit
+    "I doubt this applies to my firm, as it targets large teams with separate finance and support departments, not my one-person operation.",
+    "I'll stick with my spreadsheets until they offer a trial that proves ROI without switching my whole stack.",
+    "The \"download desktop app\" CTA contradicts the \"nothing to install\" claim, raising red flags about their accuracy.",
+    "I need clear security documentation and support details before considering it.",
+    "I'd doubt their credibility because the hyperbolic \"world's best\" claims contradict the professional tone needed for MSPs.",
+    "Without clear pricing based on headcount and data residency guarantees, this generic promise is useless for my agency.",
+    "I need evidence it fits our spreadsheet workflow and guarantees client data confidentiality before considering it.",
+    "I'd need specific SOC 2 reports and verifiable audit logs to trust their security claims, not just marketing fluff.",
+    "I immediately doubt this because \"free forever\" contradicts \"$5,000 a month\", and \"unlimited users\" conflicts with \"maximum one user.\"",
+    "Without clear access controls and evidence they support MSPs well, I'd stick with my current PSA and RMM setup.",
+]
+
+
+def test_detector_does_not_flag_audited_false_positives_from_real_dry_run_answers():
+    corpus = CORP + ["Free forever. Costs 5,000 dollars a month. Unlimited users, maximum one user. Your apps work together."]
+    for t in AUDITED_FALSE_POSITIVES:
+        assert G.find_unsupported(t, corpus) == [], t
+
+
 def test_detector_never_changes_the_response_and_ignores_the_respondents_own_needs():
     r = "I would need ISO 27001 evidence."
     assert G.find_unsupported(r, CORP) == [] and r == "I would need ISO 27001 evidence."

@@ -54,6 +54,14 @@ def render_markdown(result: StudyResult, *, title: str = "", extra: Sequence[Tup
           f"- snapshots: " + "; ".join(f"{s['url']} sha256={s['sha256'][:16]} fetched {s['fetched_at']}" for s in m.snapshot_refs),
           f"- counts: {json.dumps(to_plain(m.counts))}; cost: {json.dumps(to_plain(m.cost))}; truncated: {m.truncated}",
           f"- untrusted-content flags: {json.dumps(to_plain(m.untrusted_content_flags))}", ""]
+    if m.planted_order:
+        po = m.planted_order
+        L += ["## Planted order (sealed before scoring)", "",
+              f"Best to worst by construction: {' > '.join(po.get('ids_best_to_worst', []))}; sealed hash `{po.get('sealed_hash', '')[:16]}`. {po.get('rule', '')}", ""]
+    if m.concept_split:
+        L += ["## Tuning / held-out split (drawn before scoring)", "",
+              f"seed {m.concept_split.get('seed')}, hash `{str(m.concept_split.get('split_hash', ''))[:16]}`; tuning: {', '.join(m.concept_split.get('tuning', []))}; "
+              f"held-out: {', '.join(m.concept_split.get('held_out', []))}. Settings may be chosen on the tuning half only.", ""]
     L += ["## Limitations", ""] + [f"- {x}" for x in m.limitations] + [""]
     a = result.abstentions
     L += ["## Abstentions and exclusions", "",

@@ -487,7 +487,10 @@ def test_anchor_sensitivity_shuffled_and_wrong_construct_controls_collapse_and_a
     assert any("ref-halfcosine" in n for n in names) and any("T=0.5" in n for n in names)
     assert out["n_schemes"] > 10 and "unstable" in out["schemes"][0]
     shuf = next(s for s in out["schemes"] if "shuffled" in s["scheme"])
-    assert shuf["per_response_spearman_vs_primary"] < 0.9                      # ordering destroyed: scores decorrelate
+    assert shuf["per_response_spearman_vs_primary"] < 0.99                     # one permutation: scores change
+    null = out["shuffle_null"]
+    assert null["n_shuffles"] == 20 and null["per_response_spearman_min"] <= null["per_response_spearman_median"] <= null["per_response_spearman_max"]
+    assert null["per_response_spearman_median"] < 0.9
     AA.PURCHASE_INTENT_ALT.validate(); AA.TRUST_ALT.validate()
     assert AA.PURCHASE_INTENT_ALT.pack_id != A.get_pack("purchase_intent").pack_id
     assert set(AA.PURCHASE_INTENT_ALT.flat_texts()).isdisjoint(A.get_pack("purchase_intent").flat_texts())
