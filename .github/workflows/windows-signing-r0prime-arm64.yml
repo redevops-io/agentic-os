@@ -66,6 +66,19 @@
 # wheels for cryptography after 46.0.3, and this repo's pin (50.0.1) has none, so the unmodified
 # packaging scripts cannot succeed on this architecture no matter what the environment provides —
 # fixing it requires script changes, which a frozen commit cannot carry.
+#
+# Real run 44969036093 (BUILD_COMMIT=9641eed3, release/0.6.0) got all the way through collect,
+# sign-inner (the first real Azure Trusted Signing call on ARM64 inner files - launcher, sidecar,
+# uninstaller - succeeded) and apply-and-rebuild, then died in the VERY LAST job, sign-container:
+# "ERROR: file name not allowed: Agentic Apps R0-prime_0.1.1_arm64_en-US.msi". packaging/signing/
+# sign_windows_r0prime_v3.sh's role_of() file-name allowlist was written when only the x64 build
+# existed - MSI_NAME/NSIS_NAME hardcode "_x64_"/"_x64-setup.exe", so the ARM64 build's real container
+# names were refused outright, before any signing call for them was even attempted. BUILD_COMMIT here
+# (a911396c) adds a new child commit defining MSI_NAME_ARM64/NSIS_NAME_ARM64 (same product/version,
+# "_arm64_" instead of "_x64_") and accepting either in role_of() - two more specific, fully-qualified
+# names, nothing loosened, nothing else changed in that script. Verified via its own existing test
+# suite (test_release_signing_package.py, test_signing_procedure_r0prime.py, test_scopefix.py - 262
+# passed, 2 skipped, no regressions).
 #   fc254a34 -> 04db1b26  adds the ARCH-gated cryptography-from-sdist branch (the actual fix)
 #            -> 16fa5b08  corrects ARCH's own detection: 04db1b26 read PROCESSOR_ARCHITECTURE from
 #                          git-bash, but git-bash.exe is itself an x86-64 binary that runs under
@@ -120,14 +133,14 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type EXACTLY: sign arm64 9641eed3f3fdc7f7b78f0cd65eb8a5824e6c694c'
+        description: 'Type EXACTLY: sign arm64 a911396c2e595f920ff4c0e6a290f2644cdc88a5'
         required: true
 
 permissions:
   contents: read
 
 env:
-  BUILD_COMMIT: 9641eed3f3fdc7f7b78f0cd65eb8a5824e6c694c
+  BUILD_COMMIT: a911396c2e595f920ff4c0e6a290f2644cdc88a5
   PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.1"
 
 jobs:
@@ -136,7 +149,7 @@ jobs:
     steps:
       - name: Confirm the exact commit phrase was typed
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 9641eed3f3fdc7f7b78f0cd65eb8a5824e6c694c" ]; then
+          if [ "${{ github.event.inputs.confirm }}" != "sign arm64 a911396c2e595f920ff4c0e6a290f2644cdc88a5" ]; then
             echo "::error::confirmation phrase did not match exactly; refusing to proceed"
             exit 1
           fi
@@ -150,11 +163,11 @@ jobs:
             exit 1
           fi
           TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
-          if [ "${TREE:0:8}" != "e72422a2" ]; then
-            echo "::error::BUILD_COMMIT's tree hash does not start with the expected e72422a2 prefix (got $TREE) - refusing"
+          if [ "${TREE:0:8}" != "ce8ee2c7" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected ce8ee2c7 prefix (got $TREE) - refusing"
             exit 1
           fi
-          echo "BUILD_COMMIT verified present, tree prefix e72422a2 confirmed."
+          echo "BUILD_COMMIT verified present, tree prefix ce8ee2c7 confirmed."
 
   collect:
     needs: guard
@@ -168,7 +181,7 @@ jobs:
       # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 9641eed3f3fdc7f7b78f0cd65eb8a5824e6c694c
+          ref: a911396c2e595f920ff4c0e6a290f2644cdc88a5
       - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
         shell: bash
         run: |
@@ -344,7 +357,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 9641eed3f3fdc7f7b78f0cd65eb8a5824e6c694c
+          ref: a911396c2e595f920ff4c0e6a290f2644cdc88a5
 
       - name: Download round1 state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -549,7 +562,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 9641eed3f3fdc7f7b78f0cd65eb8a5824e6c694c
+          ref: a911396c2e595f920ff4c0e6a290f2644cdc88a5
 
       - name: CPython 3.12.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -699,7 +712,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: 9641eed3f3fdc7f7b78f0cd65eb8a5824e6c694c
+          ref: a911396c2e595f920ff4c0e6a290f2644cdc88a5
 
       - name: Download round2 containers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4

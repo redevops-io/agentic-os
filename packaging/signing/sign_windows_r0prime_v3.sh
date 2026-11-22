@@ -139,6 +139,11 @@ FROZEN_PRODUCT="$(idj frozen.product_name)"; FROZEN_MAIN="$(idj frozen.main_bina
 [ "$PRODUCT" != "$FROZEN_PRODUCT" ] && [ "$MAIN_NAME" != "$FROZEN_MAIN" ] || die "identity.json does not describe a line distinct from the frozen v0.3.2 line"
 MSI_NAME="${PRODUCT}_${VERSION}_x64_en-US.msi"
 NSIS_NAME="${PRODUCT}_${VERSION}_x64-setup.exe"
+# Same line, same product/version, second ARCHITECTURE: windows-signing-r0prime-arm64.yml produces these
+# alongside the x64 MSI/NSIS container names above - never instead of them, and never for any other
+# architecture string. role_of() below accepts either arch's exact container name for the SAME product/version.
+MSI_NAME_ARM64="${PRODUCT}_${VERSION}_arm64_en-US.msi"
+NSIS_NAME_ARM64="${PRODUCT}_${VERSION}_arm64-setup.exe"
 FROZEN_MSI="$(idj frozen.product_name)_$(idj frozen.version)_x64_en-US.msi"
 FROZEN_NSIS="$(idj frozen.product_name)_$(idj frozen.version)_x64-setup.exe"
 
@@ -243,8 +248,8 @@ VERIFY_SHA="$(sha "$VERIFY_PY")"
 # ---- file-name policy per stage (frozen names are refused; the role decides what the file is)
 role_of() { # basename -> prints role, or returns 1
   local b="$1"
-  if [ "$b" = "$MSI_NAME" ]; then echo msi; return 0; fi
-  if [ "$b" = "$NSIS_NAME" ]; then echo nsis; return 0; fi
+  if [ "$b" = "$MSI_NAME" ] || [ "$b" = "$MSI_NAME_ARM64" ]; then echo msi; return 0; fi
+  if [ "$b" = "$NSIS_NAME" ] || [ "$b" = "$NSIS_NAME_ARM64" ]; then echo nsis; return 0; fi
   if [[ "$b" =~ ^(launcher|sidecar|uninstaller)-([0-9a-f]{64})\.exe$ ]]; then echo "${BASH_REMATCH[1]}"; return 0; fi
   return 1
 }
@@ -254,7 +259,7 @@ while [ $i -lt ${#INPUTS[@]} ]; do
   [[ "$want" =~ ^[0-9a-f]{64}$ ]] || die "--sha256 must be 64 hex chars"
   [ -f "$f" ] && [ ! -L "$f" ] || die "input not found or a symlink: $f"
   if [ "$b" = "$FROZEN_MSI" ] || [ "$b" = "$FROZEN_NSIS" ]; then die "$b is a FROZEN v0.3.2 artifact name; this script signs only R0-prime files"; fi
-  role="$(role_of "$b")" || die "file name not allowed: $b (stage inner: <launcher|sidecar|uninstaller>-<sha256>.exe from r0prime_win_signcommand.sh; stage container: exactly $MSI_NAME or $NSIS_NAME)"
+  role="$(role_of "$b")" || die "file name not allowed: $b (stage inner: <launcher|sidecar|uninstaller>-<sha256>.exe from r0prime_win_signcommand.sh; stage container: exactly $MSI_NAME, $NSIS_NAME, $MSI_NAME_ARM64 or $NSIS_NAME_ARM64)"
   case "$STAGE:$role" in
     inner:launcher|inner:sidecar|inner:uninstaller|container:msi|container:nsis) ;;
     *) die "role '$role' ($b) does not belong to stage '$STAGE': inner files are signed first, containers last";;
@@ -421,7 +426,7 @@ JSIGN_NAME_ARGS=(--name "$APPNAME"); [ -n "$APPURL" ] && JSIGN_NAME_ARGS+=(--url
 TIMEOUT_S="${R0P_SIGN_TIMEOUT_SECONDS:-900}"
 [[ "$TIMEOUT_S" =~ ^[0-9]{1,5}$ ]] || die "R0P_SIGN_TIMEOUT_SECONDS must be a number of seconds"
 log "$SCRIPT_VERSION  mode: $MODE  stage: $STAGE  files: ${#INPUTS[@]}"
-log "line: product=$PRODUCT version=$VERSION; containers: $MSI_NAME / $NSIS_NAME; launcher=$MAIN_NAME.exe sidecar=$SIDECAR_NAME.exe"
+log "line: product=$PRODUCT version=$VERSION; containers: $MSI_NAME / $NSIS_NAME / $MSI_NAME_ARM64 / $NSIS_NAME_ARM64; launcher=$MAIN_NAME.exe sidecar=$SIDECAR_NAME.exe"
 log "script sha256=$SELF_SHA verifier sha256=$VERIFY_SHA"
 if [ "$MODE" = real ]; then log "timestamp authority: $TSA_PROD (RFC 3161); Azure sign-API calls this run: expected $(( ${#INPUTS[@]} + 1 )) (1 chain-fetch + 1 per file; from Jsign's source, not observed)"; fi
 if [ "$PLAN" = 1 ]; then
