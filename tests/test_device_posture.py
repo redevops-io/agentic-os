@@ -88,6 +88,9 @@ def test_macos_has_no_containment_backend_so_the_device_is_blocked():
 @pytest.mark.parametrize("plat, supported", [("linux", True), ("darwin", False), ("win32", False)])
 def test_probe_reports_containment_by_platform(monkeypatch, plat, supported):
     monkeypatch.setattr(device_posture, "_host_platform", lambda: plat)
+    # a second, independent seam: the real interpreter may lack `resource` (e.g. this test
+    # itself running on windows-latest) regardless of which platform `plat` simulates here
+    monkeypatch.setattr(device_posture, "_resource_importable", lambda: True)
     assert probe_device().containment_supported is supported
 
 
