@@ -111,7 +111,7 @@ class _Raises(Emb):
 
 class _Short(Emb):
     def embed(self, texts):
-        return [[1.0]]
+        return []
 
 
 class _Nan(Emb):

@@ -435,30 +435,101 @@ def collapse_repeats(text: str) -> str:
     return " ".join(out)
 
 
+# ── single flight and bounded caches ──────────────────────────────────────────────────────────────────────
+MAX_RETRY_SECONDS = 300.0            # hard cap for failure TTLs and call timeouts
+DEFAULT_RETRY_SECONDS = 30.0
+DEFAULT_CALL_TIMEOUT_SECONDS = 120.0
+
+
+def _cap_seconds(value: float, default: float) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(v, 0.0), MAX_RETRY_SECONDS) if math.isfinite(v) else default
+
+
+class _Flight:
+    __slots__ = ("done", "outcome")
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.outcome: Optional[tuple] = None
+
+
+class _SingleFlight:
+    """Concurrent identical requests share ONE in-flight call. The first caller (the leader) runs ``fn`` in a daemon
+    worker thread and waits at most ``timeout`` seconds; every other caller with the same key waits on the leader's
+    outcome (also at most ``timeout``) and receives the SAME outcome, including the same failure. A hung call
+    therefore blocks nobody forever: the leader and the waiters get ``("error", "timeout")``, the stale flight is
+    dropped so the next request starts a new one, and a late result of the abandoned worker is discarded. Distinct
+    keys never block each other (the lock only guards the table, never a call)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._flights: Dict[object, _Flight] = {}
+
+    def run(self, key: object, fn: Callable[[], tuple], timeout: float) -> tuple:
+        with self._lock:
+            flight = self._flights.get(key)
+            leader = flight is None
+            if leader:
+                flight = self._flights[key] = _Flight()
+        if not leader:
+            return flight.outcome if flight.done.wait(timeout) and flight.outcome is not None else ("error", "timeout")
+
+        def work() -> None:
+            try:
+                out = fn()
+            except BaseException as exc:  # noqa: BLE001 — fn should return outcomes; never lose a failure
+                out = ("error", "exception:" + _safe_token(type(exc).__name__))
+            with self._lock:
+                if flight.outcome is None:           # an abandoned (timed-out) flight keeps its timeout outcome
+                    flight.outcome = out
+
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        worker.join(timeout)
+        with self._lock:
+            if flight.outcome is None:
+                flight.outcome = ("error", "timeout")
+            if self._flights.get(key) is flight:
+                del self._flights[key]
+            out = flight.outcome
+        flight.done.set()
+        return out
+
+
 # ── the hook ──────────────────────────────────────────────────────────────────────────────────────────────
 def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProvider, *,
                       similarity_map: str = DEFAULT_SIMILARITY_MAP, embedder_revision: Optional[str] = None,
                       max_query_chars: int = 300, max_title_chars: int = 300, max_h1_chars: int = 300,
                       max_meta_chars: int = 500, max_body_chars: int = 2000,
-                      cache_size: int = 256, probe_retry_seconds: float = 30.0,
+                      cache_size: int = 256, probe_retry_seconds: float = DEFAULT_RETRY_SECONDS,
+                      failure_ttl_seconds: float = DEFAULT_RETRY_SECONDS,
+                      call_timeout_seconds: float = DEFAULT_CALL_TIMEOUT_SECONDS,
                       _clock: Callable[[], float] = time.monotonic) -> Callable[["SearchObservation"], RelevanceResult]:
     """Build ``relevance_fn(observation) -> RelevanceResult`` for ``collect_search_observations``.
 
     The embedder revision recorded in every result is, in order: the ``embedder_revision`` argument, the
     embedder's own ``revision`` attribute, else a behavioural fingerprint ``probe:<sha256[:12]>`` of the
-    embedding of a fixed probe string. A failed probe is remembered only briefly: the result says ``unrecorded``
-    with ``provenance_incomplete=True`` and the probe is not retried until ``probe_retry_seconds`` (default 30 s)
-    have passed, so a permanently failing embedder costs one extra probe call per interval, not one per row; a
-    later success repairs the revision. The same probe embeds a second,
-    unrelated text: an embedder that returns the same vector for both is reported as
-    ``unavailable:degenerate_embedder`` (a constant embedder would otherwise score every pair 1.0). The embedder
-    is trusted code; its name/revision are sanitised and a name containing an 'ssr'/'synthetic' token is refused.
+    embedding of a fixed probe string. The same probe embeds a second, unrelated text: an embedder that returns the
+    same vector for both is reported as ``unavailable:degenerate_embedder`` (a constant embedder would otherwise
+    score every pair 1.0). The embedder is trusted code; its name/revision are sanitised and a name containing an
+    'ssr'/'synthetic' token is refused.
 
-    The returned function memoises page text (per ``page_url``) and embeddings (per text hash) in bounded caches
-    guarded by a lock. Values are deterministic and race-free under concurrent use (no torn or evicted-mid-read
-    state), and repeated calls for a page reuse the cached text; there is NO single-flight, so concurrent FIRST
-    hits on the same page or text may each call the provider/embedder. Build a new function for each collection
-    run so page text is never stale. Deterministic for a deterministic embedder and page provider."""
+    SINGLE FLIGHT. Concurrent identical requests share one in-flight call: one provider call per page and one embed
+    call per distinct text (key: embedder name + configured revision + normalised text hash), whatever the number of
+    threads; waiters receive the leader's result or the same failure. A call that does not finish within
+    ``call_timeout_seconds`` (default 120, capped at 300) yields ``unavailable:..._timeout`` for the leader and the
+    waiters and never blocks others; distinct keys never block each other.
+
+    BOUNDED FAILURE CACHE. A failed probe, provider call, embed call or timeout is remembered for
+    ``probe_retry_seconds`` / ``failure_ttl_seconds`` (default 30 s, capped at 300 s, injectable clock), so a
+    permanently failing dependency costs one call per interval, not one per row; a success afterwards repairs the
+    state. Positive and negative caches hold at most ``cache_size`` entries each, so memory cannot grow with
+    repeated failures. A failed probe leaves results ``provenance_incomplete``. Build a new function for each
+    collection run so page text is never stale. Deterministic for a deterministic embedder and page provider."""
     if similarity_map not in SIMILARITY_MAPS:
         raise ValueError(f"unknown similarity_map {similarity_map!r}; known: {sorted(SIMILARITY_MAPS)}")
     to_unit = SIMILARITY_MAPS[similarity_map]
@@ -468,37 +539,78 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                          "models only")
     given_rev = _meta(embedder_revision if embedder_revision else getattr(embedder, "revision", None) or "")
     name_token = re.sub(r"\s+", "_", name)
+    probe_ttl = _cap_seconds(probe_retry_seconds, DEFAULT_RETRY_SECONDS)
+    fail_ttl = _cap_seconds(failure_ttl_seconds, DEFAULT_RETRY_SECONDS)
+    call_timeout = max(0.001, _cap_seconds(call_timeout_seconds, DEFAULT_CALL_TIMEOUT_SECONDS))
+    flights = _SingleFlight()
     lock = threading.Lock()
-    state: Dict[str, object] = {"probed": False, "degenerate": False, "probe_rev": "", "failed_at": None}
-    cache: Dict[str, List[float]] = {}
-    pages: Dict[str, PageText] = {}
+    state: Dict[str, object] = {"probed": False, "degenerate": False, "probe_rev": ""}
+    pos: Dict[object, object] = {}                       # successful results (page text / vectors)
+    neg: Dict[object, Tuple[float, str]] = {}            # key -> (expires_at, failure reason)
+    key_prefix = f"{name}|{given_rev or 'fingerprint'}|"
+
+    def remember(key: object, outcome: tuple, ttl: float) -> None:
+        with lock:
+            if outcome[0] == "error" or outcome[0] == "none":
+                if len(neg) >= cache_size:
+                    now = _clock()
+                    for k in [k for k, (exp, _) in neg.items() if exp <= now]:
+                        del neg[k]
+                    if len(neg) >= cache_size:
+                        neg.clear()
+                neg[key] = (_clock() + ttl, outcome[1] if outcome[0] == "error" else "none")
+            else:
+                if len(pos) >= cache_size:
+                    pos.clear()
+                pos[key] = outcome[1]
+                neg.pop(key, None)
+
+    def lookup(key: object):
+        """('hit', value) | ('fail', reason) | None (miss or expired failure)."""
+        with lock:
+            if key in pos:
+                return ("hit", pos[key])
+            entry = neg.get(key)
+            if entry is not None:
+                if entry[0] > _clock():
+                    return ("fail", entry[1])
+                del neg[key]
+        return None
+
+    def fetch(key: object, fn: Callable[[], tuple], ttl: float) -> tuple:
+        cached = lookup(key)
+        if cached is not None:
+            if cached[0] == "hit":
+                return ("ok", cached[1])
+            return ("none",) if cached[1] == "none" else ("error", cached[1])
+        outcome = flights.run(key, fn, call_timeout)
+        remember(key, outcome, ttl)
+        return outcome
 
     def probe() -> None:
-        """Establish the fingerprint revision and the degenerate-embedder verdict. A success is remembered for
-        good; a failure only for ``probe_retry_seconds`` (bounded cost, still flagged provenance_incomplete)."""
+        """Establish the fingerprint revision and the degenerate-embedder verdict (one flight, bounded retries)."""
         with lock:
             if state["probed"]:
                 return
-            failed_at = state["failed_at"]
-            if failed_at is not None and _clock() - float(failed_at) < probe_retry_seconds:
-                return
-        try:
-            vecs = embedder.embed([_PROBE_TEXT, _PROBE_TEXT_2])
-            if len(vecs) != 2:
-                raise ValueError("bad probe shape")
-            va, vb = [float(x) for x in vecs[0]], [float(x) for x in vecs[1]]
-            cos = _cosine(va, vb)
-            if cos is None:
-                raise ValueError("degenerate probe vectors")
-            digest = _hex_sha256(",".join(f"{x:.4f}" for x in va))[:12]
-        except Exception:  # noqa: BLE001
+
+        def run_probe() -> tuple:
+            try:
+                vecs = embedder.embed([_PROBE_TEXT, _PROBE_TEXT_2])
+                if len(vecs) != 2:
+                    return ("error", "bad_probe_shape")
+                va, vb = [float(x) for x in vecs[0]], [float(x) for x in vecs[1]]
+                cos = _cosine(va, vb)
+                if cos is None:
+                    return ("error", "degenerate_probe")
+                digest = _hex_sha256(",".join(f"{x:.4f}" for x in va))[:12]
+                return ("ok", (f"probe:{digest}", va == vb or cos >= 1.0 - 1e-12))
+            except Exception as exc:  # noqa: BLE001
+                return ("error", "probe_error:" + _safe_token(type(exc).__name__))
+        outcome = fetch("probe", run_probe, probe_ttl)
+        if outcome[0] == "ok":
             with lock:
-                state["failed_at"] = _clock()
-            return
-        with lock:
-            state["probe_rev"] = f"probe:{digest}"
-            state["degenerate"] = va == vb or cos >= 1.0 - 1e-12
-            state["probed"] = True
+                state["probe_rev"], state["degenerate"] = outcome[1]
+                state["probed"] = True
 
     def revision() -> Tuple[str, bool]:
         if given_rev:
@@ -517,6 +629,18 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                 parts.append(clean)
         return "\n".join(parts)
 
+    def vector(text: str) -> tuple:
+        def run_embed() -> tuple:
+            try:
+                vecs = embedder.embed([text])
+                if len(vecs) != 1:
+                    return ("error", "embedder_error:bad_shape")
+                return ("ok", [float(x) for x in vecs[0]])
+            except Exception as exc:  # noqa: BLE001
+                return ("error", "embedder_error:" + _safe_token(type(exc).__name__))
+        out = fetch(("vec", key_prefix + _hex_sha256(text)), run_embed, fail_ttl)
+        return ("error", "embedder_timeout") if out == ("error", "timeout") else out
+
     def relevance_fn(observation: "SearchObservation") -> RelevanceResult:
         query = sanitize_text(getattr(observation, "query", ""), max_query_chars)
         q_hash = _hex_sha256(query) if query else ""
@@ -524,22 +648,20 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
         if not query:
             return _unavailable("empty_query", **common)
         url = str(getattr(observation, "page_url", "") or "")
-        with lock:
-            page = pages.get(url)
-        if page is None:
+
+        def run_page() -> tuple:
             try:
-                page = page_text_provider.page_text(url)
+                pg = page_text_provider.page_text(url)
             except Exception as exc:  # noqa: BLE001 — never propagate provider failures as a number
-                return _unavailable(f"page_text_provider_error:{_safe_token(type(exc).__name__)}",
-                                    query_hash=q_hash, **common)
-            if isinstance(page, PageText):
-                with lock:
-                    if len(pages) >= cache_size:
-                        pages.clear()
-                    pages[url] = page
-        if not isinstance(page, PageText):
+                return ("error", "page_text_provider_error:" + _safe_token(type(exc).__name__))
+            return ("ok", pg) if isinstance(pg, PageText) else ("none",)
+        got = fetch(("page", url), run_page, fail_ttl)
+        if got[0] == "error":
+            reason = "page_text_provider_timeout" if got[1] == "timeout" else got[1]
+            return _unavailable(reason, query_hash=q_hash, **common)
+        if got[0] != "ok":
             return _unavailable("no_page_text", query_hash=q_hash, **common)
-        page_text = page_representation(page)
+        page_text = page_representation(got[1])
         if not page_text:
             return _unavailable("no_page_text", query_hash=q_hash, **common)
         p_hash = _hex_sha256(page_text)
@@ -550,31 +672,22 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
             degenerate = bool(state["degenerate"])
         if degenerate:
             return _unavailable("degenerate_embedder", query_hash=q_hash, page_hash=p_hash, **common)
-        try:
-            texts = list(dict.fromkeys((query, page_text)))
-            with lock:                                   # copy what is cached NOW: another thread may evict later
-                have = {t: cache[_hex_sha256(t)] for t in texts if _hex_sha256(t) in cache}
-            need = [t for t in texts if t not in have]
-            if need:
-                vecs = embedder.embed(need)
-                if len(vecs) != len(need):
-                    return _unavailable("embedder_error:bad_shape", query_hash=q_hash, page_hash=p_hash, **common)
-                for t, v in zip(need, vecs):
-                    have[t] = [float(x) for x in v]
-                with lock:
-                    if len(cache) + len(need) > cache_size:
-                        cache.clear()
-                    for t in need:
-                        cache[_hex_sha256(t)] = have[t]
-            qv, pv = have[query], have[page_text]
-        except Exception as exc:  # noqa: BLE001
-            return _unavailable(f"embedder_error:{_safe_token(type(exc).__name__)}",
-                                query_hash=q_hash, page_hash=p_hash, **common)
-        cos = _cosine(qv, pv)
+        qv = vector(query)
+        if qv[0] != "ok":
+            return _unavailable(qv[1], query_hash=q_hash, page_hash=p_hash, **common)
+        pv = vector(page_text)
+        if pv[0] != "ok":
+            return _unavailable(pv[1], query_hash=q_hash, page_hash=p_hash, **common)
+        cos = _cosine(qv[1], pv[1])
         if cos is None:
             return _unavailable("degenerate_embedding", query_hash=q_hash, page_hash=p_hash, **common)
         rev_token = re.sub(r"\s+", "_", rev)
         return RelevanceResult(to_unit(cos), f"{EMBEDDING_SOURCE_PREFIX}{name_token}@{rev_token}", name, rev, p_hash,
                                q_hash, similarity_map, provenance_incomplete=incomplete)
 
+    def cache_info() -> Dict[str, int]:
+        with lock:
+            return {"cached": len(pos), "cached_failures": len(neg), "in_flight": len(flights._flights)}
+
+    relevance_fn.cache_info = cache_info                  # type: ignore[attr-defined]
     return relevance_fn

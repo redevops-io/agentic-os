@@ -402,7 +402,7 @@ def test_unknown_is_none_never_zero_for_every_failure_mode():
 
     class ShortEmbedder(FakeEmbedder):
         def embed(self, texts):
-            return [[1.0]]
+            return []                                             # fewer vectors than texts
 
     class ZeroEmbedder(FakeEmbedder):
         def embed(self, texts):
@@ -472,8 +472,9 @@ def test_page_representation_is_title_h1_meta_and_bounded_body_only():
     emb = FakeEmbedder()
     big = PageText(title="T" * 1000, h1="Heading", meta_description="Meta", body_text="word " * 100_000)
     make_relevance_fn(emb, DictProvider({"u": big}))(obs(page_url="u"))
-    query, page = next(c for c in emb.calls if len(c) == 2 and c[0] == "agent memory")
-    assert query == "agent memory"
+    texts = [c[0] for c in emb.calls if len(c) == 1]                 # one embed call per distinct text (single flight)
+    assert "agent memory" in texts
+    page = next(t for t in texts if t.startswith("T"))
     parts = page.split("\n")
     assert len(parts[0]) == 300 and parts[1] == "Heading" and parts[2] == "Meta"
     assert len(parts[3]) <= 2000 and len(page) <= 300 + 300 + 500 + 2000 + 3
