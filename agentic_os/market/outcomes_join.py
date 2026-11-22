@@ -84,18 +84,34 @@ def refuse_non_first_party(m: object, *, check_caller: bool = True) -> None:
 
 
 class FirstPartyLedger:
-    """Observed first-party metrics, keyed by (metric, segment). Last write wins per key (latest observation)."""
+    """Observed first-party metrics, keyed by (metric, segment). Last write wins per key (latest observation).
+
+    Every metric is verified when it is recorded AND every time it is read (``get``, ``value``, ``higher_is_better``,
+    ``metrics``, iteration, ``measured_metric_names``): a recorded metric that was mutated afterwards (for example
+    with ``object.__setattr__``) raises ``IngestionRefused`` instead of being served. The storage is private; it is
+    not a security boundary against code in the same process, it stops accidental writes."""
 
     def __init__(self) -> None:
-        self._by_key: Dict[Tuple[str, str], FirstPartyMetric] = {}
+        self.__entries: Dict[Tuple[str, str], FirstPartyMetric] = {}
 
     def record(self, m: FirstPartyMetric) -> FirstPartyMetric:
         refuse_non_first_party(m)             # unconditional; may raise ValueError / TypeError / IngestionRefused
-        self._by_key[(m.metric, m.segment)] = m
+        self.__entries[(m.metric, m.segment)] = m
+        return m
+
+    @staticmethod
+    def _checked(m: FirstPartyMetric) -> FirstPartyMetric:
+        try:
+            refuse_non_first_party(m, check_caller=False)
+        except IngestionRefused:
+            raise
+        except (ValueError, TypeError) as exc:
+            raise IngestionRefused(f"a recorded metric failed integrity verification: {exc}") from None
         return m
 
     def get(self, metric: str, segment: str) -> Optional[FirstPartyMetric]:
-        return self._by_key.get((metric, segment))
+        m = self.__entries.get((metric, segment))
+        return None if m is None else self._checked(m)
 
     def value(self, metric: str, segment: str) -> Optional[float]:
         m = self.get(metric, segment)
@@ -107,6 +123,19 @@ class FirstPartyLedger:
             if m is not None:
                 return m.higher_is_better
         return default
+
+    def metrics(self) -> Tuple[FirstPartyMetric, ...]:
+        """Every recorded metric, verified, ordered by (metric, segment)."""
+        return tuple(self._checked(m) for _, m in sorted(self.__entries.items()))
+
+    def __iter__(self):
+        return iter(self.metrics())
+
+    def __len__(self) -> int:
+        return len(self.__entries)
+
+    def measured_metric_names(self) -> Tuple[str, ...]:
+        return tuple(sorted({self._checked(m).metric for m in self.__entries.values()}))
 
 
 @dataclass(frozen=True)
@@ -133,7 +162,7 @@ def measure_experiment(experiment: CommercialExperiment, ledger: FirstPartyLedge
     outcome is inconclusive — never guessed."""
     c = ledger.value(experiment.primary_metric, "control")
     t = ledger.value(experiment.primary_metric, "treatment")
-    measured = tuple(sorted({m for (m, _s) in ledger._by_key}))
+    measured = ledger.measured_metric_names()
     if c is None or t is None:
         ev = ExperimentEvaluation(missing, f"no control/treatment reading for {experiment.primary_metric!r}",
                                   within_guardrails=True, met_minimum_observation=False, primary_delta=0.0)
