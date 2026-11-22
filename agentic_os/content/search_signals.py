@@ -7,15 +7,31 @@ samples never overreact (§9: "position alone must never trigger an intervention
 WATCH, not an immediate rewrite (§3.3); the rest PROPOSE once the observation window is met.
 
 Semantic query↔page relevance is an input on the observation (0..1) — computing it needs embeddings, out of
-scope here; a later slice supplies it. A GSC client feeding these observations is the sensor slice.
+scope here; an optional, injected hook (`agentic_os.content.relevance`, wired through
+`collect_search_observations(..., relevance_fn=...)`) can supply it. `relevance_source` records where the value
+came from so "unknown" is distinguishable from "low" (`docs/SEARCH_RELEVANCE.md`); the detectors only act on
+that distinction behind `AGENTIC_OS_RELEVANCE_UNKNOWN_AWARE` (default OFF). A GSC client feeding these
+observations is the sensor slice.
 """
 from __future__ import annotations
 
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, List, Optional, Tuple
+
+
+RELEVANCE_UNKNOWN_AWARE_ENV = "AGENTIC_OS_RELEVANCE_UNKNOWN_AWARE"
+_TRUTHY = {"1", "true", "yes", "on"}
+NOT_ASSESSABLE = "not assessable: relevance unknown"
+
+
+def relevance_unknown_aware() -> bool:
+    """Feature flag, default OFF. Off: a detector that needs relevance behaves exactly as before (a 0.0 / unset
+    relevance suppresses it). On: it returns a WATCH 'not assessable' signal instead of staying silent."""
+    return os.environ.get(RELEVANCE_UNKNOWN_AWARE_ENV, "").strip().lower() in _TRUTHY
 
 
 class SignalType(str, Enum):
@@ -40,6 +56,38 @@ class SearchObservation:
     relevance: float = 0.0           # semantic query↔page fit, 0..1 (supplied upstream)
     days_observed: int = 0
     site_id: str = ""
+    # Where `relevance` came from. "unset" (default) = nobody supplied it, so 0.0 means UNKNOWN, not "irrelevant";
+    # "unavailable:<reason>" = a relevance_fn tried and could not assess; "embedding:<name>@<revision>" = a
+    # deterministic query↔page embedding similarity; any other label = a value supplied upstream (caller-owned).
+    relevance_source: str = "unset"
+    relevance_detail: str = ""       # provenance of an embedding value (embedder, map, text hashes); "" otherwise
+
+
+def relevance_unknown(o: SearchObservation) -> bool:
+    """True when the observation's relevance was never measured (source 'unset' or 'unavailable:*')."""
+    src = o.relevance_source or "unset"
+    return src == "unset" or src.startswith("unavailable:")
+
+
+def _relevance_provenance(o: SearchObservation) -> Tuple[str, ...]:
+    """Evidence line copied into a signal when its relevance came from the embedding hook (else nothing, so
+    every observation without the hook produces exactly the evidence it always did)."""
+    if (o.relevance_source or "").startswith("embedding:"):
+        return (f"relevance provenance: {o.relevance_source}; {o.relevance_detail}",)
+    return ()
+
+
+def _not_assessable(signal_type: "SignalType", o: SearchObservation, basis: str, *,
+                    status: str = "WATCH") -> "SearchSignal":
+    return SearchSignal(
+        signal_type, o.query, (o.page_url,), 0.0, status,
+        proposed_action="Not assessable: relevance unknown — no query↔page relevance was measured for this "
+                        "observation, so this detector cannot judge it (a low value would be a different statement)",
+        evidence=(NOT_ASSESSABLE, f"relevance_source={o.relevance_source or 'unset'}", basis), site_id=o.site_id)
+
+
+def is_not_assessable(signal: "SearchSignal") -> bool:
+    return bool(signal.evidence) and signal.evidence[0] == NOT_ASSESSABLE
 
 
 @dataclass(frozen=True)
@@ -87,6 +135,11 @@ def _status(o: SearchObservation, th: Thresholds) -> str:
 def near_win(o: SearchObservation, *, th: Thresholds = Thresholds()) -> Optional[SearchSignal]:
     """§3.2: a page ranking ~5–20 with enough impressions and strong query fit — one push could win it.
     Position alone never triggers this (§9): impressions + relevance are required."""
+    if relevance_unknown_aware() and relevance_unknown(o):
+        if o.impressions >= th.min_impressions and th.near_win_pos_min <= o.position <= th.near_win_pos_max:
+            return _not_assessable(SignalType.NEAR_WIN, o, f"position {o.position:.1f} in near-win band, "
+                                                           f"{o.impressions} impressions")
+        return None
     if o.impressions < th.min_impressions or o.relevance < th.min_relevance:
         return None
     if not (th.near_win_pos_min <= o.position <= th.near_win_pos_max):
@@ -97,13 +150,19 @@ def near_win(o: SearchObservation, *, th: Thresholds = Thresholds()) -> Optional
         proposed_action="Strengthen the ranking page for this near-win query "
                         "(exact-query section / title / FAQ / internal links)",
         evidence=(f"position {o.position:.1f} in near-win band, {o.impressions} impressions, "
-                  f"relevance {o.relevance:.2f}",), site_id=o.site_id)
+                  f"relevance {o.relevance:.2f}",) + _relevance_provenance(o), site_id=o.site_id)
 
 
 def emergent_intent(current: SearchObservation, *, baseline_impressions: int,
                     th: Thresholds = Thresholds()) -> Optional[SearchSignal]:
     """§3.3: Google recently started testing a page for a query that was absent/negligible before. Low
     sample + very high fit → WATCH (record, don't rewrite yet); promote only when the threshold is met."""
+    if relevance_unknown_aware() and relevance_unknown(current):
+        if baseline_impressions < th.min_impressions and current.impressions >= th.emergent_min_impressions:
+            return _not_assessable(SignalType.EMERGENT_INTENT, current,
+                                   f"new query/page pairing, {current.impressions} impressions "
+                                   f"(baseline {baseline_impressions})")
+        return None
     if current.relevance < th.emergent_min_relevance:
         return None
     if baseline_impressions >= th.min_impressions:
@@ -116,13 +175,20 @@ def emergent_intent(current: SearchObservation, *, baseline_impressions: int,
         proposed_action="Watch — Google is testing this page for a new query; promote to an intervention "
                         "only when the evidence threshold is met",
         evidence=(f"new query/page pairing, {current.impressions} impressions "
-                  f"(baseline {baseline_impressions}), relevance {current.relevance:.2f}",), site_id=current.site_id)
+                  f"(baseline {baseline_impressions}), relevance {current.relevance:.2f}",)
+        + _relevance_provenance(current), site_id=current.site_id)
 
 
 def missing_page(o: SearchObservation, *, canonical_pages: Iterable[str] = (),
                  th: Thresholds = Thresholds()) -> Optional[SearchSignal]:
     """§3.4: a strong-fit intent ranks on a related but NON-canonical page (e.g. a blog post) — it deserves
     its own canonical page. Skip if a canonical page is already the one ranking."""
+    if relevance_unknown_aware() and relevance_unknown(o):
+        if (o.impressions >= th.min_impressions and o.page_url not in set(canonical_pages)
+                and _NONCANONICAL.search(o.page_url)):
+            return _not_assessable(SignalType.MISSING_PAGE, o, f"non-canonical page ranks, "
+                                                               f"{o.impressions} impressions")
+        return None
     if o.impressions < th.min_impressions or o.relevance < th.min_relevance:
         return None
     if o.page_url in set(canonical_pages) or not _NONCANONICAL.search(o.page_url):
@@ -133,7 +199,7 @@ def missing_page(o: SearchObservation, *, canonical_pages: Iterable[str] = (),
         proposed_action=f"CREATE_CANONICAL_PAGE for '{o.query}' — currently ranking a non-canonical page; "
                         f"link the existing page + related pages to it",
         evidence=(f"non-canonical page ranks for a high-fit intent ({o.impressions} impressions, "
-                  f"relevance {o.relevance:.2f})",), site_id=o.site_id)
+                  f"relevance {o.relevance:.2f})",) + _relevance_provenance(o), site_id=o.site_id)
 
 
 def ctr_opportunity(o: SearchObservation, *, th: Thresholds = Thresholds()) -> Optional[SearchSignal]:

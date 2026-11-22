@@ -12,9 +12,10 @@ Self-skips cleanly: no `google-auth` installed (the `gsc` extra), no key, or an 
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import os
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, List, Optional, Tuple
 
 from agentic_os.content.search_signals import (
     SearchObservation, SearchSignal, Thresholds, cannibalization, ctr_opportunity, near_win,
@@ -98,14 +99,48 @@ def to_observation(row: dict, *, days: int = 28, site_id: str = "") -> Optional[
         position=float(row.get("position", 0.0) or 0.0), days_observed=days, site_id=site_id)
 
 
+def _safe_token(text: str) -> str:
+    return "".join(ch for ch in text if ch.isalnum() or ch in "_-")[:40] or "unknown"
+
+
+def apply_relevance(o: SearchObservation, relevance_fn: Callable[[SearchObservation], Any]) -> SearchObservation:
+    """Return `o` with `relevance`/`relevance_source`/`relevance_detail` set from `relevance_fn(o)`.
+
+    `relevance_fn` returns an object with `value` (float in [0,1] or None), `source`, and an optional
+    `provenance()` string (see `agentic_os.content.relevance.RelevanceResult`). Only an embedding-sourced value
+    ('embedding:<name>@<revision>') is accepted: a synthetic/SSR buyer score or any other source is refused as
+    `unavailable:invalid_result`. A failure, a None value or a malformed result NEVER becomes 0.0 evidence: the observation keeps the placeholder 0.0 but its source is
+    `unavailable:<reason>`, so a downstream detector can tell "unknown" from "measured low"."""
+    try:
+        res = relevance_fn(o)
+    except Exception as exc:  # noqa: BLE001 — a hook failure must not break collection
+        return replace(o, relevance_source=f"unavailable:relevance_fn_error:{_safe_token(type(exc).__name__)}")
+    value = getattr(res, "value", None)
+    source = str(getattr(res, "source", "") or "")
+    if value is None:
+        src = source if source.startswith("unavailable:") else "unavailable:no_value"
+        return replace(o, relevance_source=src)
+    if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0 or not source.startswith("embedding:")):
+        return replace(o, relevance_source="unavailable:invalid_result")
+    detail = getattr(res, "provenance", None)
+    return replace(o, relevance=float(value), relevance_source=source,
+                   relevance_detail=str(detail() if callable(detail) else ""))
+
+
 def collect_search_observations(client: GscClient, site_url: str, *, days: int = 28,
-                                site_id: str = "") -> List[SearchObservation]:
-    """Read a property's query→page performance and normalize to SearchObservations (read-only)."""
+                                site_id: str = "",
+                                relevance_fn: Optional[Callable[[SearchObservation], Any]] = None
+                                ) -> List[SearchObservation]:
+    """Read a property's query→page performance and normalize to SearchObservations (read-only).
+
+    `relevance_fn` (default None: output identical to before) optionally fills the semantic query↔page
+    relevance per observation; it is an injected, read-only callable (see `agentic_os.content.relevance`)."""
     out: List[SearchObservation] = []
     for row in client.search_analytics(site_url, days=days):
         o = to_observation(row, days=days, site_id=site_id or site_url)
         if o is not None:
-            out.append(o)
+            out.append(o if relevance_fn is None else apply_relevance(o, relevance_fn))
     return out
 
 
