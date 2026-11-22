@@ -274,3 +274,33 @@ def test_br3_inline_waiter_timeouts_while_the_leader_is_healthy_do_not_open_the_
     assert fn.cache_info()["breaker_open"] == []                         # even with threshold 1
     leader.join(10)
     assert prov.n == 1 and fn(obs("https://x/p")).available
+
+
+# ── an ordinary error is a RESPONSE: it resets the consecutive-timeout count and closes a half-open breaker ─────
+def test_an_ordinary_error_between_timeouts_resets_the_consecutive_count():
+    now = [0.0]
+    hung = {f"https://x/h{i}" for i in range(8)}
+    boom = {"https://x/err"}
+    prov = Prov(lambda: hung, error=lambda: boom)
+    fn = make_relevance_fn(Emb(), prov, call_timeout_seconds=0.02, _clock=lambda: now[0])
+    for i in range(4):
+        assert fn(obs(f"https://x/h{i}")).source == "unavailable:page_text_provider_timeout"
+    assert fn(obs("https://x/err")).source == "unavailable:page_text_provider_error:OSError"     # a response
+    for i in range(4, 8):                                           # 4 more: 8 timeouts in all, but never 5 in a row
+        assert fn(obs(f"https://x/h{i}")).source == "unavailable:page_text_provider_timeout"
+    assert fn.cache_info()["breaker_open"] == []
+    prov.release.set()
+
+
+def test_an_ordinary_error_as_the_half_open_trial_closes_the_breaker():
+    now = [0.0]
+    down = {f"https://x/down{i}" for i in range(5)}
+    boom = {"https://x/trial-err"}
+    prov = Prov(lambda: down, error=lambda: boom)
+    fn = make_relevance_fn(Emb(), prov, call_timeout_seconds=0.02, _clock=lambda: now[0], breaker_base_seconds=2.0)
+    _open_breaker(fn, now, down)
+    now[0] += 2.5
+    assert fn(obs("https://x/trial-err")).source == "unavailable:page_text_provider_error:OSError"
+    assert fn.cache_info()["breaker"]["provider"] == "closed"        # it answered, however unhappily
+    assert fn(obs("https://x/fine")).available
+    prov.release.set()
