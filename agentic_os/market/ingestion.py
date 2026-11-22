@@ -1,24 +1,26 @@
-"""Trusted ingestion adapters for the first-party metric ledger (SR-04 round 4, defence in depth).
+"""Trusted ingestion adapters for the first-party metric ledger (SR-04, defence in depth).
 
 A ``source`` label on a metric is just a string: it is NOT evidence that the number came from a first-party
 sensor. The ledger therefore also requires an adapter attestation, produced only by a registered
 :class:`SourceAdapter` for that source:
 
 * ``register_source_adapter(source, adapter_id)`` registers an adapter for one of ``METRIC_SOURCES`` (and only
-  those) and returns the :class:`SourceAdapter` that holds its private key. Re-registering an id is refused, so a
-  registered adapter cannot be hijacked by registering it again.
+  those) and returns the :class:`SourceAdapter` that can stamp metrics. An id belongs to one source forever, the
+  ``repo:`` prefix is reserved for the built-in adapters (created at import), registrations are capped, and nothing
+  can be unregistered.
 * ``adapter.make_metric(...)`` is the only supported factory: it builds the ``FirstPartyMetric`` and stamps it with
-  ``attestation = HMAC(adapter key, content digest of the metric)``. The digest covers every metric field and the
-  whole provenance, so the stamp cannot be moved to another metric and any later mutation invalidates it.
-* ``FirstPartyLedger.record`` verifies the stamp. A metric built by hand with ``source='umami'`` has none and is
-  refused.
+  ``attestation = HMAC(adapter key, source + adapter id + content digest)``. The digest covers every metric field
+  and the whole provenance, so the stamp cannot be moved to a DIFFERENT metric and any later mutation invalidates
+  it (an exact copy of a metric keeps a valid attestation, by design).
+* ``FirstPartyLedger.record`` verifies the stamp, and so does every read from the ledger.
 
-HONEST LIMITS. Python cannot make this unforgeable against code that runs in the same process (it can read the
-registry or call ``register_source_adapter`` itself). The registry makes label-only and accidental mislabelling
-impossible and makes every first-party writer an explicit, auditable registration; it is defence in depth. The hard
-guarantee that synthetic research output stays out of the ledger is architectural: the SSR / study packages
-(``agentic_os/market/synthetic_research``) must not import this module, ``outcomes_join`` or the outcome store (a
-static test enforces and extends that rule).
+HONEST LIMITS. This is BYPASSABLE by code that runs in the same process (it can inspect the interpreter's objects,
+call the factory from an unrelated module, or replace this module). These checks stop ACCIDENTAL and CASUAL misuse:
+label-only mislabelling, copied attestations, tampering with a recorded metric, and calls that come (anywhere on the
+call stack) from the synthetic-research package, which is refused outright. The signing keys live in a closure, not
+in instance attributes, and adapters refuse to be pickled or copied. The structural protection is the import rule:
+the SSR / study packages (``agentic_os/market/synthetic_research``) must not import this module, ``outcomes_join`` or
+the outcome store, and importing them must not load these modules (subprocess test).
 
 This module imports nothing from ``outcomes_join`` at import time (``outcomes_join`` imports it).
 """
@@ -29,8 +31,9 @@ import hmac
 import json
 import re
 import secrets
+import sys
 import threading
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 METRIC_SOURCES = ("umami", "gsc", "marketplace", "crm", "billing", "erp", "analytics")
 
@@ -50,8 +53,11 @@ IN_REPO_SOURCE_OWNERS: Mapping[str, str] = {
 _ADAPTER_ID = re.compile(r"^[a-z][a-z0-9_.:-]{2,63}$")
 _TOKEN = re.compile(r"[a-z0-9]+")
 _SCHEME = "v1"
+_BUILTIN_PREFIX = "repo:"
+MAX_REGISTRATIONS = 64                      # caller registrations; the built-ins do not count
+_STUDY_PACKAGE = "agentic_os.market.synthetic_research"
 _LOCK = threading.Lock()
-_KEYS: Dict[Tuple[str, str], bytes] = {}
+_IDS: Dict[str, str] = {}                   # adapter id -> source: an id belongs to ONE source, forever
 
 
 class IngestionRefused(ValueError):
@@ -61,6 +67,21 @@ class IngestionRefused(ValueError):
 def _synthetic_name(text: str) -> bool:
     low = text.lower()
     return any(tok.startswith(("synthetic", "simulat", "study")) or tok == "ssr" for tok in _TOKEN.findall(low))
+
+
+def refuse_study_caller(*, max_frames: int = 80) -> None:
+    """Raise ``IngestionRefused`` if ANY frame on the current call stack belongs to the synthetic-research package.
+    A study / SSR code path may not mint, register or record first-party metrics, directly or through an unrelated
+    helper module it calls. Raises the bar; it cannot stop code that rewrites frames or modules."""
+    frame = sys._getframe(1)
+    for _ in range(max_frames):
+        if frame is None:
+            return
+        name = frame.f_globals.get("__name__", "")
+        if isinstance(name, str) and (name == _STUDY_PACKAGE or name.startswith(_STUDY_PACKAGE + ".")):
+            raise IngestionRefused("the synthetic-research package may not mint, register or record first-party "
+                                   "metrics")
+        frame = frame.f_back
 
 
 def content_digest(m: Any) -> str:
@@ -73,29 +94,77 @@ def content_digest(m: Any) -> str:
     return hashlib.sha256(json.dumps(payload, default=repr, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _mac(key: bytes, digest: str) -> str:
-    return hmac.new(key, digest.encode("ascii"), hashlib.sha256).hexdigest()
+def _make_vault():
+    """The signing keys live in this closure only: no module attribute, no instance attribute."""
+    keys: Dict[Tuple[str, str], bytes] = {}
+
+    def mac_input(source: str, adapter_id: str, digest: str) -> bytes:
+        return f"{source}\n{adapter_id}\n{digest}".encode("utf-8")
+
+    def create(source: str, adapter_id: str) -> Callable[[str], str]:
+        key = secrets.token_bytes(32)
+        keys[(source, adapter_id)] = key
+        return lambda digest: hmac.new(key, mac_input(source, adapter_id, digest), hashlib.sha256).hexdigest()
+
+    def verify(source: str, adapter_id: str, digest: str, mac: str) -> bool:
+        key = keys.get((source, adapter_id))
+        if key is None:
+            return False
+        want = hmac.new(key, mac_input(source, adapter_id, digest), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(want, mac)
+
+    def registered() -> Tuple[Tuple[str, str], ...]:
+        return tuple(sorted(keys))
+    return create, verify, registered
+
+
+_vault_create, _vault_verify, _vault_registered = _make_vault()
 
 
 class SourceAdapter:
-    """A registered producer of first-party metrics for one source. Holds the private attestation key."""
+    """A registered producer of first-party metrics for one source. It can stamp metrics; it exposes no key, has no
+    ``__dict__`` and refuses to be pickled or copied."""
+    __slots__ = ("source", "adapter_id", "_sign")
 
-    def __init__(self, source: str, adapter_id: str, key: bytes) -> None:
-        self.source = source
-        self.adapter_id = adapter_id
-        self.__key = key
+    def __init__(self, source: str, adapter_id: str, sign: Callable[[str], str]) -> None:
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "adapter_id", adapter_id)
+        object.__setattr__(self, "_sign", sign)
 
-    def __repr__(self) -> str:                            # never leaks the key
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("SourceAdapter is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("SourceAdapter is immutable")
+
+    def __repr__(self) -> str:                            # never leaks anything secret
         return f"SourceAdapter(source={self.source!r}, adapter_id={self.adapter_id!r})"
 
+    def __reduce_ex__(self, protocol: int):
+        raise TypeError("SourceAdapter cannot be pickled or copied")
+
+    def __reduce__(self):
+        raise TypeError("SourceAdapter cannot be pickled or copied")
+
+    def __getstate__(self):
+        raise TypeError("SourceAdapter has no serialisable state")
+
+    def __copy__(self):
+        raise TypeError("SourceAdapter cannot be copied")
+
+    def __deepcopy__(self, memo):
+        raise TypeError("SourceAdapter cannot be copied")
+
     def attest(self, metric: Any) -> str:
-        return f"{_SCHEME}:{self.adapter_id}:{_mac(self.__key, content_digest(metric))}"
+        refuse_study_caller()
+        return f"{_SCHEME}:{self.adapter_id}:{self._sign(content_digest(metric))}"
 
     def make_metric(self, *, metric: str, value: float, segment: str = "", surface: str = "",
                     higher_is_better: bool = True, period_start_ms: int = 0, period_end_ms: int = 0,
                     provider_ref: str = "", evidence_refs: Tuple[str, ...] = (), known_at: int = 0,
                     observed_at: Optional[int] = None) -> Any:
         """The supported factory: builds the FirstPartyMetric for this adapter's source and stamps it."""
+        refuse_study_caller()
         from dataclasses import replace
         from ..integrations.business.contracts import Provenance, now_ms
         from .outcomes_join import FirstPartyMetric
@@ -107,9 +176,6 @@ class SourceAdapter:
         return replace(m, attestation=self.attest(m))
 
 
-_BUILTIN_PREFIX = "repo:"
-MAX_REGISTRATIONS = 64                      # caller registrations; the built-ins do not count
-_IDS: Dict[str, str] = {}                   # adapter id -> source: an id belongs to ONE source, forever (no unregister)
 _REPO_ADAPTERS: Dict[str, SourceAdapter] = {}
 
 
@@ -122,10 +188,9 @@ def _register(source: str, adapter_id: str, *, builtin: bool = False) -> SourceA
                                       f" for source {source!r}"))
         if not builtin and len(_IDS) - len(_REPO_ADAPTERS) >= MAX_REGISTRATIONS:
             raise IngestionRefused(f"adapter registration limit ({MAX_REGISTRATIONS}) reached")
-        key = secrets.token_bytes(32)
-        _KEYS[(source, adapter_id)] = key
+        sign = _vault_create(source, adapter_id)
         _IDS[adapter_id] = source
-        return SourceAdapter(source, adapter_id, key)
+        return SourceAdapter(source, adapter_id, sign)
 
 
 def register_source_adapter(source: str, adapter_id: str, *, owner: str = "") -> SourceAdapter:
@@ -133,7 +198,9 @@ def register_source_adapter(source: str, adapter_id: str, *, owner: str = "") ->
     source and can never be registered twice (not even for another source: ``repo:umami`` cannot be reused for
     ``billing``); the ``repo:`` prefix is reserved for the built-in adapters that exist from import time; at most
     ``MAX_REGISTRATIONS`` caller adapters can exist and there is no unregister. ``owner`` is a free-text audit note.
-    Adding a NEW source name is not possible here: that needs a reviewed change to ``METRIC_SOURCES``."""
+    Adding a NEW source name is not possible here: that needs a reviewed change to ``METRIC_SOURCES``. Refused when
+    called from the synthetic-research package."""
+    refuse_study_caller()
     if source not in METRIC_SOURCES:
         raise IngestionRefused(f"source {source!r} is not a registered first-party source; "
                                f"allowed: {', '.join(METRIC_SOURCES)}")
@@ -151,7 +218,8 @@ for _src in METRIC_SOURCES:                 # built-ins: one per source, created
 
 def repo_adapter(source: str) -> SourceAdapter:
     """The built-in adapter (id ``repo:<source>``) for an in-repo producer of ``source``. They are created at import,
-    so there is no first-use race and no id to squat."""
+    so there is no first-use race and no id to squat. Refused when called from the synthetic-research package."""
+    refuse_study_caller()
     try:
         return _REPO_ADAPTERS[source]
     except (KeyError, TypeError):
@@ -159,8 +227,7 @@ def repo_adapter(source: str) -> SourceAdapter:
 
 
 def registered_adapters() -> Tuple[Tuple[str, str], ...]:
-    with _LOCK:
-        return tuple(sorted(_KEYS))
+    return _vault_registered()
 
 
 def verify_attestation(metric: Any) -> None:
@@ -171,10 +238,7 @@ def verify_attestation(metric: Any) -> None:
         raise IngestionRefused("metric has no adapter attestation: build it with a registered source adapter "
                                "(register_source_adapter(...).make_metric(...)); see docs/ledger_source_inventory.md")
     adapter_id, _, mac = att[len(_SCHEME) + 1:].rpartition(":")
-    parts = (_SCHEME, adapter_id, mac)
-    with _LOCK:
-        key = _KEYS.get((metric.source, parts[1]))
-    if key is None:
-        raise IngestionRefused(f"adapter {parts[1]!r} is not registered for source {metric.source!r}")
-    if not hmac.compare_digest(_mac(key, content_digest(metric)), parts[2]):
+    if _IDS.get(adapter_id) != metric.source:
+        raise IngestionRefused(f"adapter {adapter_id!r} is not registered for source {metric.source!r}")
+    if not _vault_verify(metric.source, adapter_id, content_digest(metric), mac):
         raise IngestionRefused("adapter attestation does not match this metric's content (copied or mutated)")

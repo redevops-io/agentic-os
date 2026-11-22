@@ -17,7 +17,7 @@ from typing import ClassVar, Dict, List, Optional, Tuple
 
 from ..integrations.business.contracts import BusinessObject, Provenance
 from .experiment_design import CommercialExperiment, ExperimentEvaluation, evaluate
-from .ingestion import METRIC_SOURCES, IngestionRefused, verify_attestation
+from .ingestion import METRIC_SOURCES, IngestionRefused, refuse_study_caller, verify_attestation
 
 _STUDY_REF_PREFIX = "synthetic-study:"
 
@@ -50,7 +50,7 @@ def _is_study_ref(x: object) -> bool:
     return isinstance(x, str) and x.strip().lower().startswith(_STUDY_REF_PREFIX)
 
 
-def refuse_non_first_party(m: object) -> None:
+def refuse_non_first_party(m: object, *, check_caller: bool = True) -> None:
     """The gate in front of the first-party ledger. UNCONDITIONAL: no feature flag, independent of
     AGENTIC_OS_SYNTHETIC_RESEARCH (it refuses exactly the same with SR-04 and the SSR package disabled).
 
@@ -60,7 +60,11 @@ def refuse_non_first_party(m: object) -> None:
     surrounding whitespace). By SOURCE: the ``source`` must be exactly one of ``METRIC_SOURCES`` (a missing, empty or
     whitespace source, a different case, and every unregistered source are refused: strict allow-list, no
     provider-name heuristics). By ORIGIN: the metric must carry a valid adapter attestation (``ingestion.py``).
-    A defence in depth, not an unforgeable seal against code in the same process."""
+    BYPASSABLE by code that runs in the same process: these checks stop accidental and casual misuse. With
+    ``check_caller`` (the default for writes) a call that has ANY frame of the synthetic-research package on its stack
+    is refused."""
+    if check_caller:
+        refuse_study_caller()
     cls = type(m)
     if getattr(m, "synthetic", False) or "synthetic_research" in getattr(cls, "__module__", ""):
         raise ValueError("a synthetic / study object can never be recorded in the first-party ledger")

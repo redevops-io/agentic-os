@@ -114,8 +114,8 @@ def test_ra2_registrations_are_capped_and_there_is_no_unregister():
 
 
 def test_ra2_a_refused_registration_leaves_the_registry_unchanged():
-    before = (dict(ING._IDS), len(ING._KEYS))
+    before = (dict(ING._IDS), len(ING.registered_adapters()))
     for args in (("ga4", "r5-never-1"), ("billing", "repo:billing"), ("billing", "ssr-import"), ("billing", "BAD")):
         with pytest.raises(IngestionRefused):
             register_source_adapter(*args)
-    assert (dict(ING._IDS), len(ING._KEYS)) == before
+    assert (dict(ING._IDS), len(ING.registered_adapters())) == before

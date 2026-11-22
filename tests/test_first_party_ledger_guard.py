@@ -3,7 +3,7 @@
 Owner decision (option B): a strict METRIC_SOURCES allow-list, no provider/name heuristics, missing or unregistered
 sources refused; plus defence in depth: a metric must carry an attestation minted by a REGISTERED source adapter and
 bound to the metric's content, and synthetic/study artifacts are refused by content and type whatever label they
-carry. The guard is unconditional (no feature flag). Python cannot make this unforgeable against code in the same
+carry. The guard is unconditional (no feature flag). It is bypassable by code in the same
 process; these tests try every bypass a caller could attempt WITHOUT reaching into private registry state."""
 from __future__ import annotations
 
