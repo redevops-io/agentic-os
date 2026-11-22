@@ -47,7 +47,8 @@ if TYPE_CHECKING:  # typing only: no runtime dependency on the synthetic-researc
 
 __all__ = [
     "RelevanceResult", "PageText", "PageTextProvider", "make_relevance_fn", "sanitize_text",
-    "page_text_from_html", "SIMILARITY_MAPS", "DEFAULT_SIMILARITY_MAP", "TEXT_POLICY_ID", "EMBEDDING_SOURCE_PREFIX",
+    "page_text_from_html", "parse_relevance_source", "ParsedSource", "SIMILARITY_MAPS", "DEFAULT_SIMILARITY_MAP",
+    "TEXT_POLICY_ID", "EMBEDDING_SOURCE_PREFIX",
 ]
 
 EMBEDDING_SOURCE_PREFIX = "embedding:"
@@ -253,13 +254,79 @@ def _synthetic_looking(text: str) -> bool:
     return any(tok.startswith(_FORBIDDEN_SOURCE_PREFIXES) for tok in _SYNTHETIC_TOKEN.findall(folded))
 
 
+MAX_SOURCE_CHARS = 300
+_RESERVED_HEADS = ("embedding", "unavailable", "unset")
+_LABEL_HEAD = re.compile(r"^[A-Za-z0-9_.-]+$")
+_UNAVAILABLE_REASON = re.compile(r"^[A-Za-z0-9_.:@/-]{1,200}$")
+
+
+@dataclass(frozen=True)
+class ParsedSource:
+    """A relevance source after validation. ``kind`` is ``unset`` | ``unavailable`` | ``embedding`` | ``labelled``
+    | ``invalid``; ``text`` is the canonical form (reserved prefix in lower case) and is ``""`` when invalid, so a
+    rejected raw string is never echoed into evidence."""
+    kind: str
+    text: str
+
+    @property
+    def valid(self) -> bool:
+        return self.kind != "invalid"
+
+
+_INVALID = ParsedSource("invalid", "")
+
+
+def parse_relevance_source(raw: object) -> ParsedSource:
+    """THE one validator for a relevance source token: used by ``RelevanceResult``, ``apply_relevance``, every
+    detector and the evidence renderer. Never raises. It is strict and fail-closed (a source it cannot vouch for is
+    ``invalid`` and read as UNKNOWN downstream, never as a measured value):
+
+    * ``None`` / empty / ``unset`` (any case, surrounding blanks trimmed) is ``unset``;
+    * not a string, longer than 300 characters (never truncated into acceptance), containing any control, format
+      (zero-width, bidi), separator or internal whitespace character, or any ``ssr`` / ``synthetic`` token (NFKC
+      folded): invalid;
+    * the text before the first ``:`` must be plain ASCII ``[A-Za-z0-9_.-]`` and the text after it non-empty, so a
+      unicode lookalike of ``embedding:`` / ``unavailable:`` can never impersonate a reserved prefix; a reserved
+      word without a colon (``embedding``), ``unset:x``, an empty label (``embedding:``, ``supplied:``) and a
+      duplicated or nested reserved prefix (``embedding:embedding:x``, ``supplied:unavailable:x``): invalid;
+    * ``unavailable:<reason>`` needs a reason of ``[A-Za-z0-9_.:@/-]{1,200}``;
+    * ``embedding:<name>@<revision>`` and any other ``<label>:<text>`` (for example ``supplied:crm``) or bare ASCII
+      word are accepted as typed, except that the reserved prefixes are canonicalised to lower case."""
+    if raw is None:
+        return ParsedSource("unset", "unset")
+    if not isinstance(raw, str) or len(raw) > 4 * MAX_SOURCE_CHARS:
+        return _INVALID
+    s = raw.strip()
+    if not s:
+        return ParsedSource("unset", "unset")
+    if len(s) > MAX_SOURCE_CHARS:
+        return _INVALID
+    if any(unicodedata.category(ch)[0] in "CZ" for ch in s) or _synthetic_looking(s):
+        return _INVALID
+    head, sep, rest = s.partition(":")
+    low = s.lower()
+    if not sep:
+        if low == "unset":
+            return ParsedSource("unset", "unset")
+        if low in _RESERVED_HEADS or not _LABEL_HEAD.match(s):
+            return _INVALID
+        return ParsedSource("labelled", s)
+    hl = head.lower()
+    if not _LABEL_HEAD.match(head) or not rest or hl == "unset":
+        return _INVALID
+    nested = rest.lower().startswith(tuple(h + ":" for h in _RESERVED_HEADS))
+    if nested:
+        return _INVALID
+    if hl == "unavailable":
+        return ParsedSource("unavailable", "unavailable:" + rest) if _UNAVAILABLE_REASON.match(rest) else _INVALID
+    if hl == "embedding":
+        return ParsedSource("embedding", "embedding:" + rest)
+    return ParsedSource("labelled", s)
+
+
 def _canonical_source(source: object) -> str:
-    """Strip/sanitise a source and write its reserved prefix in lower case ('Unavailable:x' -> 'unavailable:x')."""
-    s = _meta(source, 200)
-    for prefix in (UNAVAILABLE_PREFIX, EMBEDDING_SOURCE_PREFIX):
-        if s.lower().startswith(prefix):
-            return prefix + s[len(prefix):].strip()
-    return s
+    """Canonical text of a valid source, '' for an invalid one."""
+    return parse_relevance_source(source).text
 
 
 @dataclass(frozen=True)
@@ -283,23 +350,19 @@ class RelevanceResult:
     provenance_incomplete: bool = False
 
     def __post_init__(self) -> None:
-        src = _canonical_source(self.source)
-        object.__setattr__(self, "source", src)
+        parsed = parse_relevance_source(self.source)
+        object.__setattr__(self, "source", parsed.text)
         object.__setattr__(self, "embedder_name", _meta(self.embedder_name))
         object.__setattr__(self, "embedder_revision", _meta(self.embedder_revision))
-        low = unicodedata.normalize("NFKC", src).lower()
-        if not low or low.startswith(_FORBIDDEN_SOURCE_PREFIXES) or _synthetic_looking(src) \
-                or _synthetic_looking(self.embedder_name):
-            raise ValueError("RelevanceResult source must be a measurement source; synthetic/SSR buyer scores are "
-                             "never a relevance value")
+        if not parsed.valid or parsed.kind in ("unset", "labelled") or _synthetic_looking(self.embedder_name):
+            raise ValueError("RelevanceResult source must be a valid 'embedding:<name>@<rev>' or "
+                             "'unavailable:<reason>' source; synthetic/SSR buyer scores are never a relevance value")
         if self.value is None:
-            if not low.startswith(UNAVAILABLE_PREFIX) or low == UNAVAILABLE_PREFIX:
+            if parsed.kind != "unavailable":
                 raise ValueError("a None relevance must carry source 'unavailable:<reason>'")
             return
-        if low.startswith(UNAVAILABLE_PREFIX):
+        if parsed.kind == "unavailable":
             raise ValueError("an 'unavailable:*' source cannot carry a value (unknown is None, never 0.0)")
-        if not low.startswith(EMBEDDING_SOURCE_PREFIX) or low == EMBEDDING_SOURCE_PREFIX:
-            raise ValueError("a relevance value must come from an embedding similarity ('embedding:<name>@<rev>')")
         if (isinstance(self.value, bool) or not isinstance(self.value, (int, float))
                 or not math.isfinite(self.value) or not 0.0 <= self.value <= 1.0):
             raise ValueError("relevance value must be a finite float in [0, 1]")
@@ -404,6 +467,7 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
         raise ValueError("embedder name looks like a synthetic/SSR scorer; relevance embedders are measurement "
                          "models only")
     given_rev = _meta(embedder_revision if embedder_revision else getattr(embedder, "revision", None) or "")
+    name_token = re.sub(r"\s+", "_", name)
     lock = threading.Lock()
     state: Dict[str, object] = {"probed": False, "degenerate": False, "probe_rev": "", "failed_at": None}
     cache: Dict[str, List[float]] = {}
@@ -509,7 +573,8 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
         cos = _cosine(qv, pv)
         if cos is None:
             return _unavailable("degenerate_embedding", query_hash=q_hash, page_hash=p_hash, **common)
-        return RelevanceResult(to_unit(cos), f"{EMBEDDING_SOURCE_PREFIX}{name}@{rev}", name, rev, p_hash, q_hash,
-                               similarity_map, provenance_incomplete=incomplete)
+        rev_token = re.sub(r"\s+", "_", rev)
+        return RelevanceResult(to_unit(cos), f"{EMBEDDING_SOURCE_PREFIX}{name_token}@{rev_token}", name, rev, p_hash,
+                               q_hash, similarity_map, provenance_incomplete=incomplete)
 
     return relevance_fn

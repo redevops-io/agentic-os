@@ -17,9 +17,9 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, List, Optional, Tuple
 
-from agentic_os.content.relevance import _synthetic_looking, sanitize_text
+from agentic_os.content.relevance import parse_relevance_source, sanitize_text
 from agentic_os.content.search_signals import (
-    SearchObservation, SearchSignal, SignalType, Thresholds, _conflict_groups, _kind, _source, cannibalization,
+    SearchObservation, SearchSignal, SignalType, Thresholds, _conflict_groups, _parsed, cannibalization,
     conflict_key, ctr_opportunity, hook_originated, near_win, relevance_unknown_aware,
 )
 
@@ -121,23 +121,19 @@ def apply_relevance(o: SearchObservation, relevance_fn: Callable[[SearchObservat
         return replace(o, relevance_source=f"unavailable:relevance_fn_error:{_safe_token(type(exc).__name__)}")
     try:
         value = getattr(res, "value", None)
-        source = sanitize_text(str(getattr(res, "source", "") or ""), 200)
+        parsed = parse_relevance_source(getattr(res, "source", None))
         detail_fn = getattr(res, "provenance", None)
         detail = sanitize_text(str(detail_fn()), 600) if callable(detail_fn) else ""
     except Exception:  # noqa: BLE001 — a malicious/broken result object must not escape
         return replace(o, relevance_source="unavailable:invalid_result")
-    low = source.lower()
     if value is None:
-        if low.startswith("unavailable:") and len(source) > len("unavailable:"):
-            return replace(o, relevance_source="unavailable:" + source[len("unavailable:"):].strip(),
-                           relevance_detail=detail)
+        if parsed.kind == "unavailable":
+            return replace(o, relevance_source=parsed.text, relevance_detail=detail)
         return replace(o, relevance_source="unavailable:no_value")
     if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
-            or not 0.0 <= value <= 1.0 or not low.startswith("embedding:") or len(source) <= len("embedding:")
-            or low.startswith(("ssr", "synthetic")) or _synthetic_looking(source)):
+            or not 0.0 <= value <= 1.0 or parsed.kind != "embedding"):
         return replace(o, relevance_source="unavailable:invalid_result")
-    return replace(o, relevance=float(value), relevance_source="embedding:" + source[len("embedding:"):],
-                   relevance_detail=detail)
+    return replace(o, relevance=float(value), relevance_source=parsed.text, relevance_detail=detail)
 
 
 def collect_search_observations(client: GscClient, site_url: str, *, days: int = 28,
@@ -184,7 +180,7 @@ def search_signals_from_observations(observations: List[SearchObservation], *,
     out: List[SearchSignal] = []
     for o, sig in pairs:
         if (held and sig.signal_type is SignalType.NEAR_WIN and sig.status == "PROPOSE"
-                and _kind(_source(o)) != "unset" and conflict_key(o) in held):
+                and _parsed(o).kind not in ("unset", "invalid") and conflict_key(o) in held):
             sig = replace(sig, status="WATCH", evidence=sig.evidence + (
                 "relevance conflict: differing relevance readings exist for this query/page; held at "
                 "WATCH (see RELEVANCE_CONFLICT)",))

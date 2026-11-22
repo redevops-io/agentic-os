@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, List, Optional, Tuple
 
-from agentic_os.content.relevance import sanitize_text
+from agentic_os.content.relevance import ParsedSource, parse_relevance_source, sanitize_text
 
 
 RELEVANCE_UNKNOWN_AWARE_ENV = "AGENTIC_OS_RELEVANCE_UNKNOWN_AWARE"
@@ -67,29 +67,22 @@ class SearchObservation:
     relevance_detail: str = ""       # provenance of an embedding value (embedder, map, text hashes); "" otherwise
 
 
+def _parsed(o: object) -> ParsedSource:
+    """The observation's relevance source after the shared validator (`relevance.parse_relevance_source`). Read with
+    getattr so duck-typed observation objects that predate the field keep working (they read as 'unset')."""
+    return parse_relevance_source(getattr(o, "relevance_source", None))
+
+
 def _source(o: object) -> str:
-    """The observation's relevance source, normalised (stripped; None/empty -> 'unset'). Read with getattr so that
-    duck-typed observation objects that predate the field keep working."""
-    s = getattr(o, "relevance_source", None)
-    s = "unset" if s is None else str(s).strip()
-    return s or "unset"
+    """Canonical source text for evidence; a source the validator rejects is shown as '<invalid>' (the raw text is
+    never echoed: it may be long, malformed or hostile)."""
+    p = _parsed(o)
+    return p.text if p.valid else "<invalid>"
 
 
 def _detail(o: object) -> str:
     d = getattr(o, "relevance_detail", "")
-    return "" if d is None else str(d).strip()
-
-
-def _kind(src: str) -> str:
-    """'unset' | 'unavailable' | 'embedding' | 'labelled' (case-insensitive on the reserved prefixes)."""
-    low = src.lower()
-    if low == "unset":
-        return "unset"
-    if low.startswith("unavailable:"):
-        return "unavailable"
-    if low.startswith("embedding:"):
-        return "embedding"
-    return "labelled"
+    return "" if d is None else sanitize_text(str(d), 600)
 
 
 def _value(o: object) -> Optional[float]:
@@ -108,9 +101,11 @@ def relevance_state(o: SearchObservation, th: Optional["Thresholds"] = None) -> 
       value and is judged on that value, exactly as before the source field existed;
     * everything else is measured: 'low' below `min_relevance`, else 'ok'. A measured 0.0 is 'low', never unknown."""
     th = th or Thresholds()
-    kind = _kind(_source(o))
+    kind = _parsed(o).kind
     if kind == "unavailable":
         return "unknown"
+    if kind == "invalid":
+        return "invalid"
     v = _value(o)
     if v is None or not math.isfinite(v) or v < 0.0 or v > 1.0:
         return "invalid"
@@ -126,7 +121,7 @@ def relevance_unknown(o: SearchObservation) -> bool:
 
 def hook_originated(o: SearchObservation) -> bool:
     """True when the source was written by the relevance hook (embedding value or explicit unavailable)."""
-    return _kind(_source(o)) in ("embedding", "unavailable")
+    return _parsed(o).kind in ("embedding", "unavailable")
 
 
 def relevance_reading(o: SearchObservation) -> Tuple[str, Optional[float], str]:
@@ -146,14 +141,16 @@ def _relevance_lines(o: SearchObservation, *, used: bool = True) -> Tuple[str, .
     observation the hook wrote (embedding / unavailable) always states its source + provenance; with the flag on
     every signal states its relevance source, whichever detector produced it."""
     src = _source(o)
-    kind = _kind(src)
+    kind = _parsed(o).kind
     if kind == "embedding":
         return (_join(f"relevance provenance: {src}", _detail(o)),)
     if kind == "unavailable":
         return (_join(f"relevance unknown: relevance_source={src}", _detail(o)),)
     if relevance_unknown_aware():
         state = relevance_state(o)
-        if state == "invalid":
+        if kind == "invalid":
+            how = "invalid source, treated as unknown"
+        elif state == "invalid":
             how = "invalid value, treated as unknown"
         elif kind == "unset":
             how = ("unknown, never measured" if state == "unknown"
@@ -178,7 +175,7 @@ def _conflict_groups(observations: Iterable[SearchObservation], require_hook: bo
                      ) -> List[Tuple[Tuple[str, str, str], "SearchSignal"]]:
     groups: dict = {}
     for o in observations:
-        if _kind(_source(o)) == "unset":
+        if _parsed(o).kind in ("unset", "invalid"):
             continue
         groups.setdefault(conflict_key(o), []).append(o)
     out: List[Tuple[Tuple[str, str, str], SearchSignal]] = []
@@ -284,7 +281,7 @@ def _unknown_gate(o: SearchObservation, aware: bool) -> bool:
     """Should a relevance-gated detector treat this observation as 'relevance unknown'? Flag on: unknown or
     invalid relevance. Flag off: only a hook-written `unavailable:*` source (its numeric value is a placeholder
     and must never drive a detector); every legacy observation is judged on its number exactly as before."""
-    return relevance_unknown(o) if aware else _kind(_source(o)) == "unavailable"
+    return relevance_unknown(o) if aware else _parsed(o).kind == "unavailable"
 
 
 def near_win(o: SearchObservation, *, th: Thresholds = Thresholds()) -> Optional[SearchSignal]:
