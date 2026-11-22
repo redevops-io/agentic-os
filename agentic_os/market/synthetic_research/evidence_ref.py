@@ -26,19 +26,21 @@ from dataclasses import dataclass, replace
 from typing import Any, Optional, Sequence, Tuple
 
 from ..contracts import Experiment
+from ..synthetic_refs import is_synthetic_ref as _shared_is_synthetic_ref
 
 __all__ = ["StudyEvidenceRef", "StudyEvidenceWriter", "attach_study_refs", "split_refs", "is_synthetic_ref",
            "SYNTHETIC_REF_SCHEME", "SYNTHETIC_LABEL"]
 
 SYNTHETIC_LABEL = "HYPOTHESIS, synthetic, unvalidated"
 SYNTHETIC_REF_SCHEME = "synthetic-study:v1:"
-_SYNTHETIC_PREFIX = "synthetic-study:"     # any version; also what market/experiments.py and experiment_design.py test
 
 
 def is_synthetic_ref(ref: object) -> bool:
-    """True for anything that looks like a synthetic-study ref (any version, any case/leading blanks): it is then
-    never treated as a first-party reference, even when it turns out to be malformed."""
-    return isinstance(ref, str) and ref.strip().lower().startswith(_SYNTHETIC_PREFIX)
+    """True for anything that looks like a synthetic-study ref once normalised (any version; any case or blanks;
+    fullwidth forms, zero-width / bidi / control characters and common look-alike letters folded; see
+    ``market/synthetic_refs.py``, the single shared test also used by the ledger guard, ``freeze_experiment`` and the
+    explain counting): it is then never treated as a first-party reference, even when it is malformed."""
+    return _shared_is_synthetic_ref(ref)
 
 
 def _clean(text: object, cap: int = 80) -> str:

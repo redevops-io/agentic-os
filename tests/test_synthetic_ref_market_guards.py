@@ -28,7 +28,7 @@ def test_e2_evidence_counting_ignores_synthetic_refs_even_if_put_on_an_opportuni
     plain = X.plan_experiments([opp()])[0]
     smuggled = X.plan_experiments([opp(refs=("obs:1", "obs:2", REF.to_ref(), "Synthetic-Study:v9:x"))])[0]
     assert "2 supporting observation(s)" in plain.explain and "2 supporting observation(s)" in smuggled.explain
-    assert X._SYNTHETIC_REF_PREFIX == ER._SYNTHETIC_PREFIX
+    assert X._is_synthetic_ref is ER._shared_is_synthetic_ref            # ONE shared test (LG-3)
 
 
 def test_e2_freeze_experiment_can_never_seal_a_synthetic_ref():

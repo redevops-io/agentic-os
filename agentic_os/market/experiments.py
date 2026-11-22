@@ -19,12 +19,12 @@ class ChangeWriter(Protocol):
     def write(self, opportunity: Opportunity) -> str: ...
 
 
-_SYNTHETIC_REF_PREFIX = "synthetic-study:"     # see market/synthetic_research/evidence_ref.py
+from .synthetic_refs import is_synthetic_ref as _is_synthetic_ref     # one shared, normalising test
 
 
 def _explain(o: Opportunity, decision: str) -> str:
     # a synthetic study reference is a hypothesis pointer, never a supporting observation: it is not counted
-    n = sum(1 for r in o.evidence_refs if not str(r).strip().lower().startswith(_SYNTHETIC_REF_PREFIX))
+    n = sum(1 for r in o.evidence_refs if not _is_synthetic_ref(r))
     why = (f"{o.gap}. Expected value {o.expected_value} (competitor prevalence), {o.reversibility}, "
            f"{n} supporting observation(s).")
     return (f"PROPOSE: {why}" if decision == "proposed"

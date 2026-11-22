@@ -14,6 +14,16 @@ Scope: every place in this repository that constructs a `FirstPartyMetric`, call
 
 **Honest limit.** The guard is **bypassable by code that runs in the same process** (it can inspect the interpreter's objects, call the factory from an unrelated module or replace the module); these checks stop accidental and casual misuse. The attestation makes label-only or accidental mislabelling impossible and turns every first-party writer into an explicit, auditable registration; the signing keys live in a closure (not in instance attributes) and adapters refuse to be pickled or copied; any call that has a frame of the synthetic-research package on its stack is refused by `make_metric`, `register_source_adapter`, `repo_adapter` and `FirstPartyLedger.record`. The structural protection is the import rule: the SSR / study package (`agentic_os/market/synthetic_research`) must not import `outcomes_join`, `ingestion`, an adapter or the outcome store (`tests/test_first_party_ledger_guard.py` enforces it over every module in that package), and `METRIC_SOURCES` has no synthetic source.
 
+## Synthetic-study references: one shared, normalising test
+`agentic_os/market/synthetic_refs.py` is the single test used by the ledger guard, `freeze_experiment`, `plan_experiments`' explain counting and `evidence_ref.split/attach`. A reference is normalised first: NFKC (fullwidth forms such as `ｓｙｎｔｈｅｔｉｃ－ｓｔｕｄｙ：`), every format / control / private-use / unassigned character removed (zero-width characters, bidi controls, soft hyphen, BOM, NUL), case-folded, blanks stripped, and a deliberately partial table of Cyrillic / Greek / Armenian look-alike letters folded. Two predicates, on purpose different:
+
+| Predicate | Rule | Used by |
+|---|---|---|
+| `is_synthetic_ref` | the normalised text STARTS WITH `synthetic-study:` or `synthetic_study:` | experiment counters (`plan_experiments` explain), `freeze_experiment`, `evidence_ref` split/attach |
+| `mentions_synthetic_ref` | the normalised text CONTAINS either scheme ANYWHERE | the first-party ledger guard (every metric field and the provenance) |
+
+The ledger guard is therefore **stricter than the experiment counters**, by design: `obs:synthetic-study:x` is refused by the ledger but is still an ordinary, counted reference for the experiment plane exactly as before; `synthetic-studyx`, `synthetic study:v1:x`, `synth-study:x`, `syn-thetic-study:`, `study:x` and `ssr:1` are ordinary references everywhere. What changes for the experiment plane: a reference that starts with the scheme only after normalisation (a bidi or zero-width prefix, fullwidth letters, `synthetic_study:`, a Cyrillic look-alike letter) is now recognised, so it is no longer counted as a supporting observation and `freeze_experiment` refuses it; all other references behave as on base.
+
 ## Migration path for out-of-repo callers
 ```python
 from agentic_os.market.ingestion import register_source_adapter

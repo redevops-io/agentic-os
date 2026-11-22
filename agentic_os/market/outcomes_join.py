@@ -18,8 +18,7 @@ from typing import ClassVar, Dict, List, Optional, Tuple
 from ..integrations.business.contracts import BusinessObject, Provenance
 from .experiment_design import CommercialExperiment, ExperimentEvaluation, evaluate
 from .ingestion import METRIC_SOURCES, IngestionRefused, refuse_study_caller, verify_attestation
-
-_STUDY_REF_PREFIX = "synthetic-study:"
+from .synthetic_refs import mentions_synthetic_ref
 
 
 @dataclass(frozen=True)
@@ -46,18 +45,15 @@ class FirstPartyMetric(BusinessObject):
         return d
 
 
-def _is_study_ref(x: object) -> bool:
-    return isinstance(x, str) and x.strip().lower().startswith(_STUDY_REF_PREFIX)
-
-
 def refuse_non_first_party(m: object, *, check_caller: bool = True) -> None:
     """The gate in front of the first-party ledger. UNCONDITIONAL: no feature flag, independent of
     AGENTIC_OS_SYNTHETIC_RESEARCH (it refuses exactly the same with SR-04 and the SSR package disabled).
 
     By CONTENT / TYPE: refuses an object that is not exactly a ``FirstPartyMetric`` (subclasses, duck types, study
     and synthetic-response objects), anything carrying ``synthetic=True`` or defined in the synthetic-research
-    package, and any metric whose fields or provenance mention a ``synthetic-study:`` reference (any case or
-    surrounding whitespace). By SOURCE: the ``source`` must be exactly one of ``METRIC_SOURCES`` (a missing, empty or
+    package, and any metric whose fields or provenance MENTION a ``synthetic-study:`` / ``synthetic_study:`` reference anywhere
+    (normalised: NFKC, zero-width / bidi / control characters removed, case-folded; see ``synthetic_refs``; this is
+    stricter than the experiment counters, which only recognise references that START with the scheme). By SOURCE: the ``source`` must be exactly one of ``METRIC_SOURCES`` (a missing, empty or
     whitespace source, a different case, and every unregistered source are refused: strict allow-list, no
     provider-name heuristics). By ORIGIN: the metric must carry a valid adapter attestation (``ingestion.py``).
     BYPASSABLE by code that runs in the same process: these checks stop accidental and casual misuse. With
@@ -75,7 +71,7 @@ def refuse_non_first_party(m: object, *, check_caller: bool = True) -> None:
         raise TypeError("metric provenance must be a Provenance")
     texts = [m.source, m.metric, m.segment, m.surface, m.attestation, prov.provider, prov.provider_ref,
              *prov.evidence_refs]
-    if any(_is_study_ref(t) for t in texts):
+    if any(mentions_synthetic_ref(t) for t in texts):
         raise ValueError("a metric that references a synthetic study is refused by the first-party ledger")
     if not isinstance(m.source, str) or m.source not in METRIC_SOURCES:
         raise ValueError(f"unregistered first-party metric source {m.source!r}; allowed: {', '.join(METRIC_SOURCES)}"
