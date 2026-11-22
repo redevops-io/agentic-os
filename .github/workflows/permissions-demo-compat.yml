@@ -12,11 +12,17 @@ on:
       - "agentic_os/tool_actions.py"
       - "agentic_os/control_plane.py"
       - "agentic_os/cli.py"
+      - "agentic_os/app_gate.py"
       - "deploy/permissions-showcase-demo/**"
       - "tests/test_demo_compatibility.py"
       - "tests/test_permissions_*.py"
+      - "tests/test_authorization_bridge*.py"
+      - "tests/test_agent_console_authorization.py"
+      - "tests/test_classification_single_source.py"
+      - "tests/test_dependency_pins.py"
       - "tests/test_sc*.py"
       - "tests/_page_js_harness.js"
+      - "apps/*/requirements.txt"
       - ".github/workflows/permissions-demo-compat.yml"
   pull_request:
     paths:
@@ -24,15 +30,27 @@ on:
       - "agentic_os/tool_actions.py"
       - "agentic_os/control_plane.py"
       - "agentic_os/cli.py"
+      - "agentic_os/app_gate.py"
       - "deploy/permissions-showcase-demo/**"
       - "tests/test_demo_compatibility.py"
       - "tests/test_permissions_*.py"
+      - "tests/test_authorization_bridge*.py"
+      - "tests/test_agent_console_authorization.py"
+      - "tests/test_classification_single_source.py"
+      - "tests/test_dependency_pins.py"
       - "tests/test_sc*.py"
       - "tests/_page_js_harness.js"
+      - "apps/*/requirements.txt"
       - ".github/workflows/permissions-demo-compat.yml"
 
 permissions:
   contents: read
+
+# The agent-harness ref every job here installs, declared exactly once. tests/test_dependency_pins.py
+# asserts this file carries exactly one harness pin and that it is a full commit SHA, so a second copy of the
+# literal — which is how this file drifted apart from itself — is a test failure rather than a quiet gap.
+env:
+  AGENT_HARNESS_REF: 10e5c2ae7419e096630fb031ef8204fede125ec9
 
 concurrency:
   group: permissions-demo-compat-${{ github.ref }}
@@ -56,8 +74,48 @@ jobs:
       - name: "Install the kernel, dev extras and the tool-gate harness (pinned to a commit, so a moving dependency cannot weaken this gate)"
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,duckdb]" "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@10e5c2ae7419e096630fb031ef8204fede125ec9"
+          pip install -e ".[dev,duckdb]" "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@${{ env.AGENT_HARNESS_REF }}"
       - name: Demo compatibility gate
         run: pytest -q -p no:cacheprovider tests/test_demo_compatibility.py tests/test_deployment_paths.py tests/test_tool_actions_complete.py tests/test_sc*.py
       - name: Permissions regression suites (authorisation, scope, write authorisation, roles/columns, storage, concurrency)
         run: pytest -q -p no:cacheprovider tests/test_permissions_*.py
+  # The authorization seam joins three repositories: this kernel's plane, the runtime that installs it as a
+  # process default, and the engine that consumes the answer. Before this job no CI job in this repository
+  # installed more than one of the three, which is how "an app installs a plane and every granted call is
+  # denied" reached a pull request with a green board — the gate that exists to prove permissions still work
+  # had never run a single tool call through the engine that consumes them.
+  # Each dependency is installed from the commit THIS repository already pins: the harness from the env above,
+  # the runtime by reading the app manifest. The job cannot therefore test a different commit than the one the
+  # apps ship with, and a pin that moves to a commit predating the seam fails at the import check instead of
+  # letting the seam tests skip their way to green.
+  authorization-seam:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            apps/support/requirements.txt
+      - name: Install the three packages the seam joins, each at its pinned commit
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install "$(grep '^context-runtime @ ' apps/support/requirements.txt)"
+          pip install "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@${{ env.AGENT_HARNESS_REF }}"
+          python -c "import agent_harness.tools as t, context_runtime, agentic_os; print('harness :', t.__file__); print('runtime :', context_runtime.__file__); assert hasattr(t, 'engine_authorizer_of'), 'the pinned harness predates engine_authorizer_of, so there is no twin to resolve'; from context_runtime.tools.base import set_default_authorizer; from agentic_os.permissions import make_engine_authorizer; print('both sides of the seam import')"
+      - name: The seam, end to end
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q -p no:cacheprovider -rs tests/test_authorization_bridge_end_to_end.py tests/test_agent_console_authorization.py tests/test_classification_single_source.py tests/test_dependency_pins.py | tee /tmp/seam.log
+          if grep -q 'skipped' /tmp/seam.log; then
+            echo "::error::a cross-repo seam test skipped: it verified nothing, and this job exists so that nothing here may skip"
+            grep 'SKIPPED' /tmp/seam.log | head
+            exit 1
+          fi

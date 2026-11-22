@@ -55,14 +55,51 @@ def test_dependencies_are_pinned_to_commits_not_to_names():
         assert _FULL_SHA.match(sha), f"{sha!r} in {files} is not a full commit SHA"
 
 
-def test_the_permissions_gate_installs_a_pinned_agent_harness():
-    """The job that runs ``tests/test_permissions_*.py`` must not be able to install a moving dependency:
-    the harness decides what an authorizer's answer MEANS, so a floating harness is a floating gate."""
-    workflow = (WORKFLOWS / "permissions-demo-compat.yml").read_text(encoding="utf-8")
-    pinned = re.findall(r"agent-harness @ git\+https://github\.com/redevops-io/agent-harness\.git@([0-9a-zA-Z._-]+)",
-                        workflow)
-    assert len(pinned) == 1, f"expected exactly one harness pin in the permissions gate, found {pinned}"
-    assert _FULL_SHA.match(pinned[0]), f"the permissions gate installs agent-harness at {pinned[0]!r}, not a commit"
+def _permissions_gate() -> str:
+    return (WORKFLOWS / "permissions-demo-compat.yml").read_text(encoding="utf-8")
+
+
+def test_the_permissions_gate_pins_agent_harness_once_as_a_commit():
+    """The job that runs ``tests/test_permissions_*.py`` must not install a moving dependency: the harness
+    decides what an authorizer's answer MEANS, so a floating harness is a floating gate.
+
+    It is also allowed exactly ONE value. The literal used to sit inline in a ``pip install`` step while
+    other files carried their own copies of the same SHA, and they drifted apart with nothing watching; here
+    the commit lives in ``env`` and every step has to reference it.
+    """
+    workflow = _permissions_gate()
+    declared = re.findall(r"^  AGENT_HARNESS_REF: (\S+)$", workflow, re.M)
+    assert len(declared) == 1, f"the gate must declare its harness commit exactly once, found {declared}"
+    assert _FULL_SHA.match(declared[0]), f"AGENT_HARNESS_REF is {declared[0]!r}, not a full commit SHA"
+
+    installs = re.findall(r"agent-harness @ git\+https://github\.com/redevops-io/agent-harness\.git@(\S+)",
+                          workflow)
+    assert installs, "nothing installs agent-harness: the gate no longer gates the tool engine"
+    assert set(installs) == {"${{"}, f"every harness install must reference ${{{{ env.AGENT_HARNESS_REF }}}}, found {installs}"
+
+
+def test_some_ci_job_installs_both_sides_of_the_authorization_seam():
+    """The structural gap, not the value.
+
+    This repository's kernel test job installs the kernel; the permissions gate installs the kernel and the
+    harness; the apps install the runtime — and until now no job installed the kernel AND the runtime
+    together, which is the only combination in which the authorization seam exists. Every test that covers
+    it silently skipped, the board stayed green, and the shipped behaviour was deny-everything. A test that
+    skips because a dependency is absent is a test that does not exist, so at least one job must install
+    both packages that meet at the seam.
+    """
+    import yaml
+
+    gate = yaml.safe_load(_permissions_gate())
+    jobs = (gate.get("jobs") or {})
+    both = []
+    for name, job in jobs.items():
+        script = "\n".join(str(step.get("run", "")) for step in (job or {}).get("steps", []))
+        installs_runtime = re.search(r"grep .*context-runtime @|pip install \"?context-runtime", script)
+        if installs_runtime and "agent-harness @" in script:
+            both.append(name)
+    assert both, (f"no job in permissions-demo-compat.yml installs context-runtime and agent-harness "
+                  f"together, so nothing CI runs can execute the authorization seam (jobs: {list(jobs)})")
 
 
 def test_no_dependency_pin_points_at_a_moving_branch():
