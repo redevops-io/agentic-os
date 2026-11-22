@@ -49,19 +49,21 @@ from .experiment_design import (
 # synthetic-research package) must not load `outcomes_join` / `ingestion`. `from agentic_os.market import
 # FirstPartyLedger` and `import agentic_os.market.outcomes_join` behave exactly as before.
 _LAZY_LEDGER = ("FirstPartyLedger", "FirstPartyMetric", "MeasuredOutcome", "conversion_delta", "measure_experiment")
+_LAZY_SUBMODULES = ("outcomes_join",)       # base exposed `agentic_os.market.outcomes_join` as an attribute
 
 
 def __getattr__(name):
-    if name in _LAZY_LEDGER:
+    if name in _LAZY_LEDGER or name in _LAZY_SUBMODULES:
         import importlib
-        value = getattr(importlib.import_module(".outcomes_join", __name__), name)
+        module = importlib.import_module(".outcomes_join", __name__)
+        value = module if name in _LAZY_SUBMODULES else getattr(module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__():
-    return sorted(set(globals()) | set(_LAZY_LEDGER))
+    return sorted(set(globals()) | set(_LAZY_LEDGER) | set(_LAZY_SUBMODULES))
 
 
 from .execution_governed import (

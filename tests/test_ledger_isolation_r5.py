@@ -170,3 +170,23 @@ def test_the_docs_state_that_the_guard_is_bypassable_in_process():
         assert "bypassable by code that runs in the same process" in text
         assert "accidental and casual misuse" in text
     assert "bypassable" in (ROOT / "agentic_os/market/ingestion.py").read_text().lower()
+
+
+# ── round 6 (LZ-1): the submodule attribute resolves lazily like on base ─────────────────────────────────
+def test_lz1_a_bare_import_of_the_market_package_still_exposes_outcomes_join_as_an_attribute_lazily():
+    r = _fresh("import sys, agentic_os.market as m\n"
+               "assert 'agentic_os.market.outcomes_join' not in sys.modules and 'agentic_os.market.ingestion' not in sys.modules\n"
+               "assert 'outcomes_join' in dir(m) and 'FirstPartyLedger' in dir(m)\n"
+               "mod = m.outcomes_join\n"
+               "assert mod.__name__ == 'agentic_os.market.outcomes_join' and 'agentic_os.market.outcomes_join' in sys.modules\n"
+               "assert m.outcomes_join is mod and mod.FirstPartyLedger is m.FirstPartyLedger\n"
+               "import agentic_os.market.outcomes_join as again\nassert again is mod\n"
+               "try:\n    m.ingestion_typo\nexcept AttributeError:\n    print('ok')")
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+
+
+def test_lz1_importing_the_synthetic_research_package_still_loads_neither_module():
+    r = _fresh("import sys, agentic_os.market.synthetic_research.evidence_ref as e, agentic_os.market as m\n"
+               "assert 'outcomes_join' in dir(m)\n"
+               "print([k for k in sys.modules if k.endswith('market.ingestion') or k.endswith('market.outcomes_join')])")
+    assert r.returncode == 0 and r.stdout.strip() == "[]", r.stderr
