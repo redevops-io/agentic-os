@@ -31,6 +31,7 @@ detector thresholds.
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import math
 import re
@@ -439,7 +440,11 @@ def collapse_repeats(text: str) -> str:
 MAX_RETRY_SECONDS = 300.0            # hard cap for failure TTLs and call timeouts
 DEFAULT_RETRY_SECONDS = 30.0
 DEFAULT_CALL_TIMEOUT_SECONDS = 120.0
-DEFAULT_MAX_ABANDONED = 8
+DEFAULT_MAX_ABANDONED = 64
+DEFAULT_BREAKER_THRESHOLD = 5          # consecutive timeouts on DISTINCT keys that open a dependency breaker
+DEFAULT_BREAKER_WINDOW = 20            # ... or, over the last 20 executed calls,
+DEFAULT_BREAKER_RATE = 0.5             # ... at least this share of timeouts
+DEFAULT_BREAKER_BASE_SECONDS = 1.0     # first open period; doubles per failed trial, capped at MAX_RETRY_SECONDS
 
 
 def _cap_seconds(value: float, default: float) -> float:
@@ -605,6 +610,9 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                       failure_ttl_seconds: float = DEFAULT_RETRY_SECONDS,
                       call_timeout_seconds: float = DEFAULT_CALL_TIMEOUT_SECONDS,
                       thread_affine: bool = False, max_abandoned_threads: int = DEFAULT_MAX_ABANDONED,
+                      breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD, breaker_window: int = DEFAULT_BREAKER_WINDOW,
+                      breaker_rate: float = DEFAULT_BREAKER_RATE,
+                      breaker_base_seconds: float = DEFAULT_BREAKER_BASE_SECONDS,
                       _clock: Callable[[], float] = time.monotonic) -> Callable[["SearchObservation"], RelevanceResult]:
     """Build ``relevance_fn(observation) -> RelevanceResult`` for ``collect_search_observations``.
 
@@ -624,12 +632,20 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
     at 300) is abandoned: leader and waiters get ``unavailable:..._timeout``, a late result is discarded, and
     distinct keys never block each other.
 
-    CIRCUIT BREAKER. After a timeout the breaker for that dependency (embedder or page provider) opens for the
-    failure TTL for ALL keys: new cache misses get an explicit ``unavailable:embedder_circuit_open`` /
-    ``unavailable:page_text_provider_circuit_open`` immediately (never a zero), so a hung dependency costs one
-    timeout per TTL, not one per row. After the TTL one trial call is allowed; a success closes the breaker. At most
-    ``max_abandoned_threads`` (default 8) abandoned worker threads may be alive: beyond that new calls are refused
-    with ``unavailable:..._busy``. ``cache_info()`` exposes the abandoned-thread count and the breaker state.
+    CIRCUIT BREAKER (per dependency: embedder, page provider). ONE slow key must not suppress unrelated keys, so a
+    timeout is first remembered for THAT key only (the per-key failure cache). The dependency breaker opens only when
+    the dependency looks down: ``breaker_threshold`` (default 5) consecutive timeouts on DISTINCT keys with no
+    response in between, or at least ``breaker_rate`` (50%) timeouts among the last ``breaker_window`` (20) executed
+    calls. While open, cache misses get an explicit ``unavailable:embedder_circuit_open`` /
+    ``unavailable:page_text_provider_circuit_open`` immediately (never a zero); cache hits are still served. The first
+    open period is ``breaker_base_seconds`` (default 1 s), doubled after each failed trial up to 300 s. After the
+    period the breaker is HALF-OPEN: exactly ONE trial call is allowed, every other key fails fast while it runs, the
+    first response (success or an ordinary error, anything but a timeout) closes the breaker, a timeout re-opens it
+    with the longer period. Only the LEADER's outcome counts: waiters that merely stop waiting never trip it. The
+    number of abandoned worker threads is counted and capped at ``max_abandoned_threads`` (default 64: only when
+    more than that many calls are SIMULTANEOUSLY still hung are new calls refused with ``unavailable:..._busy``,
+    which can then also affect healthy keys; that is the price of a bound on threads). ``cache_info()`` exposes the
+    abandoned count and the breaker states.
 
     THREADS. By default every call runs on a fresh daemon worker thread so that it can be abandoned on timeout. That
     breaks thread-affine providers or embedders (for example a sqlite3 connection created on the caller thread, a
@@ -664,12 +680,14 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
     pos: Dict[object, object] = {}                       # successful results (page text / vectors)
     neg: Dict[object, Tuple[float, str]] = {}            # key -> (expires_at, failure reason)
     key_prefix = f"{name}|{given_rev or 'fingerprint'}|"
-    breaker: Dict[str, float] = {}                       # dependency -> open until (clock time)
+    breaker_k = max(1, int(breaker_threshold)) if isinstance(breaker_threshold, int) else DEFAULT_BREAKER_THRESHOLD
+    breaker_w = max(2, int(breaker_window)) if isinstance(breaker_window, int) else DEFAULT_BREAKER_WINDOW
+    breaker_r = min(1.0, max(0.0, float(breaker_rate))) if isinstance(breaker_rate, (int, float)) else DEFAULT_BREAKER_RATE
+    breaker_base = max(0.001, _cap_seconds(breaker_base_seconds, DEFAULT_BREAKER_BASE_SECONDS))
+    breaker: Dict[str, dict] = {}                        # dependency -> breaker state (guarded by `lock`)
     max_abandoned = max(0, int(max_abandoned_threads)) if isinstance(max_abandoned_threads, int) else DEFAULT_MAX_ABANDONED
 
     def remember(key: object, outcome: tuple, ttl: float) -> None:
-        if outcome[0] == "error" and outcome[1] in ("interrupted", "circuit_open", "busy"):
-            return                                       # transient refusals are never cached
         with lock:
             if outcome[0] == "error" or outcome[0] == "none":
                 if len(neg) >= cache_size:
@@ -697,27 +715,67 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                 del neg[key]
         return None
 
-    def breaker_is_tripped(dep: str) -> bool:
+    def _state(dep: str) -> dict:
+        st = breaker.get(dep)
+        if st is None:
+            st = breaker[dep] = {"consec": [], "win": collections.deque(maxlen=breaker_w), "open_until": None,
+                                 "level": 0, "trial": False}
+        return st
+
+    def breaker_acquire(dep: str) -> str:
+        """'ok' (closed), 'open' (refuse) or 'trial' (this caller is THE single half-open trial)."""
         with lock:
-            until = breaker.get(dep)
-            return until is not None and until > _clock()
+            st = _state(dep)
+            if st["open_until"] is None:
+                return "ok"
+            if _clock() < st["open_until"] or st["trial"]:
+                return "open"
+            st["trial"] = True
+            return "trial"
+
+    def breaker_settle(dep: str, key: object, out: tuple) -> None:
+        """The LEADER's own outcome of an executed call."""
+        with lock:
+            st = _state(dep)
+            if out == ("error", "timeout"):
+                st["win"].append(1)
+                if key not in st["consec"]:
+                    st["consec"].append(key)
+                was_open = st["open_until"] is not None          # a half-open trial (or a late call) timed out
+                window_bad = len(st["win"]) >= breaker_w and sum(st["win"]) / len(st["win"]) >= breaker_r
+                if was_open or len(st["consec"]) >= breaker_k or window_bad:
+                    if was_open:
+                        st["level"] += 1
+                    st["open_until"] = _clock() + min(MAX_RETRY_SECONDS, breaker_base * (2 ** st["level"]))
+                    st["trial"] = False
+                    st["consec"].clear()
+                    st["win"].clear()
+            elif out[0] in ("ok", "none") or (out[0] == "error" and out[1] not in ("busy", "circuit_open", "interrupted")):
+                st["win"].append(0)                              # the dependency RESPONDED: not a hang
+                st["consec"].clear()
+                if st["open_until"] is not None:                 # first response closes the breaker
+                    st["open_until"], st["level"], st["trial"] = None, 0, False
+                    st["win"].clear()
 
     def fetch(key: object, fn: Callable[[], tuple], ttl: float, dep: str) -> tuple:
         hit = cached_outcome(key)
         if hit is not None:
             return hit
-        if breaker_is_tripped(dep):
+        permit = breaker_acquire(dep)
+        if permit == "open":
             return ("error", "circuit_open")
-        if not thread_affine and flights.abandoned_alive() >= max_abandoned:
-            return ("error", "busy")
-        def settled(out: tuple) -> None:                 # the LEADER's own outcome only (a waiter's timeout is not one)
-            with lock:
-                if out == ("error", "timeout"):
-                    breaker[dep] = _clock() + fail_ttl       # a hung dependency: refuse ALL keys for the TTL
-                elif out[0] == "ok":
-                    breaker.pop(dep, None)                   # a success closes the breaker
-        return flights.run(key, fn, call_timeout, cached=lambda: cached_outcome(key),
-                           on_done=lambda o: remember(key, o, ttl), on_settled=settled, inline=thread_affine)
+        try:
+            if not thread_affine and flights.abandoned_alive() >= max_abandoned:
+                return ("error", "busy")
+            return flights.run(key, fn, call_timeout, cached=lambda: cached_outcome(key),
+                               on_done=lambda o: remember(key, o, ttl),
+                               on_settled=lambda o: breaker_settle(dep, key, o), inline=thread_affine)
+        finally:
+            if permit == "trial":                                # never leave the trial flag stuck
+                with lock:
+                    st = _state(dep)
+                    if st["trial"] and st["open_until"] is not None and _clock() >= st["open_until"]:
+                        st["trial"] = False
 
     def probe() -> None:
         """Establish the fingerprint revision and the degenerate-embedder verdict (one flight, bounded retries)."""
@@ -822,7 +880,10 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
     def cache_info() -> Dict[str, object]:
         with lock:
             info = {"cached": len(pos), "cached_failures": len(neg), "in_flight": len(flights._flights),
-                    "breaker_open": sorted(d for d, u in breaker.items() if u > _clock())}
+                    "breaker": {d: ("closed" if st["open_until"] is None else
+                                    "open" if _clock() < st["open_until"] else "half-open")
+                                for d, st in sorted(breaker.items())}}
+            info["breaker_open"] = sorted(d for d, v in info["breaker"].items() if v != "closed")
         info["abandoned_threads"] = flights.abandoned_alive()
         return info
 

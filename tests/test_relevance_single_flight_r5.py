@@ -171,7 +171,8 @@ def test_sf1_stress_repeated_async_exceptions_at_random_points_never_poison_a_ke
 def test_sf2_200_distinct_hung_rows_cost_one_timeout_and_a_bounded_number_of_threads():
     before = threading.active_count()
     prov = Prov(hang=True)
-    fn = make_relevance_fn(Emb(), prov, call_timeout_seconds=0.2, failure_ttl_seconds=30)
+    fn = make_relevance_fn(Emb(), prov, call_timeout_seconds=0.2, failure_ttl_seconds=30, breaker_threshold=1,
+                           breaker_base_seconds=30)
     t0 = time.time()
     results = [fn(obs(u=f"https://x/p{i}")) for i in range(200)]
     elapsed = time.time() - t0
@@ -188,7 +189,8 @@ def test_sf2_200_distinct_hung_rows_cost_one_timeout_and_a_bounded_number_of_thr
 def test_sf2_breaker_recovers_after_the_ttl_and_a_success_closes_it():
     clock = [0.0]
     prov = Prov(hang=True)
-    fn = make_relevance_fn(Emb(), prov, call_timeout_seconds=0.2, failure_ttl_seconds=30, _clock=lambda: clock[0])
+    fn = make_relevance_fn(Emb(), prov, call_timeout_seconds=0.2, failure_ttl_seconds=30, breaker_threshold=1,
+                           breaker_base_seconds=30, _clock=lambda: clock[0])
     assert fn(obs()).source == "unavailable:page_text_provider_timeout"
     assert fn(obs(u="https://x/other")).source == "unavailable:page_text_provider_circuit_open"
     prov.release.set()
@@ -204,7 +206,8 @@ def test_sf2_breaker_recovers_after_the_ttl_and_a_success_closes_it():
 
 def test_sf2_embedder_breaker_covers_every_text_and_the_probe():
     emb = Emb(hang="agent memory")
-    fn = make_relevance_fn(emb, Prov(), call_timeout_seconds=0.2, failure_ttl_seconds=30)
+    fn = make_relevance_fn(emb, Prov(), call_timeout_seconds=0.2, failure_ttl_seconds=30, breaker_threshold=1,
+                           breaker_base_seconds=30)
     r1 = fn(obs("agent memory one"))
     assert r1.source == "unavailable:embedder_timeout"
     rest = [fn(obs(f"agent memory {i}")) for i in range(50)]
