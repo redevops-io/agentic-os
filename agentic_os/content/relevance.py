@@ -35,6 +35,7 @@ import hashlib
 import math
 import re
 import threading
+import time
 import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -376,21 +377,25 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                       similarity_map: str = DEFAULT_SIMILARITY_MAP, embedder_revision: Optional[str] = None,
                       max_query_chars: int = 300, max_title_chars: int = 300, max_h1_chars: int = 300,
                       max_meta_chars: int = 500, max_body_chars: int = 2000,
-                      cache_size: int = 256) -> Callable[["SearchObservation"], RelevanceResult]:
+                      cache_size: int = 256, probe_retry_seconds: float = 30.0,
+                      _clock: Callable[[], float] = time.monotonic) -> Callable[["SearchObservation"], RelevanceResult]:
     """Build ``relevance_fn(observation) -> RelevanceResult`` for ``collect_search_observations``.
 
     The embedder revision recorded in every result is, in order: the ``embedder_revision`` argument, the
     embedder's own ``revision`` attribute, else a behavioural fingerprint ``probe:<sha256[:12]>`` of the
-    embedding of a fixed probe string. A failed probe is NOT cached: the result says ``unrecorded`` with
-    ``provenance_incomplete=True`` and the probe is retried on the next call. The same probe embeds a second,
+    embedding of a fixed probe string. A failed probe is remembered only briefly: the result says ``unrecorded``
+    with ``provenance_incomplete=True`` and the probe is not retried until ``probe_retry_seconds`` (default 30 s)
+    have passed, so a permanently failing embedder costs one extra probe call per interval, not one per row; a
+    later success repairs the revision. The same probe embeds a second,
     unrelated text: an embedder that returns the same vector for both is reported as
     ``unavailable:degenerate_embedder`` (a constant embedder would otherwise score every pair 1.0). The embedder
     is trusted code; its name/revision are sanitised and a name containing an 'ssr'/'synthetic' token is refused.
 
     The returned function memoises page text (per ``page_url``) and embeddings (per text hash) in bounded caches
-    guarded by a lock, so it is safe to call from several threads and calls the provider once per page; build a
-    new function for each collection run so page text is never stale. Deterministic for a deterministic embedder
-    and page provider."""
+    guarded by a lock. Values are deterministic and race-free under concurrent use (no torn or evicted-mid-read
+    state), and repeated calls for a page reuse the cached text; there is NO single-flight, so concurrent FIRST
+    hits on the same page or text may each call the provider/embedder. Build a new function for each collection
+    run so page text is never stale. Deterministic for a deterministic embedder and page provider."""
     if similarity_map not in SIMILARITY_MAPS:
         raise ValueError(f"unknown similarity_map {similarity_map!r}; known: {sorted(SIMILARITY_MAPS)}")
     to_unit = SIMILARITY_MAPS[similarity_map]
@@ -400,25 +405,31 @@ def make_relevance_fn(embedder: "TextEmbedder", page_text_provider: PageTextProv
                          "models only")
     given_rev = _meta(embedder_revision if embedder_revision else getattr(embedder, "revision", None) or "")
     lock = threading.Lock()
-    state: Dict[str, object] = {"probed": False, "degenerate": False, "probe_rev": ""}
+    state: Dict[str, object] = {"probed": False, "degenerate": False, "probe_rev": "", "failed_at": None}
     cache: Dict[str, List[float]] = {}
     pages: Dict[str, PageText] = {}
 
     def probe() -> None:
-        """Establish the fingerprint revision and the degenerate-embedder verdict; only a SUCCESS is remembered."""
+        """Establish the fingerprint revision and the degenerate-embedder verdict. A success is remembered for
+        good; a failure only for ``probe_retry_seconds`` (bounded cost, still flagged provenance_incomplete)."""
         with lock:
             if state["probed"]:
+                return
+            failed_at = state["failed_at"]
+            if failed_at is not None and _clock() - float(failed_at) < probe_retry_seconds:
                 return
         try:
             vecs = embedder.embed([_PROBE_TEXT, _PROBE_TEXT_2])
             if len(vecs) != 2:
-                return
+                raise ValueError("bad probe shape")
             va, vb = [float(x) for x in vecs[0]], [float(x) for x in vecs[1]]
             cos = _cosine(va, vb)
             if cos is None:
-                return
+                raise ValueError("degenerate probe vectors")
             digest = _hex_sha256(",".join(f"{x:.4f}" for x in va))[:12]
         except Exception:  # noqa: BLE001
+            with lock:
+                state["failed_at"] = _clock()
             return
         with lock:
             state["probe_rev"] = f"probe:{digest}"

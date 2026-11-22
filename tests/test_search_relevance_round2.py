@@ -325,7 +325,7 @@ def test_x2_name_and_revision_are_sanitised_and_bounded():
     assert len(r.embedder_name) <= 120 and len(r.embedder_revision) <= 120 and len(r.source) < 300
 
 
-def test_x2_failed_probe_is_flagged_and_retried_not_cached_as_unrecorded():
+def test_x2_failed_probe_is_flagged_and_retried_after_the_ttl_not_cached_forever():
     class Flaky(Bow):
         fail = True
 
@@ -333,14 +333,41 @@ def test_x2_failed_probe_is_flagged_and_retried_not_cached_as_unrecorded():
             if self.fail and texts[0] == R._PROBE_TEXT:
                 raise TimeoutError("probe fails")
             return super().embed(texts)
+    clock = [1000.0]
     e = Flaky()
-    fn = make_relevance_fn(e, Prov(PG))
+    fn = make_relevance_fn(e, Prov(PG), probe_retry_seconds=30.0, _clock=lambda: clock[0])
     r1 = fn(O(query="agent memory"))
     assert r1.available and r1.embedder_revision == "unrecorded" and r1.provenance_incomplete
     assert "provenance_incomplete=true" in r1.provenance()
     e.fail = False
-    r2 = fn(O(query="agent memory two"))
+    r_early = fn(O(query="agent memory two"))               # inside the TTL: not retried yet
+    assert r_early.provenance_incomplete
+    clock[0] += 31.0
+    r2 = fn(O(query="agent memory three"))                  # TTL passed: retried, repaired for good
     assert r2.embedder_revision.startswith("probe:") and not r2.provenance_incomplete
+    assert not fn(O(query="agent memory four")).provenance_incomplete
+
+
+def test_x2_a_permanently_failing_probe_costs_one_probe_call_per_ttl_not_one_per_row():
+    class Broken(Bow):
+        log = None
+
+        def embed(self, texts):
+            self.log.append(list(texts))
+            if texts[0] == R._PROBE_TEXT:
+                raise TimeoutError("probe always fails")
+            return super().embed(texts)
+    clock = [0.0]
+    e = Broken()
+    e.log = []
+    fn = make_relevance_fn(e, Prov(PG), probe_retry_seconds=30.0, _clock=lambda: clock[0])
+    for i in range(5):
+        assert fn(O(query=f"agent memory {i}")).provenance_incomplete
+    probes = [c for c in e.log if c[0] == R._PROBE_TEXT]
+    assert len(probes) == 1 and len(e.log) <= 1 + 6        # one probe in all; the rest are the rows' own embeds
+    clock[0] += 60.0
+    fn(O(query="agent memory later"))
+    assert len([c for c in e.log if c[0] == R._PROBE_TEXT]) == 2            # bounded retry after the TTL
 
 
 @pytest.mark.parametrize("src", ["Unavailable:x", "UNAVAILABLE:no_page_text", " unavailable:x", "UnAvailable:x"])
@@ -515,3 +542,33 @@ def test_r6_a_legacy_row_for_a_conflicted_pair_is_judged_as_it_always_was():
         assert len(legacy_sig) == 1 and legacy_sig[0].status == "PROPOSE"       # NOT held: legacy rows never are
         assert len(hooked_sig) == 1 and hooked_sig[0].status == "WATCH"         # the hook's 0.9 is held
         assert by_ev
+
+
+# ── round 3: apply_relevance must reject foreign / synthetic-looking sources whatever their length ─────────────
+@pytest.mark.parametrize("src", [
+    "embedding:ssr@1", "embedding:synthetic-panel@2", "Embedding:SSR-buyer@1", "embedding:my_ssr_model@3",
+    "supplied:long-label-for-a-manually-adjusted-relevance-value", "supplied:" + "x" * 80,
+    "ssr:" + "purchase-intent-likert-pmf-mean" * 3, "synthetic:panel", "synthetic:panel-of-twelve-buyers",
+    "human:crowd-rated-relevance-score-v2", "measured", "unset", "", "unavailable:with-a-value-is-invalid",
+    "embedding:"])
+def test_round3_apply_relevance_refuses_long_foreign_and_synthetic_looking_sources(src):
+    for value in (0.9, 0.0, 0.5):
+        o = apply_relevance(O(), lambda _o, s=src, v=value: SimpleNamespace(value=v, source=s, provenance=lambda: "d"))
+        assert o.relevance == 0.0 and o.relevance_source == "unavailable:invalid_result", (src, value)
+
+
+def test_round3_apply_relevance_still_accepts_a_real_embedding_source():
+    o = apply_relevance(O(), lambda _o: SimpleNamespace(value=0.7, source="embedding:BAAI/bge-small-en-v1.5@probe:abc",
+                                                        provenance=lambda: "embedder=x"))
+    assert o.relevance == 0.7 and o.relevance_source == "embedding:BAAI/bge-small-en-v1.5@probe:abc"
+    o = apply_relevance(O(), lambda _o: SimpleNamespace(value=0.7, source="embedding:crossroads-embed@1"))
+    assert o.relevance_source.startswith("embedding:crossroads")
+
+
+def test_round3_docs_do_not_overstate_thread_safety_or_the_ledger_guard():
+    import pathlib
+    text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "SEARCH_RELEVANCE.md").read_text()
+    low = text.lower()
+    assert "thread-safe" not in low and "one provider call per page" not in low
+    assert "real sources and refs are unaffected" not in low and "can never enter" not in low
+    assert "naming-convention" in low and "single-flight" in low

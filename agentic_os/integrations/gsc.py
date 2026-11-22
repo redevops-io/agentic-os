@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, List, Optional, Tuple
 
-from agentic_os.content.relevance import sanitize_text
+from agentic_os.content.relevance import _synthetic_looking, sanitize_text
 from agentic_os.content.search_signals import (
     SearchObservation, SearchSignal, SignalType, Thresholds, _conflict_groups, _kind, _source, cannibalization,
     conflict_key, ctr_opportunity, hook_originated, near_win, relevance_unknown_aware,
@@ -134,7 +134,7 @@ def apply_relevance(o: SearchObservation, relevance_fn: Callable[[SearchObservat
         return replace(o, relevance_source="unavailable:no_value")
     if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
             or not 0.0 <= value <= 1.0 or not low.startswith("embedding:") or len(source) <= len("embedding:")
-            or low.startswith(("ssr", "synthetic"))):
+            or low.startswith(("ssr", "synthetic")) or _synthetic_looking(source)):
         return replace(o, relevance_source="unavailable:invalid_result")
     return replace(o, relevance=float(value), relevance_source="embedding:" + source[len("embedding:"):],
                    relevance_detail=detail)
