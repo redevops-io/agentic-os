@@ -41,3 +41,12 @@ Studies compare only like with like: `compare_results` refuses to compare studie
 * `chat_template_kwargs: {"enable_thinking": false}` is accepted by both loopback OpenAI-compatible servers and is needed: with thinking enabled a 120-160 token budget was spent on reasoning and the visible answer was empty (6/6 and 6/6). `strip_reasoning` also removes `<think>` blocks defensively.
 * The per-call `seed` parameter is honoured: 6/6 identical texts across three repeats on both a 27B 8-bit model and a Flash-class model, versus 0/6 without a seed. At `temperature = 0` the Flash-class server was **not** reproducible (0/6) while the 27B one was (6/6), so the module controls determinism through per-call seeds, not through temperature 0. An earlier single-prompt probe on the Flash server showed a divergence after a common prefix, so treat seed reproducibility as "mostly", not as a guarantee, and record prompt hashes.
 * The servers' `/v1/embeddings` use the chat model and are not usable for SSR; embeddings come from an injected `TextEmbedder` and the model revision is recorded in the manifest.
+
+## Market Radar capability: `radar.synthetic_study`
+`apps/market-radar/synthetic.py` exposes one small study as a read-only Market Radar capability. Input: 2 to 4 message variants (`{id, headline, body, cta}`), an `audience` (`sme`: one to three niches from the SME frame; `enterprise`: every committee role in one scenario), `per_cell` (1 to 8), `seed`. Output: per construct, each variant's mean with a 95% interval and its difference from the first variant; the controls that ran and which failed; how many answers were excluded; the manifest reference.
+
+* Off unless `AGENTIC_OS_SYNTHETIC_RESEARCH` is set; with it off the capability answers `disabled` and touches nothing.
+* Respondent model: `SYNTHETIC_RESEARCH_LLM_URL` and `SYNTHETIC_RESEARCH_LLM_MODEL` (in-boundary only). Embedder: `SYNTHETIC_RESEARCH_EMBEDDER=sentence-transformers:<model>` (in-process) or `SYNTHETIC_RESEARCH_EMBED_URL` and `SYNTHETIC_RESEARCH_EMBED_MODEL` (in-boundary only); `SYNTHETIC_RESEARCH_EMBED_REVISION` records the pinned revision.
+* Every result carries `synthetic: true`, `evidence_class: synthetic-hypothesis` and `requires_human_review: true`.
+* A study in which any built-in control fails, or more than a quarter of the answers are excluded, is returned with `verdict: inconclusive`, no ranking and no hypotheses.
+* The module imports nothing from the watch service, an outcome store or the ledger, and writes nowhere.
