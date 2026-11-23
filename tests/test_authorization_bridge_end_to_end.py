@@ -241,3 +241,26 @@ class TestExecutionAfterTheServiceHasStarted:
 
         plane_slot(make_engine_authorizer(gate))
         assert registry.run(WRITE, {"id": 7}, principal=_P()).ok, "the plane works again, so the call may"
+
+
+@needs_engine
+def test_the_delegation_contract_refuses_a_read_claim_across_the_seam():
+    """The installed runtime must enforce both sides of delegated().
+
+    A reviewed delegation may carry a write class, but its own provenance cannot buy a
+    read grant. This is checked through the installed context-runtime package, not a
+    copied policy rule in the kernel's test suite.
+    """
+    from context_runtime.tools import delegated
+    from context_runtime.tools.base import RegistryConfigurationError
+
+    evidence = dict(
+        authority="grant agentic-os:fleet/support update_customer approved in security review",
+        via="support_client.update_customer forwards arguments to the CRM write endpoint",
+        review="reviewed the delegated wrapper and its CRM write effects on 2026-11-22",
+    )
+    authorized = delegated(action="write", **evidence)
+    assert authorized.action == "write"
+    assert authorized.authority == evidence["authority"]
+    with pytest.raises(RegistryConfigurationError, match="pure_read"):
+        delegated(action="read", **evidence)
