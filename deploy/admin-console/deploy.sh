@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Deploy the Business-OS Admin & Governance console to proxmox (demo.redevops.io/admin), :8105.
-# LAGO_API_URL and LAGO_API_KEY are required and have no default: put them in a host-only .env in $AD_HOST_DIR on the
-# target (never committed, kept across deploys) or export them there; `docker compose up` refuses to run without them.
+# ADMIN_CONSOLE_API_KEY, LAGO_API_URL and LAGO_API_KEY are required and have no default: put them in a
+# host-only .env in $AD_HOST_DIR on the target (never committed, kept across deploys) or export them there;
+# `docker compose up` refuses to run without them.
 set -euo pipefail
 HOST="${AD_HOST:-192.168.40.105}"; HOST_DIR="${AD_HOST_DIR:-/projects/agentic-os/admin-console}"
 SRC="$(cd "$(dirname "$0")" && pwd)"; AGENTIC="$(cd "$SRC/../.." && pwd)"
@@ -16,6 +17,9 @@ ssh "root@$HOST" AD_HOST_DIR="$HOST_DIR" 'bash -s' <<'REMOTE'
 set -e; cd "$AD_HOST_DIR"
 ADMIN_PORT=8105 docker compose -p admin-console -f admin.compose.yml up -d --build
 for i in $(seq 1 30); do curl -s --max-time 6 http://127.0.0.1:8105/healthz 2>/dev/null | grep -q '"ok":true' && { echo healthy; break; }; sleep 2; done
-curl -s "http://127.0.0.1:8105/api/admin" 2>/dev/null | head -c 200; echo
+# B3: /api/admin now requires ADMIN_CONSOLE_API_KEY — confirm it's refused anonymously, never confirm it
+# with the real key here (that would put the key in this script's own stdout/shell history).
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 "http://127.0.0.1:8105/api/admin")
+echo "anonymous /api/admin -> $code (expect 401/503, never 2xx)"
 REMOTE
 echo; echo "== ingress: add demo.redevops.io path rule ^/(admin|api/admin) -> 192.168.40.105:8105"

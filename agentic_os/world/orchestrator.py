@@ -45,7 +45,7 @@ class ScenarioOrchestrator:
 
         outcome: Dict[str, Any] = {}
         for ev in events:
-            self._seeder.project(ev, graph)                 # entities visible across apps, one identity
+            self._seeder.project(ev, graph, mode=mode)       # entities visible across apps, one identity; mode -> B3: SIMULATE/DRY_RUN/SHADOW never real
             rt.set_capsule(mission_id=mission_id, entity_id=(ev.entity_ids[0].entity_id if ev.entity_ids else ""),
                            evidence_hash=ev.content_hash)
             try:
