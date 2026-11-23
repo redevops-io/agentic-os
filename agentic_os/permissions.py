@@ -69,6 +69,117 @@ SUBJECT_KINDS = ("app", "role", "user")
 RESOURCE_KINDS = ("database", "table", "corpus", "tool")
 ROW_SCOPES = ("all", "own", "in")
 
+#: How much a grant action permits, weakest first. Used to compare the action a tool is REGISTERED for with
+#: the action its own spec carries: the two may disagree, and the only safe reading of a disagreement is the
+#: stricter one. ``delete`` outranks ``write`` because that is the difference between changing what exists and
+#: removing what a grant was written about.
+_ACTION_RANK = {action: rank for rank, action in enumerate(ACTIONS)}
+
+
+#: Who decided, as the tool engine's audit line names it. The engine writes ``plane`` on every authorization
+#: record, so this is how a reviewer tells a decision from this plane apart from one the enterprise gate made.
+ENGINE_PLANE = "agentic_os.permissions"
+
+_ENGINE_AUTHZ: object = "unset"      # resolved once: the installed engine's (Authorization, PolicyReason), or None/False
+
+
+def _engine_authz():
+    """The installed tool engine's ``(Authorization, PolicyReason)``, or None when nothing that speaks ``authz/v1`` is installed.
+
+    agent-harness changed what an authorizer's answer MEANS. Under the old seam ``None`` was "allowed" and a
+    non-empty string a denial; from the authz seam on, silence is the one answer that must not be read as consent —
+    ``None`` is "no decision", and the registry denies the call. An authorizer cannot answer both ways at once: no
+    value is falsy for the old engine AND a recognised decision for the new one. So the installed engine is asked
+    which contract it speaks — once, and only from an installed distribution (``trusted_import``), because a
+    decision wrapper taken from whatever directory happens to be on ``sys.path`` would let a planted module turn a
+    denial into an allow."""
+    global _ENGINE_AUTHZ
+    if _ENGINE_AUTHZ != "unset":
+        return _ENGINE_AUTHZ or None
+    from . import trusted_import
+    pair = None
+    if trusted_import.package_status("agent_harness") == "trusted":
+        try:
+            from agent_harness.tools import Authorization, PolicyReason
+            pair = (Authorization, PolicyReason)
+        except Exception:  # noqa: BLE001 — an engine without the authz/v1 types speaks the old contract
+            pair = None
+    _ENGINE_AUTHZ = pair or False
+    return pair
+
+
+def make_engine_authorizer(authorizer, *, label: str = "the app's permissions plane"):
+    """The authorizer to hand a TOOL ENGINE: the same decisions, in the shape that engine reads.
+
+    ``make_authorizer`` answers with the kernel's contract — ``None`` means allowed, a string is the deny reason —
+    and half of this repository reads it that way (``app_gate.tool_denial``, the route guards, the operator seam),
+    so that contract stays. An engine from the authz seam on reads the same ``None`` as "nobody decided" and denies
+    the call. This wraps one into the other at the seam, in the one place that can tell which engine is installed::
+
+        set_default_authorizer(make_engine_authorizer(make_authorizer(store, ...)))
+
+    A denial carries its full human-readable reason as ``detail``, so the person asking still reads why. An allow is
+    reported as an explicit grant with this plane named, but WITHOUT grant ids — the plane does not return them yet.
+    The registry writes an allow into its audit trail only when the call is gated or the decision is not an ordinary
+    named grant, so the missing attribution is currently invisible rather than flagged: naming the plane on both
+    sides is what keeps a decision traceable today, and carrying grant ids across the seam is the follow-up that
+    would let ``ToolRegistry.unattributed_allows()`` speak about allows at all. With an older engine, or none
+    installed, the authorizer comes back unchanged."""
+    pair = _engine_authz()
+    if authorizer is None:
+        # An absent plane is not a plane that allows. Handed on as ``None``, the registry answers the call with
+        # its own ``missing_authorizer`` denial and says so in the audit; wrapped, it would raise inside the
+        # wrapper and arrive as a crash the reader has to guess a reason for.
+        return None
+    if pair is None or getattr(authorizer, "_agentic_os_engine_shaped", False):
+        return authorizer
+    authorization, reason_vocabulary = pair
+
+    def engine_authorizer(principal, spec, args):
+        """Translate one kernel answer into the engine's contract. Every path but one is a denial.
+
+        The kernel answers ``None`` for allowed and a string for denied; the engine needs a decision object.
+        The three ways this could go quietly wrong are answered here rather than left to the caller's luck:
+        a plane that cannot be consulted is ``no_resource_plane`` (not a crash the registry has to
+        interpret), an answer that is neither of the two kernel shapes is ``malformed_request`` (never an
+        allow), and the allow itself names this plane so the decision stays traceable.
+        """
+        try:
+            reason = authorizer(principal, spec, args)
+        except Exception as exc:  # noqa: BLE001 — an unreachable authority refuses; it never passes
+            return authorization.deny(reason=reason_vocabulary.NO_RESOURCE_PLANE,
+                                      detail=f"{label} could not answer ({type(exc).__name__}: {exc})",
+                                      plane=ENGINE_PLANE)
+        if reason is None:
+            return authorization.allow(reason=reason_vocabulary.EXPLICIT_GRANT,
+                                       detail=f"{label}: the grant check passed", plane=ENGINE_PLANE)
+        if isinstance(reason, str):
+            if not reason.strip():
+                # An empty deny reason is the plane failing to answer, not an answer. It stays a denial —
+                # the question is only whether the reader learns that the plane misbehaved.
+                return authorization.deny(reason=reason_vocabulary.MALFORMED_REQUEST,
+                                          detail=f"{label} returned an empty deny reason", plane=ENGINE_PLANE)
+            return authorization.deny(reason=reason_vocabulary.MISSING_EXPLICIT_GRANT, detail=str(reason),
+                                      plane=ENGINE_PLANE)
+        return authorization.deny(reason=reason_vocabulary.MALFORMED_REQUEST,
+                                  detail=f"{label} returned {type(reason).__name__}, not the kernel's "
+                                         f"None-or-string answer", plane=ENGINE_PLANE)
+
+    engine_authorizer.__name__ = engine_authorizer.__qualname__ = (
+        f"{getattr(authorizer, '__name__', 'authorizer')}_engine_shaped")
+    engine_authorizer.__doc__ = (f"{getattr(authorizer, '__name__', 'authorizer')} in the installed engine's return "
+                                 f"contract (see ``make_engine_authorizer``).")
+    engine_authorizer._agentic_os_engine_shaped = True
+    engine_authorizer.kernel_authorizer = authorizer       # the plain str|None shape, for anything that wants it
+    # Scoped tools reach their scope through the authorizer they were called with (``authorizer.slice_for(...)`` /
+    # ``permits_row(...)`` / ``decide(...)``), and in a real deployment the one they hold IS this wrapper — so the
+    # whole surface of the plane travels with it, rather than a scoped tool failing at its first row.
+    for _attribute in ("decide", "slice_for", "permits_row"):
+        _attached = getattr(authorizer, _attribute, None)
+        if _attached is not None:
+            setattr(engine_authorizer, _attribute, _attached)
+    return engine_authorizer
+
 
 class GrantError(RuntimeError, ValueError):
     """A grant that cannot be stored as given. A RuntimeError so the admin routers answer 409 like they do
@@ -96,7 +207,7 @@ def _identity_of(obj) -> "Identity":
             return getattr(obj, name, default)
         except Exception:  # noqa: BLE001
             return None
-    return Identity(app=get("app", ""), user=get("user", ""), roles=get("roles", ()))
+    return Identity(app=get("app", ""), user=get("user", ""), roles=get("roles", ()), tenant=get("tenant", ""))
 
 
 def _clean_roles(roles) -> list:
@@ -200,6 +311,12 @@ class Grant:
         subject = _clean_text(self.subject)
         if not subject:       # a grant with no subject belongs to nobody; "" must not match an empty identity
             return False
+        # B1 fix: an untenanted grant (self.tenant == "") is EXACTLY the pre-contract case and matches any
+        # identity regardless of its own tenant — same stored bytes, same decisions, as documented on the
+        # field. A TENANT-SCOPED grant matches only the identity validated for that SAME tenant; a missing or
+        # different tenant on the identity side never satisfies it — fail closed on ambiguity, never "any tenant".
+        if self.tenant and _clean_text(self.tenant) != _clean_text(identity.tenant):
+            return False
         if self.subject_kind == "app":
             return _clean_text(identity.app) == subject
         if self.subject_kind == "user":
@@ -293,24 +410,33 @@ def grant_problem(g: "Grant") -> str | None:
 
 @dataclass
 class Identity:
-    """The principal a request carries — app fixed at bootstrap, user/roles from the gateway."""
+    """The principal a request carries — app fixed at bootstrap, user/roles from the gateway, ``tenant`` the
+    ACTIVE tenant this request is scoped to (contract v1 extension, B1 fix). Absent (``""``) is the
+    pre-contract, single-tenant case: byte-identical decisions for any deployment that never sets it. A
+    tenant-scoped grant (``Grant.tenant`` set) never matches an identity whose own tenant is absent or
+    different — ambiguity fails CLOSED here, it is never read as "any tenant"."""
     app: str = ""
     user: str = ""
     roles: list = field(default_factory=list)
+    tenant: str = ""
 
     def invalid_reason(self) -> str | None:
-        """Why this principal is INVALID as a whole, or None. Strict, and computed here, once, at the identity boundary: ``app``
-        and ``user`` must be strings (a blank one is merely absent, not malformed) and ``roles`` a list, tuple or set of
+        """Why this principal is INVALID as a whole, or None. Strict, and computed here, once, at the identity boundary: ``app``,
+        ``user`` and ``tenant`` must be strings (a blank one is merely absent, not malformed) and ``roles`` a list, tuple or set of
         non-blank strings (so ``None``, a bare string, or a collection with any malformed member is invalid). The reason names
         the field only. An invalid principal grants nothing through ANY field and gets no admin bypass; nothing raises."""
         if not isinstance(self.app, str):
             return "app is not a string"
         if not isinstance(self.user, str):
             return "user is not a string"
+        if not isinstance(self.tenant, str):
+            return "tenant is not a string"
         if not _ids.absent(self.app) and not _ids.valid_identifier(self.app):
             return "app is not a valid identifier"
         if not _ids.absent(self.user) and not _ids.valid_identifier(self.user):
             return "user is not a valid identifier"
+        if not _ids.absent(self.tenant) and not _ids.valid_identifier(self.tenant):
+            return "tenant is not a valid identifier"
         r = self.roles
         if type(r) not in _ROLE_COLLECTIONS or any(type(x) is not str or not _role_ok(x) for x in r):
             return "roles is not a valid role collection"
@@ -996,19 +1122,29 @@ class GrantStore:
     def add(self, subject_kind: str, subject: str, resource_kind: str, resource_name: str, *,
             actions: list | None = None, row_scope: str = "all", row_column: str = "owner",
             row_values: list | None = None, masked_columns: list | None = None, created_by: str = "",
-            stable_id: str | None = None) -> Grant:
+            stable_id: str | None = None, tenant: str = "", revocation_epoch: int | None = None) -> Grant:
         """APPEND a new grant and return it (with its new id). Grants coexist: nothing is replaced because kind, subject and
         resource match — a role may hold several grants on one resource, OR-ed by the plane. Two identical adds make two
         grants (intended). ``stable_id`` lets a caller (``seed``) name a grant with a fixed token; an id that already exists
-        is refused, never overwritten. Removal is by id (:meth:`remove`); a change is :meth:`update`."""
+        is refused, never overwritten. Removal is by id (:meth:`remove`); a change is :meth:`update`.
+
+        ``tenant`` (contract v1, B1 fix): ``""`` is the pre-contract, untenanted grant (matches any identity's
+        tenant); a non-empty value scopes this grant to exactly that tenant. ``revocation_epoch``, left ``None``
+        (the default), is auto-stamped one generation ahead of THIS store's current epoch for
+        ``(subject_kind, subject, tenant)`` — real, meaningful protection for every grant added from here on,
+        never 0 (0 is reserved for "never opted in": every grant already on disk before this fix, read back via
+        :meth:`Grant.from_dict`, keeps that value and is therefore completely unaffected by any
+        :meth:`revoke_epoch` call — true backward compatibility for EXISTING data, not a promise that brand-new
+        grants stay unprotected). Pass an explicit ``revocation_epoch=0`` to opt a specific new grant OUT."""
         with self._txn():
             return self._add_locked(subject_kind, subject, resource_kind, resource_name, actions=actions,
                                     row_scope=row_scope, row_column=row_column, row_values=row_values,
-                                    masked_columns=masked_columns, created_by=created_by, stable_id=stable_id)
+                                    masked_columns=masked_columns, created_by=created_by, stable_id=stable_id,
+                                    tenant=tenant, revocation_epoch=revocation_epoch)
 
     def _add_locked(self, subject_kind, subject, resource_kind, resource_name, *, actions=None,
                     row_scope="all", row_column="owner", row_values=None, masked_columns=None,
-                    created_by="", stable_id=None) -> Grant:
+                    created_by="", stable_id=None, tenant="", revocation_epoch=None) -> Grant:
         if not _clean_text(subject) or not _clean_text(resource_name):
             raise GrantError("a grant needs a subject and resource_name that are valid identifiers (non-empty, no padding, no "
                              "control/format/surrogate/unassigned/bidi characters)")
@@ -1024,15 +1160,70 @@ class GrantStore:
         gid = stable_id
         while gid is None or gid in taken:
             gid = new_grant_id()
+        if revocation_epoch is None:
+            # auto-stamp one generation AHEAD of the current epoch (never 0 — see PermissionsPlane._epoch_ok's
+            # "+1 / strictly greater" note): a key that has never been revoked is at epoch 0, so a fresh grant
+            # here is stamped 1, never colliding with the "0 = never opted in" sentinel.
+            revocation_epoch = self._current_epoch_of(doc.meta, subject_kind, subject, tenant) + 1
         g = Grant(id=gid, subject_kind=subject_kind, subject=subject, resource_kind=resource_kind,
                   resource_name=resource_name, actions=(["read"] if actions is None else actions), row_scope=row_scope,
                   row_column=row_column, row_values=row_values or [], masked_columns=masked_columns or [],
-                  created_by=created_by, at=time.time())
+                  created_by=created_by, at=time.time(), tenant=tenant, revocation_epoch=revocation_epoch)
         problem = grant_problem(g)
         if problem:
             raise GrantError(f"malformed grant: {problem}")
         self._write([*entries, g.to_dict()], doc.meta)
         return g
+
+    # ──────────────────────── revocation epochs (contract v1, B1 fix) ────────────────────────
+    # A mass-revocation primitive, independent of touching any individual grant: bumping the epoch for one
+    # (subject_kind, subject, tenant) key immediately makes every EPOCH-PROTECTED grant for that exact key
+    # stale, on the very next ``authorize()`` — including one already cached by a caller, since the caller
+    # re-evaluates from the store on every call, never from a cached decision. A grant stamped ``0`` (the
+    # pre-contract default, and the default for anyone who never calls :meth:`revoke_epoch`) opted OUT of
+    # epoch protection and is NEVER affected — this is what keeps every existing stored grant, and every new
+    # one added by a caller who never uses this feature, byte-identical to before this contract existed.
+
+    @staticmethod
+    def _epoch_key(subject_kind: str, subject: str, tenant: str) -> str:
+        return f"{subject_kind}:{subject}:{tenant}"
+
+    @staticmethod
+    def _current_epoch_of(meta: dict, subject_kind: str, subject: str, tenant: str) -> int:
+        epochs = meta.get("epochs")
+        if not isinstance(epochs, dict):
+            return 0
+        v = epochs.get(GrantStore._epoch_key(subject_kind, subject, tenant), 0)
+        return v if isinstance(v, int) and v >= 0 else 0
+
+    def current_epoch(self, subject_kind: str, subject: str, tenant: str = "") -> int:
+        """The current revocation epoch for this exact ``(subject_kind, subject, tenant)`` — 0 until it is ever
+        bumped. Lock-free (the file is replaced atomically, so a reader always sees a complete document); a
+        sealed store answers 0 deliberately — ``PermissionsPlane._epoch_ok`` treats "the store could not say" as
+        failing the grant CLOSED, not as "fine", so a sealed read still denies everything, never lets a stale
+        grant through by reporting an innocent-looking 0."""
+        doc = self._load_raw()
+        if doc.sealed:
+            return 0
+        return self._current_epoch_of(doc.meta, subject_kind, subject, tenant)
+
+    def revoke_epoch(self, subject_kind: str, subject: str, tenant: str = "") -> int:
+        """Mass-revoke every CURRENT, epoch-protected grant for this exact ``(subject_kind, subject, tenant)``:
+        bump its epoch counter by one and persist it. Returns the new epoch. A grant whose own
+        ``revocation_epoch`` field is at or below the new value stops matching immediately (a freshly-added
+        grant is stamped exactly one generation ahead, so the very first bump that reaches it is enough); one
+        stamped ``0`` (never opted in) is untouched, by design — see the class-level note above."""
+        if not _clean_text(subject):
+            raise GrantError("subject must be a valid identifier")
+        with self._txn():
+            doc = self._load_raw()
+            if doc.sealed:
+                raise RuntimeError("grants store is sealed (decrypt failed) — refusing to overwrite")
+            epochs = dict(doc.meta.get("epochs") or {}) if isinstance(doc.meta.get("epochs"), dict) else {}
+            key = self._epoch_key(subject_kind, subject, tenant)
+            epochs[key] = int(epochs.get(key, 0)) + 1
+            self._write(doc.items, {**doc.meta, "epochs": epochs})
+            return epochs[key]
 
     _UPDATABLE = ("actions", "row_scope", "row_column", "row_values", "masked_columns")
 
@@ -1185,9 +1376,36 @@ def _row_matches(row_filter: dict, record: dict) -> bool:
 
 
 class PermissionsPlane:
-    def __init__(self, store: GrantStore, privileged_roles: tuple = ("admin",)):
+    def __init__(self, store: GrantStore, privileged_roles: tuple = ("admin",), global_privileged_roles: tuple = ()):
+        """``privileged_roles`` bypass grant-matching entirely, but ONLY for an identity with no active tenant —
+        the pre-contract, single-tenant case, byte-identical to before this contract existed. An identity that
+        DOES carry a tenant gets no automatic bypass from a privileged role: that role is authority WITHIN its
+        tenant only, same as any other role-based grant (B1 fix — "wildcard and privileged-role grants cannot
+        bypass tenant boundaries"). ``global_privileged_roles`` is the separate, narrower, explicitly-named
+        escape for a genuine cross-tenant admin capability; empty by default, so nothing is global unless a
+        deployment opts in on purpose."""
         self.store = store
         self.privileged_roles = set(privileged_roles)
+        self.global_privileged_roles = set(global_privileged_roles)
+
+    def _epoch_ok(self, g: "Grant") -> bool:
+        """A grant stamped ``0`` (the pre-contract default) never opted into epoch protection and is always
+        current. A stamped grant (always >= 1 — see ``GrantStore._add_locked``'s "+1" auto-stamp, which never
+        produces 0) is current only while it is STRICTLY GREATER than the store's current epoch for its own
+        subject+tenant: a freshly-stamped grant is exactly one generation ahead, so the very next
+        ``revoke_epoch`` for that key — which raises the current epoch to equal the stamp — makes it stale
+        immediately, not one bump later. A store that cannot answer (no ``current_epoch`` method) fails this
+        grant CLOSED rather than silently skip the check — the grant explicitly asked for epoch protection, so
+        "the store can't say" is never read as "fine"."""
+        if not g.revocation_epoch:
+            return True
+        current = getattr(self.store, "current_epoch", None)
+        if not callable(current):
+            return False
+        try:
+            return int(g.revocation_epoch) > int(current(g.subject_kind, g.subject, g.tenant))
+        except Exception:  # noqa: BLE001 — an unreadable epoch answer is "can't say": fail closed, same as above
+            return False
 
     def authorize(self, identity: Identity, resource_kind: str, resource_name: str, action: str = "read") -> AccessDecision:
         grants, sealed = _snapshot(self.store)      # ONE read: its sealed state belongs to this decision alone
@@ -1203,12 +1421,13 @@ class PermissionsPlane:
         if invalid:       # an invalid principal grants nothing through any field, and gets no admin bypass
             return AccessDecision(False, f"denied: invalid principal ({invalid})")
         identity = Identity(app=_clean_text(identity.app), user=_clean_text(identity.user),
-                            roles=_clean_roles(identity.roles))
-        if any(r in self.privileged_roles for r in identity.roles):
-            return AccessDecision(True, f"privileged role — full access (bypass)")
+                            roles=_clean_roles(identity.roles), tenant=_clean_text(identity.tenant))
+        privileged = [r for r in identity.roles if r in self.privileged_roles]
+        if privileged and (not identity.tenant or any(r in self.global_privileged_roles for r in privileged)):
+            return AccessDecision(True, "privileged role — full access (bypass)", tenant=identity.tenant)
         matching = [g for g in grants
                     if g.matches(identity) and g.resource_kind == resource_kind
-                    and g.covers(resource_name) and action in g.actions]
+                    and g.covers(resource_name) and action in g.actions and self._epoch_ok(g)]
         if not matching:
             who = identity.app or identity.user or (identity.roles[0] if identity.roles else "principal")
             return AccessDecision(False, f"denied: no '{action}' grant for {who} on {resource_kind} '{resource_name}'")
@@ -1230,7 +1449,7 @@ class PermissionsPlane:
                         else {c for g in matching for c in g.masked_columns})
         scope = "all rows" if row_filter is None else _describe_filter(row_filter)
         return AccessDecision(True, f"allow · {scope}" + (f" · masked {masked}" if masked else ""),
-                              row_filter=row_filter, masked_columns=masked, rules=rules)
+                              row_filter=row_filter, masked_columns=masked, rules=rules, tenant=identity.tenant)
 
     @staticmethod
     def _applicable(decision: AccessDecision, record: dict) -> list:
@@ -1291,10 +1510,23 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
        classified ``write``/``delete`` (ValueError). The first denial of each unmapped tool is logged.
     2. **Action.** ``tool_actions[name]`` — ``"read"``, ``"write"`` or ``"delete"`` — is the grant action the
        tool requires. It comes ONLY from this registration, which the registering code controls: never from the
-       tool's name, its description, or an MCP ``readOnlyHint``. A tool with no entry is DENIED. If the
-       tool's own spec says ``side_effecting`` but it was registered ``read``, the classification is
-       ambiguous and the call is DENIED; a spec can tighten, never downgrade. Authorisation is separate from
-       approval: an approved action without the grant is still denied (the authorizer runs first).
+       tool's name, its description, or an MCP ``readOnlyHint`` (an approval hint, never read here). A tool with
+       no entry is DENIED. The spec's OWN risk class IS read, and only ever to make a call harder to authorize:
+
+        * a spec with no ``action`` axis, or with the harness's empty (unclassified) action, says nothing — the
+          registration decides for it;
+        * a spec naming an action outside ``ACTIONS`` is DENIED: a tool's own metadata cannot invent a class;
+        * a spec naming an action WEAKER than its registration is DENIED as a contradiction. Running it on the
+          weaker reading is the one way a self-describing tool could downgrade a reviewed classification, and
+          quietly using the stronger one would hide the drift instead of reporting it;
+        * a spec naming an action STRICTER than its registration is authorized at the STRICTER action — a mount
+          that over-declares only ever asks for more than it needs;
+        * a spec that says ``side_effecting`` while registered ``read`` is ambiguous and DENIED, and a public
+          tool whose spec asks for ``write``/``delete`` is DENIED: "touches no controlled data" is what the
+          registration says about a tool, not what the tool claims about itself.
+
+       In short: a spec can tighten, never downgrade. Authorisation is separate from approval: an approved
+       action without the grant is still denied (the authorizer runs first).
     3. **Scope.** The seam can only allow or deny — it cannot hand a row filter or column mask to the tool. A
        grant that carries one (``row_scope`` own/in, or ``masked_columns``) is honoured only for a tool
        declared in ``scoped_tools``: one that applies the WHOLE decision itself, through
@@ -1341,15 +1573,72 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
             warned.add(name)
             _log.warning("tool %r denied: %s", name, why)
 
-    def _decide(principal, name: str) -> AccessDecision:
+    def _spec_field(spec, field: str):
+        """One field of the spec, which the seam hands over as an object (a harness ``ToolSpec``) or a dict."""
+        return spec.get(field) if isinstance(spec, dict) else getattr(spec, field, None)
+
+    def _declared_action(spec) -> str | None:
+        """The risk class the spec carries, or None when the spec makes no claim at all.
+
+        A spec with no ``action`` attribute (an older caller, the gate's own probe, another engine's spec) and
+        the harness's empty action (``ToolSpec.action == ""``, which means "nobody has classified this") say the
+        same thing here: the registration decides. Anything else is a CLAIM, and a claim is measured against the
+        registration — never believed, and never ignored."""
+        declared = _spec_field(spec, "action")
+        if declared is None or declared == "":
+            return None
+        return declared if isinstance(declared, str) else repr(declared)
+
+    def _effective_action(name: str, declared: str | None) -> tuple:
+        """``(action_to_ask_the_plane_for, deny_reason)`` for one call: the spec may RAISE the bar, never lower it.
+
+        * a claim outside ``ACTIONS`` is refused — a tool cannot invent its own grant action;
+        * a claim WEAKER than the registration is refused. Honouring it would let the thing asking to run pick
+          its own authority; silently asking for the registered one instead would keep the app working while
+          hiding the drift between a tool and its classification, which is the failure this whole seam exists to
+          catch. Either way the call is denied and the mismatch is logged once;
+        * a claim STRICTER than the registration is honoured: over-declaring can only ever ask for more
+          authority than the tool needs, so the plane is asked for the stricter class.
+
+        The first element is None whenever the registration decides for itself (no claim, the same class, or a
+        tool the table does not know yet — an unknown tool is denied for want of a classification below)."""
+        if declared is None:
+            return None, None
+        if declared not in ACTIONS:
+            reason = (f"denied: tool '{name}' declares action {declared!r}, which is not one of the vocabulary "
+                      f"{ACTIONS} — a tool cannot invent its own grant action")
+            _warn_once(name, "declares an action outside the vocabulary")
+            return None, reason
+        registered = tool_actions.get(name)
+        if registered is None or registered == declared:
+            return None, None
+        if _ACTION_RANK[declared] < _ACTION_RANK[registered]:
+            _warn_once(name, f"declares action {declared!r} against its registered {registered!r}: a spec can "
+                             f"tighten its classification, never downgrade it")
+            return None, (f"denied: tool '{name}' declares action {declared!r} but is registered as "
+                          f"{registered!r} — a spec can tighten its classification, never downgrade it. Fix the "
+                          f"registration (agentic_os/tool_actions.py) or the tool: the call does not run on the "
+                          f"weaker reading")
+        _warn_once(name, f"declares action {declared!r}, tighter than its registered {registered!r}: the call is "
+                         f"authorized at {declared!r}")
+        return declared, None
+
+    def _decide(principal, name: str, action: str | None = None) -> AccessDecision:
         """The plane's decision for this tool at the action its registration requires. A public tool is
-        allowed unrestricted; an unmapped or unclassified tool is denied."""
+        allowed unrestricted; an unmapped or unclassified tool is denied. ``action`` is the stricter class this
+        call's spec asked for (see :meth:`_effective_action`); None asks for the registered class."""
         ident = _identity(principal)
         if name in public:
             if tool_actions.get(name) != "read":
                 _warn_once(name, "a public tool must still be listed in tool_actions, as read")
                 return AccessDecision(False, f"denied: public tool '{name}' is not listed in tool_actions (every executable tool "
                                              f"declares its action; a public tool is listed as read)")
+            if action is not None and action != "read":
+                # "touches no controlled data" is what the registration says about the tool, not what the tool
+                # claims about itself: one that asks for write or delete is not a public tool.
+                return AccessDecision(False, f"denied: public tool '{name}' declares action {action!r}, but a public tool "
+                                             f"touches no controlled data and is listed as read — map it to a resource "
+                                             f"and register its action if that has changed")
             return AccessDecision(True, "public tool — touches no controlled data")
         invalid = ident.invalid_reason()
         if invalid:
@@ -1365,7 +1654,7 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
         target = _resource(res)
         if target is None:
             return AccessDecision(False, f"denied: tool '{name}' has a malformed resource mapping")
-        action = tool_actions.get(name)
+        action = action or tool_actions.get(name)
         if action is None:
             _warn_once(name, "no registered action classification; add it to tool_actions as read, write or delete")
             return AccessDecision(False, f"denied: tool '{name}' has no registered action classification "
@@ -1374,11 +1663,14 @@ def make_authorizer(store: GrantStore, app_resources: dict | None = None, tool_r
 
     def authorizer(principal, spec, args) -> str | None:
         name = _name(spec)
-        self_declared = getattr(spec, "side_effecting", None) if not isinstance(spec, dict) else spec.get("side_effecting")
+        self_declared = _spec_field(spec, "side_effecting")
         if self_declared and tool_actions.get(name) == "read":      # public tools included: a spec cannot contradict its registration
             return (f"denied: tool '{name}' is registered as read but declares side effects — ambiguous "
                     f"classification, register it as write or delete")
-        d = _decide(principal, name)
+        action, deny = _effective_action(name, _declared_action(spec))
+        if deny is not None:
+            return deny                                  # the classification itself is the failure: no principal gets past it
+        d = _decide(principal, name, action)
         if not d.allowed:
             return d.reason
         if d.row_filter is not None or d.masked_columns:

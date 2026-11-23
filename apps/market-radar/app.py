@@ -33,7 +33,7 @@ import os
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
 # Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
 # be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
-from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
+from agentic_os.app_gate import RequestContext as _RequestContext, console_authorizer as _console_authorizer, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
 from agentic_os.app_gate import with_authorization as _with_authorization
 _GATE_APP = "market-radar"
 _req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
@@ -379,9 +379,17 @@ def _brief(body: dict) -> dict:
 
 # ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
 try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
+    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole
+    from agentic_os.app_gate import validate_console as _validate_console
+    from agentic_os.app_gate import may_start_helper_process as _may_start_helpers
+    from agentic_os.tool_actions import console_tool as _console_tool, mount_actions as _mount_actions
 except Exception:  # noqa: BLE001 — context-runtime absent → no console
     _AgentConsole = None
+
+# Each tool's risk class comes from agentic_os/tool_actions.py (the one reviewed table), not from this file, and
+# a mounted MCP server's classes are read from the same table (``mount_actions``) instead of trusting the
+# server's own ``readOnlyHint``: an announced hint moves the approval gate, never the authorization class.
+_crtool = _console_tool(_GATE_APP) if _AgentConsole is not None else None
 
 _RADAR_PRIMER = """A WATCH is a single web page changedetection.io monitors for you. Add one under Watches → Add a new watch (paste the URL), or ask the agent to "watch example.com". Each watch is a competitor, custodian or fee/regulatory page you want to be told about the moment it moves.
 
@@ -450,21 +458,27 @@ if _AgentConsole is not None:
                      "How do I track just the price?", "What is a filter?"],
         subtitle="Ask what moved, search the web for competitor signals, or add a new monitor.",
         model=_GovernedConsoleModel(),
+        # named, not inherited: the console answers on the gate's plane, in the shape a ToolRegistry reads
+        authorizer=_console_authorizer(_GATE_APP),
         allow_side_effects=["add_watch"],  # adding a watch is safe/reversible → runs from chat
     )
+    _validate_console(_GATE_APP, _RADAR_CONSOLE)   # gated or not at all: no serving an assistant whose actions cannot be authorized
 else:
     _RADAR_CONSOLE = None
 
 # Mount a REAL MCP tool: the bundled keyless web-search server (Wikipedia + Hacker News) so the
-# assistant can look up competitors / market signals beyond the watched pages. It's read-only
-# (readOnlyHint) so the agent-harness ApprovalPolicy lets it run ungated. Optional — the app
-# runs fine if the MCP server can't start.
-if _RADAR_CONSOLE is not None:
+# assistant can look up competitors / market signals beyond the watched pages. The server's own
+# ``readOnlyHint`` is why the approval policy lets it run; its AUTHORIZATION class comes from
+# agentic_os/tool_actions.py via ``mount_actions`` — the server does not grade itself. Optional: the app
+# runs fine if the MCP server can't start, and a RESTRICTED app (permissions requested, nothing provisioned)
+# does not start the server at all: discovering a tool means running a process, and a restricted app runs none.
+_RADAR_MCP = None
+if _RADAR_CONSOLE is not None and _may_start_helpers(_GATE_APP):
     try:
         import sys as _sys
         from context_runtime.tools.mcp import MCPClient as _MCPClient
         _RADAR_MCP = _MCPClient.stdio([_sys.executable, "-m", "context_runtime.tools.mcp_servers.web_search"])
-        _RADAR_CONSOLE.mount_mcp(_RADAR_MCP)
+        _RADAR_CONSOLE.mount_mcp(_RADAR_MCP, actions=_mount_actions(_GATE_APP, "web_search"))
     except Exception:  # noqa: BLE001
         _RADAR_MCP = None
 

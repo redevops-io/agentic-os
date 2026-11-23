@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_os.permissions import AccessDecision, GrantStore, Identity, PermissionsPlane, make_authorizer
+from agentic_os.permissions import (AccessDecision, GrantStore, Identity, PermissionsPlane, make_authorizer,
+                                    make_engine_authorizer)
 
 TABLE = "crm.customers"
 ROWS = [
@@ -144,7 +145,9 @@ def _registry(authz, tools_mod, calls, rows=ROWS, *, slicing=False):
         view = authz.slice_for(tools_mod.current_principal(), "scoped_read", [dict(r) for r in rows])
         return tools_mod.ToolResult(data=view)
 
-    reg = tools_mod.ToolRegistry(authorizer=authz)
+    # the seam adapter, as app_gate installs it, and with the scope helpers carried across (a scoped tool calls
+    # ``authorizer.slice_for`` on the authorizer it was GIVEN, which is this wrapper in a running app)
+    reg = tools_mod.ToolRegistry(authorizer=make_engine_authorizer(authz))
     reg.register(tools_mod.function_tool("read_customers", _plain))
     reg.register(tools_mod.function_tool("scoped_read", _scoped))
     return reg
