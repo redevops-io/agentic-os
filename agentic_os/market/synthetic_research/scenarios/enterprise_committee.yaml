@@ -1,0 +1,125 @@
+# Persona sampling frame: ENTERPRISE buying committee (7 roles) x 6 scenarios (E1..E6).
+# Generic archetypes authored for this project; no real people or companies. Weights are HYPOTHETICAL
+# stratification weights only. Product facts come from public page snapshots supplied to a study, never from here.
+frame_id: enterprise-committee
+version: "1"
+kind: enterprise
+weights_are_hypothetical: true
+evidence_basis: >
+  Author-written archetypes of enterprise technology buying-committee roles and situations (own judgement, no
+  external dataset). Not calibrated; to be checked against buyer interviews before any decision.
+committee_gates:           # used by committee.py (structural model; not a probability)
+  veto: [ciso_iam_compliance, legal_data_governance]
+  champion: [cio_cto_vp_eng, ai_platform_mlops, app_domain_owner, operations_end_user]
+  budget: [finance_procurement]
+  feasibility: [ai_platform_mlops, app_domain_owner]
+variant_strategies:
+  A: current runtime positioning as published
+  B: security and governance first
+  C: cost and context first
+  D: interoperability and migration first
+  E: verified-outcome and learning first
+  F: explicit 30-day pilot
+scenarios:
+  - id: E1
+    title: Brownfield consolidation
+    context: >
+      The organisation already runs several agent and retrieval frameworks, a few internal copilots and
+      overlapping vendor tools built by different teams. Leadership wants fewer moving parts without a rewrite.
+    constraints: [existing frameworks cannot be replaced in a quarter, several teams own their own stacks]
+  - id: E2
+    title: Governance first
+    context: >
+      AI initiatives are blocked or slowed by review boards. Nothing goes to production without an audit trail,
+      approvals and a clear account of what data a model may see.
+    constraints: [an AI risk review is mandatory before production, evidence must be auditable]
+  - id: E3
+    title: Context and cost
+    context: >
+      Model spend and latency are growing faster than value. Teams stuff ever-larger contexts into prompts and
+      cannot explain why answers change from one day to the next.
+    constraints: [a budget cap on inference spend, reproducibility of answers is requested by auditors]
+  - id: E4
+    title: Self-hosted or hybrid
+    context: >
+      Part of the data may not leave the organisation's own environment. The team wants to run models and the
+      runtime on its own infrastructure, possibly alongside a cloud service.
+    constraints: [some data must stay in the organisation's environment, air-gapped or restricted networks exist]
+  - id: E5
+    title: Cross-app verified outcomes
+    context: >
+      Several business applications already exist (CRM, billing, support, content). The organisation wants agents
+      to act across them and to learn from verified outcomes rather than from activity counts.
+    constraints: [actions must be approved and receipted, outcomes must be measured from first-party systems]
+  - id: E6
+    title: Skeptical alternative
+    context: >
+      A senior reviewer asks why not do nothing, build in-house, or use the cloud-native agent controls the
+      organisation's cloud provider already offers.
+    constraints: [a credible build-or-buy comparison is required, the incumbent cloud contract has existing commitments]
+segments:
+  - id: enterprise
+    label: Enterprise
+    industry: large enterprise (regulated or complex multi-team technology organisation)
+    firm_sizes: [{label: 1,000-5,000 employees, weight: 0.4}, {label: 5,000-20,000 employees, weight: 0.4}, {label: 20,000+ employees, weight: 0.2}]
+    stacks:
+      - [a hyperscaler cloud, a data platform, several agent frameworks]
+      - [an on-prem data centre, a private cloud, a vector database]
+      - [multiple SaaS suites, an iPaaS, an internal ML platform]
+    roles:
+      - id: cio_cto_vp_eng
+        label: CIO, CTO or VP Engineering
+        decision_role: executive sponsor and champion
+        budget_authority: final (technology budget)
+        weight: 1
+        pains: [too many overlapping AI initiatives, pressure to show business value from AI, platform sprawl and cost, risk of a visible failure]
+        purchase_criteria: [strategic fit with the existing architecture, credible roadmap and vendor viability, evidence from comparable organisations, time to first measurable value, exit options]
+        objections: [vendor lock-in and viability, yet another platform layer, unproven at our scale, does it replace or add to what teams already built]
+      - id: ai_platform_mlops
+        label: AI platform or MLOps lead
+        decision_role: technical evaluator and champion
+        budget_authority: recommends
+        weight: 1
+        pains: [maintaining several frameworks, evaluation and regression testing of agents, model and prompt change management, observability gaps]
+        purchase_criteria: [works with the frameworks already in use, API and SDK quality, reproducibility and evaluation tooling, self-hostable, open interfaces]
+        objections: [integration effort with our stack, claims without benchmarks we can rerun, operational burden of another runtime, immature ecosystem]
+      - id: ciso_iam_compliance
+        label: CISO, IAM or compliance lead
+        decision_role: veto holder (security)
+        budget_authority: none (can block)
+        weight: 1
+        pains: [agents acting with broad credentials, no clear audit trail of agent actions, data leaving the boundary, shadow AI]
+        purchase_criteria: [least-privilege and approval controls, audit trail and receipts, data residency and boundary guarantees, security review artefacts, independent attestations where claimed]
+        objections: [unverified security claims, agents with write access to production systems, missing certifications or evidence, unclear data flows to model providers]
+      - id: finance_procurement
+        label: Finance or procurement lead
+        decision_role: budget and commercial gate
+        budget_authority: approves spend
+        weight: 1
+        pains: [unpredictable AI spend, vendor consolidation targets, hard to compare vendor claims, contracts with unclear exit terms]
+        purchase_criteria: [transparent and predictable pricing, measurable return, contract flexibility and exit, a small bounded first step, vendor financial stability]
+        objections: [no price visible, savings claims that are not evidenced, long commitments before proof, hidden cost of integration and operation]
+      - id: app_domain_owner
+        label: Application or domain owner
+        decision_role: business owner and champion
+        budget_authority: influences
+        weight: 1
+        pains: [processes that cross several applications, manual follow-ups, slow handoffs between teams, unclear accountability for automated actions]
+        purchase_criteria: [solves a named process problem, works with the existing applications, approval before anything customer-facing, quick visible result, low disruption to the team]
+        objections: [another tool for my team to learn, who is accountable when it errs, does it work with our applications, abstract claims with no process example]
+      - id: legal_data_governance
+        label: Legal or data-governance lead
+        decision_role: veto holder (legal and data protection)
+        budget_authority: none (can block)
+        weight: 1
+        pains: [unclear data processing roles, cross-border transfers, retention and deletion of agent data, licensing terms of open-source components]
+        purchase_criteria: [clear licence and commercial terms, data processing and residency terms, deletion and retention controls, auditability, no hidden external processing]
+        objections: [licence terms that restrict our use, data processed by third parties, unclear liability for agent actions, claims not backed by documents we can review]
+      - id: operations_end_user
+        label: Operations end-user
+        decision_role: daily user and informal influencer
+        budget_authority: none
+        weight: 1
+        pains: [repetitive checks and follow-ups, alerts without context, tools that interrupt rather than help, being blamed for automation errors]
+        purchase_criteria: [saves visible time, I can see why it suggests something, easy to override, fits my current tools, does not add steps]
+        objections: [it will add work, I cannot tell why it did that, will it replace my judgement, another login]

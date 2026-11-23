@@ -1,0 +1,225 @@
+# Persona sampling frame: six SME niches. GENERIC archetypes authored for this project.
+# Nothing here is derived from real people, real customers or real search data. All weights are HYPOTHETICAL
+# stratification weights (they only decide how many personas of each firm size a cell gets) and are not
+# market-sampling weights. Product facts never appear in a frame: they come from the page snapshots of a study.
+frame_id: sme-niches
+version: "1"
+kind: sme
+weights_are_hypothetical: true
+evidence_basis: >
+  Author-written archetypes of small-business buyers (own judgement, no external dataset). To be replaced or
+  calibrated with interview and first-party evidence before any decision.
+variant_strategies:        # how a study's variants are meant to differ (the wording itself is study-specific)
+  A: current headline as published
+  B: pain-first (leads with the buyer's problem as the page itself states it)
+  C: concrete cross-app workflow with approval and receipt, as the page describes it
+  D: low-friction start-small, as the page describes it
+control_segments:
+  - id: unseen_niche
+    industry: commercial fishing cooperative
+    roles: [{id: manager, label: cooperative manager, decision_role: economic buyer, budget_authority: final, weight: 1}]
+    firm_sizes: [{label: 11-50 members, weight: 1}]
+    stacks: [["paper logbooks", "a shared spreadsheet"]]
+    pains: [catch quotas and landing paperwork, unpredictable fuel costs, dock scheduling]
+    purchase_criteria: [works offline at sea, low cost, simple for older members]
+    objections: [nobody here is technical, we already have a system that works]
+    constraints: [intermittent connectivity]
+segments:
+  - id: professional_services
+    label: Professional services (accounting, legal, consulting)
+    industry: professional services firm (accounting, legal or consulting)
+    roles:
+      - {id: owner_partner, label: owner or managing partner, decision_role: economic buyer, budget_authority: final, weight: 0.5}
+      - {id: practice_manager, label: practice or office manager, decision_role: champion and day-to-day user, budget_authority: recommends, weight: 0.5}
+    firm_sizes: [{label: 1-10 staff, weight: 0.5}, {label: 11-50 staff, weight: 0.4}, {label: 51-200 staff, weight: 0.1}]
+    stacks:
+      - [a practice management suite, email, shared drive]
+      - [spreadsheets, an accounting package, email]
+      - [a generic CRM, a time-tracking tool, email]
+    pains:
+      - slow client onboarding and document chasing
+      - invoices that are sent late or paid late
+      - billable time that is not captured
+      - leads that wait days for a reply
+      - client questions that interrupt focused work
+      - month-end reporting that takes days
+    purchase_criteria:
+      - confidentiality of client data
+      - fits how the firm already works
+      - clear fixed monthly cost
+      - fast to start without an IT person
+      - evidence it works for firms like ours
+      - control over what is sent in the firm's name
+    objections:
+      - we cannot let software contact clients without approval
+      - client confidentiality and professional liability
+      - another tool our staff will not adopt
+      - AI output must be checked by a person anyway
+      - we do not know where the data goes
+      - the vendor is small and might disappear
+    constraints: [professional-conduct rules on client communication, no dedicated IT staff, tight busy season]
+  - id: marketing_agencies
+    label: Marketing agencies
+    industry: marketing or creative agency
+    roles:
+      - {id: founder, label: agency founder, decision_role: economic buyer, budget_authority: final, weight: 0.5}
+      - {id: ops_lead, label: operations or account lead, decision_role: champion, budget_authority: recommends, weight: 0.5}
+    firm_sizes: [{label: 1-10 staff, weight: 0.55}, {label: 11-50 staff, weight: 0.35}, {label: 51-200 staff, weight: 0.1}]
+    stacks:
+      - [a project management tool, a CRM, social scheduling tools]
+      - [spreadsheets, shared drives, an invoicing tool]
+      - [Slack-style chat, analytics dashboards, a CRM]
+    pains:
+      - scoping and invoicing that drift from the agreement
+      - client reporting that is assembled by hand
+      - content that never gets approved on time
+      - leads that go cold between a call and a proposal
+      - too many disconnected tools per client
+      - team capacity that is hard to see
+    purchase_criteria:
+      - works with the tools the agency already uses
+      - approvals that clients can follow
+      - price that scales with headcount not with clients
+      - quick demonstration on a real client scenario
+      - white-label or client-safe outputs
+      - control over what is published
+    objections:
+      - we already pay for too many subscriptions
+      - AI-generated work could damage a client relationship
+      - clients would ask where their data is processed
+      - integration claims are rarely as smooth as shown
+      - hard to prove time saved before committing
+      - lock-in to one vendor's way of working
+    constraints: [client contracts restrict data sharing, client-by-client workspaces, deadline-driven work]
+  - id: msp_it_services
+    label: MSP / IT services
+    industry: managed service provider (IT services for small businesses)
+    roles:
+      - {id: owner, label: MSP owner, decision_role: economic buyer, budget_authority: final, weight: 0.4}
+      - {id: service_manager, label: service delivery manager, decision_role: champion, budget_authority: recommends, weight: 0.35}
+      - {id: security_engineer, label: security-minded engineer, decision_role: technical gatekeeper, budget_authority: none, weight: 0.25}
+    firm_sizes: [{label: 1-10 staff, weight: 0.45}, {label: 11-50 staff, weight: 0.4}, {label: 51-200 staff, weight: 0.15}]
+    stacks:
+      - [a PSA ticketing tool, a remote monitoring tool, a documentation tool]
+      - [a helpdesk, scripts, a password manager]
+      - [a PSA tool, an RMM, a billing integration]
+    pains:
+      - tickets that sit unanswered
+      - alerts that nobody triages quickly
+      - billing leakage from unlogged work
+      - repeated manual onboarding steps for new clients
+      - threat alerts that reach the right person late
+      - documentation that is out of date
+    purchase_criteria:
+      - runs in our environment or on infrastructure we control
+      - strong access control and audit trail
+      - integrates with the PSA and monitoring tools
+      - predictable per-seat or per-client pricing
+      - can be trialled on one client first
+      - no autonomous changes to client systems
+    objections:
+      - we would be putting a new system inside our clients' environments
+      - how are actions approved and logged
+      - the vendor's claims about security need proof
+      - tool sprawl is what we are trying to reduce
+      - AI can make confident mistakes in production
+      - support quality of a young vendor
+    constraints: [client security questionnaires, multi-tenant separation requirements, on-call duties]
+  - id: wholesale_distribution
+    label: Wholesale / distribution
+    industry: wholesale or distribution business
+    roles:
+      - {id: owner_gm, label: owner or general manager, decision_role: economic buyer, budget_authority: final, weight: 0.5}
+      - {id: ops_manager, label: operations or purchasing manager, decision_role: champion, budget_authority: recommends, weight: 0.5}
+    firm_sizes: [{label: 11-50 staff, weight: 0.5}, {label: 51-200 staff, weight: 0.4}, {label: 1-10 staff, weight: 0.1}]
+    stacks:
+      - [an ERP, EDI with key customers, spreadsheets]
+      - [an accounting package, a warehouse tool, email and phone orders]
+      - [a legacy order system, spreadsheets, a shared mailbox]
+    pains:
+      - late payments and slow invoice follow-up
+      - stock-outs and over-ordering
+      - order questions answered by phone and email
+      - supplier price changes noticed late
+      - credit and collections chasing by hand
+      - quotes that take too long to prepare
+    purchase_criteria:
+      - works alongside the existing ERP without replacing it
+      - measurable effect on cash collection or stock
+      - training burden on the warehouse and office staff
+      - predictable cost
+      - reliability during peak periods
+      - a person approves anything customer-facing
+    objections:
+      - our ERP is the system of record and nothing may disturb it
+      - past software projects ran over
+      - staff are not comfortable with new tools
+      - integration with our old system is doubtful
+      - who is responsible when an automated message is wrong
+      - ROI is unclear for a business with thin margins
+    constraints: [legacy systems, seasonal peaks, thin margins]
+  - id: property_management
+    label: Property management
+    industry: property management company
+    roles:
+      - {id: owner_manager, label: owner or portfolio manager, decision_role: economic buyer, budget_authority: final, weight: 0.5}
+      - {id: office_coordinator, label: office or leasing coordinator, decision_role: champion and user, budget_authority: recommends, weight: 0.5}
+    firm_sizes: [{label: 1-10 staff, weight: 0.5}, {label: 11-50 staff, weight: 0.4}, {label: 51-200 staff, weight: 0.1}]
+    stacks:
+      - [a property management suite, email, text messages]
+      - [spreadsheets, an accounting package, a shared inbox]
+      - [a leasing portal, a maintenance request tool, email]
+    pains:
+      - maintenance requests that are acknowledged late
+      - rent reminders and arrears follow-up by hand
+      - leasing leads that go cold
+      - tenant and owner questions that repeat
+      - compliance paperwork and notices
+      - vendor invoices that need checking
+    purchase_criteria:
+      - handles tenant data responsibly
+      - works with the property management suite already in use
+      - clear approval before anything reaches a tenant or owner
+      - low setup effort
+      - price per unit or per property
+      - good enough support for a small team
+    objections:
+      - tenant communications are legally sensitive
+      - we cannot risk a wrong notice being sent
+      - our suite already claims to do this
+      - owner and tenant privacy
+      - small team with no time to configure
+      - unclear what happens if it makes a mistake
+    constraints: [notice and fair-housing rules, tenant privacy, small office team]
+  - id: solo_local_service
+    label: Solo local service business
+    industry: solo or very small local service business (trades, salon, repair, cleaning)
+    roles:
+      - {id: owner_operator, label: owner-operator, decision_role: sole decision maker, budget_authority: final, weight: 1.0}
+    firm_sizes: [{label: owner only, weight: 0.5}, {label: 2-5 staff, weight: 0.4}, {label: 6-10 staff, weight: 0.1}]
+    stacks:
+      - [a phone, text messages, a paper or spreadsheet calendar]
+      - [a booking tool, a card reader, social media]
+      - [a basic invoicing app, WhatsApp-style messaging, a shared calendar]
+    pains:
+      - missed calls and slow replies to enquiries
+      - unpaid invoices
+      - no time to post on social media or keep the website current
+      - double bookings and no-shows
+      - paperwork in the evening
+      - no idea which marketing works
+    purchase_criteria:
+      - low and clear monthly price
+      - set up in an afternoon without technical skill
+      - does not make me look unprofessional to customers
+      - I stay in control of what is sent
+      - works from my phone
+      - I can stop at any time
+    objections:
+      - I do not have time to learn another tool
+      - I am not sure it is worth the money
+      - I do not trust AI to talk to my customers
+      - I worry about my customers' details
+      - I have been burned by overpromising software
+      - I do not understand what it actually does
+    constraints: [no IT help, time-poor, cash-flow sensitive]
