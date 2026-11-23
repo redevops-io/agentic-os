@@ -17,7 +17,7 @@ dependencies = [
   "uvicorn[standard]>=0.29",
   "httpx>=0.27",
   "pymysql>=1.1",
-  "context-runtime @ https://github.com/redevops-io/context-runtime/archive/20848722b335ae1045c69b0e20df8a8b9f03e669.tar.gz",
+  "context-runtime @ https://github.com/redevops-io/context-runtime/archive/f81b7be69e3c696efecc1277643a2cc41b3eefa6.tar.gz",
 ]
 
 [project.scripts]
