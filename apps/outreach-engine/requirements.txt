@@ -1,3 +1,3 @@
 fastapi>=0.110
 uvicorn[standard]>=0.27
-context-runtime @ https://github.com/redevops-io/context-runtime/archive/f81b7be69e3c696efecc1277643a2cc41b3eefa6.tar.gz
+context-runtime @ https://github.com/redevops-io/context-runtime/archive/69fcf6891e90c64ad40a2f0b62da27142f623a6d.tar.gz#sha256=a705767b7710c29a7ab0f9d1f4d43467862882eeece690bd7d71761e5389887a
