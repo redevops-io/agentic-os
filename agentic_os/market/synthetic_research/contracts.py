@@ -34,7 +34,7 @@ DISCLAIMERS = (
     "Personas are generic archetypes built from a configurable sampling frame; stratification weights are "
     "hypothetical and are not market-sampling weights.",
     "Findings must be validated with human interviews and A/B tests before any decision; synthetic output is "
-    "never first-party evidence and is never written to an OutcomeStore or the first-party ledger.",
+    "never first-party evidence and is never written to an outcome store or the first-party ledger.",
 )
 
 FIDELITY_STATEMENT = (

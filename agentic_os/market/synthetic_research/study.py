@@ -1,6 +1,6 @@
 """The study runner: persona x variant x construct -> elicit -> embed -> SSR -> aggregate -> compare -> controls.
 
-READ-ONLY and synthetic-only. The runner has no write path to any website, queue, publisher, OutcomeStore or
+READ-ONLY and synthetic-only. The runner has no write path to any website, queue, publisher, outcome store or
 ledger; it reads no credentials and no environment secrets (the single environment read is the opt-in flag); it
 only calls its injected collaborators (a :class:`~elicitation.Transport` without tools, a
 :class:`~embedder.TextEmbedder`). With the feature flag OFF nothing runs.
