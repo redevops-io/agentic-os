@@ -1,0 +1,82 @@
+[
+ {
+  "label": 1,
+  "text": "No, this is not for me at all. It looks overpriced and I already have a tool that does the job."
+ },
+ {
+  "label": 1,
+  "text": "I would never buy this; nothing here addresses my problem and I don't trust the claims."
+ },
+ {
+  "label": 1,
+  "text": "Absolutely not. I can't see any reason to spend money on this."
+ },
+ {
+  "label": 1,
+  "text": "Pass. The page is vague, the price is high and I have zero interest."
+ },
+ {
+  "label": 2,
+  "text": "I'm skeptical. It might help some people but I doubt it's worth the cost for us."
+ },
+ {
+  "label": 2,
+  "text": "Probably not. I'd need much more proof before even considering it, and right now I lean against it."
+ },
+ {
+  "label": 2,
+  "text": "It looks okay but too complicated for my small team; I'd most likely skip it."
+ },
+ {
+  "label": 2,
+  "text": "I don't think I'd buy this. The benefits aren't clear to me and switching sounds painful."
+ },
+ {
+  "label": 3,
+  "text": "I'm not sure. Some parts are interesting but I'd want to compare alternatives first."
+ },
+ {
+  "label": 3,
+  "text": "Maybe. It depends on the price and how hard it is to set up; I can't decide yet."
+ },
+ {
+  "label": 3,
+  "text": "It could be useful, it could also be more than we need. I'm on the fence."
+ },
+ {
+  "label": 3,
+  "text": "Neutral. I'd have to see a demo and check with my team before saying either way."
+ },
+ {
+  "label": 4,
+  "text": "This looks useful and the workflow is clear. I'd probably try it if the setup is easy."
+ },
+ {
+  "label": 4,
+  "text": "Good fit for what we do; I'd likely book a demo and probably go ahead if it checks out."
+ },
+ {
+  "label": 4,
+  "text": "I like the approval step and the audit trail. I'm leaning toward buying it."
+ },
+ {
+  "label": 4,
+  "text": "The pricing seems fair and it solves a real problem for us, so I'd most likely buy."
+ },
+ {
+  "label": 5,
+  "text": "This is exactly what I've been looking for. I'd sign up today."
+ },
+ {
+  "label": 5,
+  "text": "Yes, I would definitely buy this; it solves my biggest headache and I trust the claims."
+ },
+ {
+  "label": 5,
+  "text": "Great value and clearly built for businesses like mine. I'd start a trial right away."
+ },
+ {
+  "label": 5,
+  "text": "I'm sold. I would choose this without hesitation and recommend it to my partners."
+ }
+]

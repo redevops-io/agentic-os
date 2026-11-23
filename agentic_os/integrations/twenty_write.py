@@ -70,20 +70,39 @@ class TwentyWriteClient:
         except Exception as exc:  # noqa: BLE001
             return {"shadow": False, "created": False, "error": str(exc)}
 
+    def _find_company_by_domain(self, domain: str) -> "tuple[Optional[dict], Optional[str]]":
+        """(existing company, lookup error). Twenty stores the domain as the link the record was created
+        with (``acme.com``, ``https://acme.com``, ``https://www.acme.com/``), so an exact-string filter
+        misses the same company entered another way and the upsert then duplicates it. Search by the bare
+        host and compare normalized hosts here. A failed lookup is reported, never treated as "absent":
+        creating on an unanswered lookup is how duplicates are made."""
+        host = normalize_domain(domain)
+        try:
+            r = httpx.get(f"{self.base_url}/rest/companies",
+                          params={"filter": f"domainName.primaryLinkUrl[ilike]:%{host}%", "limit": 60},
+                          headers=self._headers(), timeout=self.timeout)
+        except Exception as exc:  # noqa: BLE001
+            return None, f"lookup failed: {type(exc).__name__}"
+        if r.status_code >= 400:
+            return None, f"lookup failed: http {r.status_code}"
+        for c in ((r.json().get("data", {}) or {}).get("companies") or []):
+            if normalize_domain(((c.get("domainName") or {}).get("primaryLinkUrl")) or "") == host:
+                return c, None
+        return None, None
+
     def upsert_company(self, *, name: str, domain: str) -> dict:
+        host = normalize_domain(domain)
+        if not host:
+            return {"shadow": self.shadow, "created": False, "error": "domain missing or malformed"}
         if self.shadow:
-            return {"shadow": True, "would_upsert": "company", "name": name, "domain": domain}
+            return {"shadow": True, "would_upsert": "company", "name": name, "domain": host}
+        existing, err = self._find_company_by_domain(host)
+        if err:
+            return {"shadow": False, "created": False, "error": err}
+        if existing is not None:
+            return {"shadow": False, "created": False, "company": existing}
         try:
-            r = httpx.get(f"{self.base_url}/rest/companies", params={"filter": f"domainName.primaryLinkUrl[eq]:{domain}"},
-                         headers=self._headers(), timeout=self.timeout)
-            if r.status_code < 400:
-                existing = ((r.json().get("data", {}) or {}).get("companies") or [])
-                if existing:
-                    return {"shadow": False, "created": False, "company": existing[0]}
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            body = {"name": name, "domainName": {"primaryLinkUrl": domain}}
+            body = {"name": name, "domainName": {"primaryLinkUrl": host}}
             r = httpx.post(f"{self.base_url}/rest/companies", json=body, headers=self._headers(),
                           timeout=self.timeout)
             if r.status_code >= 400:
@@ -91,6 +110,17 @@ class TwentyWriteClient:
             return {"shadow": False, "created": True, "company": (r.json().get("data", {}) or {}).get("createCompany")}
         except Exception as exc:  # noqa: BLE001
             return {"shadow": False, "created": False, "error": str(exc)}
+
+
+def normalize_domain(value: str) -> str:
+    """``https://www.Acme.com/about`` -> ``acme.com``. Empty when there is no plausible host."""
+    v = (value or "").strip().lower()
+    if "://" in v:
+        v = v.split("://", 1)[1]
+    v = v.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].split("@")[-1].split(":", 1)[0]
+    if v.startswith("www."):
+        v = v[4:]
+    return v if "." in v and " " not in v else ""
 
 
 def twenty_write_from_env() -> Optional[TwentyWriteClient]:

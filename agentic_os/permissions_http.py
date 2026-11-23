@@ -41,11 +41,15 @@ async def json_object(request: Request, *, limit: int = MAX_BODY_BYTES) -> dict:
 
 
 def create_kwargs(b: dict) -> dict:
-    """The keyword arguments for ``GrantStore.add`` / the overlay from a POST body (absent or null ``actions`` -> read)."""
+    """The keyword arguments for ``GrantStore.add`` / the overlay from a POST body (absent or null ``actions`` -> read).
+    ``tenant`` (contract v1, B1 fix): absent/empty is the pre-contract, untenanted grant; a non-empty value scopes
+    the new grant to exactly that tenant. ``revocation_epoch`` is deliberately NOT accepted here — it is always
+    auto-stamped by the store at creation time; use the admin ``revoke_epoch`` action to mass-revoke instead of
+    setting a grant's own epoch by hand."""
     actions = b.get("actions")
     return dict(actions=["read"] if actions is None else actions, row_scope=b.get("row_scope", "all"),
                 row_column=b.get("row_column", "owner"), row_values=b.get("row_values") or [],
-                masked_columns=b.get("masked_columns") or [])
+                masked_columns=b.get("masked_columns") or [], tenant=b.get("tenant", ""))
 
 
 def update_fields(b: dict) -> dict:

@@ -64,7 +64,7 @@ def test_every_requirement_is_pinned_exactly(name):
     assert lines
     for l in lines:
         assert re.fullmatch(r"[A-Za-z0-9_.\-]+==[0-9][A-Za-z0-9.]*", l) or re.fullmatch(r"[A-Za-z0-9_.\-]+ @ git\+https://github\.com/redevops-io/[a-z\-]+\.git@[0-9a-f]{40}", l) \
-            or re.fullmatch(r"[A-Za-z0-9_.\-]+ @ https://github\.com/redevops-io/[a-z\-]+/archive/[0-9a-f]{40}\.tar\.gz", l), l
+            or re.fullmatch(r"[A-Za-z0-9_.\-]+ @ https://github\.com/redevops-io/[a-z\-]+/archive/[0-9a-f]{40}\.tar\.gz(#sha256=[0-9a-f]{64})?", l), l
 
 
 def test_the_lock_covers_what_the_app_imports():
