@@ -11,7 +11,8 @@ import logging
 
 import pytest
 
-from agentic_os.permissions import GrantStore, Identity, PermissionsPlane, make_authorizer
+from agentic_os.permissions import (GrantStore, Identity, PermissionsPlane, make_authorizer,
+                                    make_engine_authorizer)
 
 TABLE = "crm.customers"
 
@@ -119,7 +120,10 @@ class TestUnmappedToolsFailClosed:
             calls.append(args)
             return tools.ToolResult(text="secret rows")
 
-        reg = tools.ToolRegistry(authorizer=make_authorizer(store, public_tools=["ping"], tool_actions={"ping": "read"}))
+        # wired as production wires it: the gate reaches the registry through the seam adapter (see app_gate),
+        # because an engine from the authz seam on reads the kernel's ``None`` (allowed) as "no decision".
+        reg = tools.ToolRegistry(authorizer=make_engine_authorizer(
+            make_authorizer(store, public_tools=["ping"], tool_actions={"ping": "read"})))
         reg.register(tools.function_tool("export_everything", _fn))
         reg.register(tools.function_tool("ping", lambda a: tools.ToolResult(text="pong")))
         denied = reg.run("export_everything", {}, principal=_Principal(app="x"))

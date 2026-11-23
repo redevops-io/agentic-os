@@ -137,7 +137,9 @@ class TestAdminApiRequiresAuthenticatedAuthorisationOnEveryRoute:
             print(json.dumps({"n": len(routes), "all": all(any(d.call is cp.require_permissions_admin for d in r.dependant.dependencies)
                                                             for r in routes)}))
         """), tmp_path)
-        assert out == {"n": 7, "all": True}
+        # B1 fix (2026-11-22): +1 for POST /api/permissions/revoke-epoch, confirmed above to carry this
+        # same admin dependency like every other route here.
+        assert out == {"n": 8, "all": True}
 
 
 DEMO_HARNESS = textwrap.dedent("""

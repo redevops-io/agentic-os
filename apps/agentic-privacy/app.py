@@ -40,7 +40,7 @@ import secrets
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
 # Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
 # be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
-from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate
+from agentic_os.app_gate import RequestContext as _RequestContext, console_authorizer as _console_authorizer, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate
 from agentic_os.app_gate import with_authorization as _with_authorization, public_intake as _public_intake_ticket
 _GATE_APP = "agentic-privacy"
 _req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
@@ -304,9 +304,16 @@ def api_activity() -> JSONResponse:
 
 # ──────── conversational agent · Context Runtime + redevops-rag + agent-harness ────────
 try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
+    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole
+    from agentic_os.app_gate import validate_console as _validate_console
+    from agentic_os.tool_actions import console_tool as _console_tool
 except Exception:  # noqa: BLE001
     _AgentConsole = None
+
+# The risk class of each tool below is read from agentic_os/tool_actions.py — the one reviewed table. A privacy
+# assistant that reads a data subject's records is not exempt from being classified because it only reads: the
+# read grant is what carries it, and a tool with no entry cannot run here at all.
+_crtool = _console_tool(_GATE_APP) if _AgentConsole is not None else None
 
 _PRIVACY_PRIMER = """A privacy REQUEST is a data subject exercising a right: ACCESS (get a copy of their data), DELETE (erasure), CORRECT (fix inaccurate data), or OPT-OUT (of sale/sharing — the CCPA/CPRA "Do Not Sell or Share" right). Anyone files one on the public /intake form.
 
@@ -376,8 +383,11 @@ if _AgentConsole is not None:
         suggestions=["Any overdue requests?", "Show open requests", "How do I verify a requester?", "What is the DSAR SLA?"],
         subtitle="Ask about DSAR requests, the data map, verification and SLAs.",
         model=_GovernedConsoleModel(),
+        # named, not inherited: the console answers on the gate's plane, in the shape a ToolRegistry reads
+        authorizer=_console_authorizer(_GATE_APP),
         allow_side_effects=[],
     )
+    _validate_console(_GATE_APP, _PRIVACY_CONSOLE)   # gated or not at all: the assistant must not serve before it can say what it may run
 else:
     _PRIVACY_CONSOLE = None
 

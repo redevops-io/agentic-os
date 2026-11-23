@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_os.permissions import GrantStore, make_authorizer
+from agentic_os.permissions import GrantStore, make_authorizer, make_engine_authorizer
 
 TABLE = "crm.customers"
 
@@ -126,8 +126,11 @@ class TestTheRegisteredActionIsWhatIsChecked:
 
 class TestApprovalAndAuthorisationAreSeparate:
     def _registry(self, store, tools, approver):
+        # ``make_engine_authorizer`` is how a gate reaches a registry in production (app_gate installs it the same
+        # way): the kernel's own answer — None = allowed — is what an engine from the authz seam on reads as
+        # "nobody decided", so wiring the bare authorizer here would deny the call the grant just allowed.
         reg = tools.ToolRegistry(policy=tools.ApprovalPolicy("deny_side_effects", approver=approver),
-                                 authorizer=_mk(store))
+                                 authorizer=make_engine_authorizer(_mk(store)))
         ran = []
         reg.register(tools.function_tool("update_customer", lambda a: (ran.append(a), tools.ToolResult(text="done"))[1],
                                          side_effecting=True))

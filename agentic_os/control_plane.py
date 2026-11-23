@@ -734,6 +734,21 @@ def permissions_remove(gid: str) -> dict:
         raise HTTPException(409, str(e))
 
 
+@app.post("/api/permissions/revoke-epoch", dependencies=[Depends(require_permissions_admin)])
+async def permissions_revoke_epoch(request: Request) -> dict:
+    # B1 fix: mass-revoke every epoch-protected grant for one (subject_kind, subject, tenant) in one call,
+    # without touching any individual grant record. A grant that never opted into epoch protection (stamped 0)
+    # is unaffected by design — see GrantStore.revoke_epoch's own docstring.
+    b = await _perm_json(request)
+    if not b.get("subject"):
+        raise HTTPException(400, "subject is required")
+    try:
+        epoch = await run_in_threadpool(_GRANTS.revoke_epoch, b.get("subject_kind", "app"), b["subject"], b.get("tenant", ""))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return {"subject_kind": b.get("subject_kind", "app"), "subject": b["subject"], "tenant": b.get("tenant", ""), "epoch": epoch}
+
+
 @app.post("/api/permissions/preview", dependencies=[Depends(require_permissions_admin)])
 async def permissions_preview(request: Request) -> dict:
     b = await _perm_json(request)
@@ -743,7 +758,8 @@ async def permissions_preview(request: Request) -> dict:
 @app.post("/api/permissions/authorize", dependencies=[Depends(require_permissions_admin)])
 async def permissions_authorize(request: Request) -> dict:
     b = await _perm_json(request)
-    ident = _perm.Identity(app=b.get("app", ""), user=b.get("user", ""), roles=b["roles"] if "roles" in b else [])
+    ident = _perm.Identity(app=b.get("app", ""), user=b.get("user", ""), roles=b["roles"] if "roles" in b else [],
+                           tenant=b.get("tenant", ""))
     plane = _perm.PermissionsPlane(_GRANTS)
     return plane.authorize(ident, b.get("resource_kind", "table"), b.get("resource_name", ""),
                            b.get("action", "read")).to_dict()
