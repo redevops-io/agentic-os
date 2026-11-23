@@ -201,11 +201,19 @@ class GateProfile:
     def registry(self):
         """A ``ToolRegistry`` wired with this profile's authorizer and approval policy. Under the demo and test profiles it is the
         simulating registry (side-effecting tools run a recorded stub, never the real body, unless named in ``safe_synthetic``); under
-        production it is the plain registry."""
+        production it is the plain registry.
+
+        What goes to the registry is the profile's authorizer in the ENGINE's return contract
+        (``permissions.make_engine_authorizer``): this profile's own answer — ``None`` for allowed, a string for
+        denied — is the one thing an engine from the authz seam on reads as "no decision", which would deny every call
+        this gate just authorized. ``self.authorizer`` itself stays the plain shape for callers that ask the gate
+        directly (routes, the operator seam, tests)."""
         from agent_harness.tools import ToolRegistry
+        from .permissions import make_engine_authorizer
+        authorizer = make_engine_authorizer(self.authorizer, label=f"the {self.profile} permissions profile")
         if self.profile == "production":
-            return ToolRegistry(policy=self.policy, authorizer=self.authorizer)
-        return _SimulatingRegistry(policy=self.policy, authorizer=self.authorizer, effects=self.effects,
+            return ToolRegistry(policy=self.policy, authorizer=authorizer)
+        return _SimulatingRegistry(policy=self.policy, authorizer=authorizer, effects=self.effects,
                                    actions=self.tool_actions, safe_synthetic=self.safe_synthetic)
 
 

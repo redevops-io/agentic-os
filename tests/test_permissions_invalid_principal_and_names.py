@@ -189,7 +189,10 @@ class TestPublicToolsAreListedToo:
     def test_an_unlisted_public_tool_never_runs_through_a_real_registry(self, store):
         tools = pytest.importorskip("agent_harness.tools")
         ran = []
-        reg = tools.ToolRegistry(authorizer=make_authorizer(store, public_tools=["clock"], tool_actions={}))
+        # the seam adapter, exactly as app_gate installs it: with an engine from the authz seam on, the bare
+        # kernel authorizer would be read as "no decision" and this test would prove nothing about the gate.
+        reg = tools.ToolRegistry(authorizer=perm.make_engine_authorizer(
+            make_authorizer(store, public_tools=["clock"], tool_actions={})))
         reg.register(tools.function_tool("clock", lambda a: (ran.append(1), tools.ToolResult(text="now"))[1]))
         assert not reg.run("clock", {}, principal=_P()).ok and ran == []
 

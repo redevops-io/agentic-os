@@ -12,12 +12,15 @@ Self-skips cleanly: no `google-auth` installed (the `gsc` extra), no key, or an 
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import os
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, List, Optional, Tuple
 
+from agentic_os.content.relevance import parse_relevance_source, sanitize_text
 from agentic_os.content.search_signals import (
-    SearchObservation, SearchSignal, Thresholds, cannibalization, ctr_opportunity, near_win,
+    SearchObservation, SearchSignal, SignalType, Thresholds, _conflict_groups, _parsed, cannibalization,
+    conflict_key, ctr_opportunity, hook_originated, near_win, relevance_unknown_aware,
 )
 
 _SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
@@ -98,27 +101,92 @@ def to_observation(row: dict, *, days: int = 28, site_id: str = "") -> Optional[
         position=float(row.get("position", 0.0) or 0.0), days_observed=days, site_id=site_id)
 
 
+def _safe_token(text: str) -> str:
+    return "".join(ch for ch in text if ch.isalnum() or ch in "_-")[:40] or "unknown"
+
+
+def apply_relevance(o: SearchObservation, relevance_fn: Callable[[SearchObservation], Any]) -> SearchObservation:
+    """Return `o` with `relevance`/`relevance_source`/`relevance_detail` set from `relevance_fn(o)`.
+
+    `relevance_fn` returns an object with `value` (float in [0,1] or None), `source`, and an optional
+    `provenance()` string (see `agentic_os.content.relevance.RelevanceResult`). Only an embedding-sourced value
+    ('embedding:<name>@<revision>') is accepted: a synthetic/SSR buyer score or any other source is refused as
+    `unavailable:invalid_result`. A failure, a None value, a malformed result or a result object whose attributes
+    raise NEVER becomes 0.0 evidence: the observation keeps the placeholder 0.0 but its source is
+    `unavailable:<reason>`, so a downstream detector can tell "unknown" from "measured low". The reserved prefixes
+    are matched case-insensitively and written back canonically (lower case)."""
+    try:
+        res = relevance_fn(o)
+    except Exception as exc:  # noqa: BLE001 — a hook failure must not break collection
+        return replace(o, relevance_source=f"unavailable:relevance_fn_error:{_safe_token(type(exc).__name__)}")
+    try:
+        value = getattr(res, "value", None)
+        parsed = parse_relevance_source(getattr(res, "source", None))
+        detail_fn = getattr(res, "provenance", None)
+        detail = sanitize_text(str(detail_fn()), 600) if callable(detail_fn) else ""
+    except Exception:  # noqa: BLE001 — a malicious/broken result object must not escape
+        return replace(o, relevance_source="unavailable:invalid_result")
+    if value is None:
+        if parsed.kind == "unavailable":
+            return replace(o, relevance_source=parsed.text, relevance_detail=detail)
+        return replace(o, relevance_source="unavailable:no_value")
+    if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0 or parsed.kind != "embedding"):
+        return replace(o, relevance_source="unavailable:invalid_result")
+    return replace(o, relevance=float(value), relevance_source=parsed.text, relevance_detail=detail)
+
+
 def collect_search_observations(client: GscClient, site_url: str, *, days: int = 28,
-                                site_id: str = "") -> List[SearchObservation]:
-    """Read a property's query→page performance and normalize to SearchObservations (read-only)."""
+                                site_id: str = "",
+                                relevance_fn: Optional[Callable[[SearchObservation], Any]] = None
+                                ) -> List[SearchObservation]:
+    """Read a property's query→page performance and normalize to SearchObservations (read-only).
+
+    `relevance_fn` (default None: output identical to before) optionally fills the semantic query↔page
+    relevance per observation; it is an injected, read-only callable (see `agentic_os.content.relevance`)."""
     out: List[SearchObservation] = []
     for row in client.search_analytics(site_url, days=days):
         o = to_observation(row, days=days, site_id=site_id or site_url)
         if o is not None:
-            out.append(o)
+            out.append(o if relevance_fn is None else apply_relevance(o, relevance_fn))
     return out
 
 
 def search_signals_from_observations(observations: List[SearchObservation], *,
                                      th: Thresholds = Thresholds()) -> List[SearchSignal]:
     """Run the self-contained search detectors (near-win, CTR opportunity, cannibalization) over a property's
-    observations. (missing_page / emergent_intent need extra context and are driven separately.)"""
-    out: List[SearchSignal] = []
+    observations. (missing_page / emergent_intent need extra context and are driven separately.)
+
+    Relevance conflicts: when the same (site, page, query) was read more than once with DIFFERING relevance (two
+    measured values, or a measured value next to an unknown one) and either the unknown-aware flag is on or the
+    hook wrote one of the readings, a WATCH `RELEVANCE_CONFLICT` signal lists every reading, and any PROPOSE
+    near-win that depends on a conflicted, labelled reading is held at WATCH with the conflict stated. Legacy
+    observations (source 'unset') never take part. Nothing is averaged or overwritten. With no hook readings and
+    the flag off the output is exactly what it always was, for lists, tuples and single-use iterators alike (the
+    input is walked once; as before, cannibalization sees an already-consumed iterator as empty)."""
+    seen: List[SearchObservation] = []
+    pairs = []
     for o in observations:
+        seen.append(o)
         for sig in (near_win(o, th=th), ctr_opportunity(o, th=th)):
             if sig is not None:
-                out.append(sig)
-    out.extend(cannibalization(observations, th=th))
+                pairs.append((o, sig))
+    cannibalised = cannibalization(observations, th=th)
+    aware = relevance_unknown_aware()
+    groups = []
+    if aware or any(hook_originated(o) for o in seen):
+        groups = _conflict_groups(seen, require_hook=not aware)
+    held = {key for key, _ in groups}
+    out: List[SearchSignal] = []
+    for o, sig in pairs:
+        if (held and sig.signal_type is SignalType.NEAR_WIN and sig.status == "PROPOSE"
+                and _parsed(o).kind not in ("unset", "invalid") and conflict_key(o) in held):
+            sig = replace(sig, status="WATCH", evidence=sig.evidence + (
+                "relevance conflict: differing relevance readings exist for this query/page; held at "
+                "WATCH (see RELEVANCE_CONFLICT)",))
+        out.append(sig)
+    out.extend(cannibalised)
+    out.extend(sig for _, sig in groups)
     return out
 
 
