@@ -116,8 +116,9 @@ Categories: `read-only-state` (reads state, writes nothing observable) / `writes
 | `list_segments` | lifecycle | read | read-only-state | apps/lifecycle/app.py:253 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `add_watch` | market-radar | write | launches external process or network | apps/market-radar/app.py:17 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `list_watches` | market-radar | read | read-only-state | apps/market-radar/app.py:453 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `radar.add_watch` | market-radar | write | launches external process or network | apps/market-radar/operator.py:27 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `radar.brief` | market-radar | read | read-only-state | apps/market-radar/operator.py:39 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.add_watch` | market-radar | write | launches external process or network | apps/market-radar/operator.py:29 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.brief` | market-radar | read | read-only-state | apps/market-radar/operator.py:41 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.synthetic_study` | market-radar | write | launches external process or network | apps/market-radar/operator.py:49 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `recent_changes` | market-radar | read | read-only-state | apps/market-radar/app.py:452 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `watch_summary` | market-radar | read | read-only-state | apps/market-radar/app.py:451 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `web_search` | market-radar | read | read-only-state | apps/market-radar/app.py:481 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |

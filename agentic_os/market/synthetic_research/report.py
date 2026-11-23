@@ -1,6 +1,6 @@
 """Reproducible export: JSON + Markdown report and a raw-responses JSONL, written to a directory path only.
 
-The only sink is a filesystem directory given as ``str``/``Path``. Any other sink (an OutcomeStore, a ledger, a
+The only sink is a filesystem directory given as ``str``/``Path``. Any other sink (an outcome store, a ledger, a
 queue, a publisher, any object with ``append``/``write``/``publish``) is REFUSED with :class:`SyntheticViolation`,
 and nothing in this package imports those types. Reports carry the standing disclaimers, per-segment sample sizes
 and uncertainty, and never present a synthetic preference share as customer demand: the only per-variant
