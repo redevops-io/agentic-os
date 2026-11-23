@@ -1,6 +1,7 @@
-"""B3 hardening: a grant that carries a tenant label or a revocation epoch is persisted so that a reader which predates those fields can
-never read it as an UNTENANTED grant (the implicit wildcard), nor read a revoked grant as live; and this reader refuses a store format it
-does not know.
+"""B3 hardening: a grant that carries a TENANT label is persisted so that a reader which predates the field can never read it as an
+UNTENANTED grant (the implicit wildcard); and this reader refuses a store format it does not know. A grant without a tenant stays in the
+flat legacy format even when it carries a revocation epoch (the owner's lighter rule), which leaves one documented residual: see
+``test_residual_a_rollback_can_revive_an_epoch_revoked_untenanted_grant``.
 
 The regression for the downgrade is the one measured against the 0.6.0 release: that release copies the keys it knows from a stored entry
 and drops the rest, so ``{"tenant": "t1", "revocation_epoch": 5, ...flat...}`` was read back as a grant for every tenant. Here the same
@@ -58,25 +59,28 @@ def _release_read(doc: dict) -> list:
 
 # ───────────────────────────── layout ─────────────────────────────
 
-def test_a_store_that_never_uses_tenant_or_epoch_is_written_exactly_as_before(plain):
+def test_a_store_without_tenant_grants_is_written_exactly_as_the_legacy_format(plain):
     plain.add("app", "a", T, R, revocation_epoch=0)
     plain.add("role", "r", T, R, revocation_epoch=0)
+    plain.add("app", "b", T, R)                                            # B1 auto-stamps an epoch: still flat, still untenanted
     doc = _doc(plain)
-    assert doc["version"] == 1 and len(doc["grants"]) == 2
-    assert all("scoped_grant" not in e and "tenant" not in e and "revocation_epoch" not in e for e in doc["grants"])
-    assert _release_read(doc) == [("app", "a", T, R), ("role", "r", T, R)]
+    assert doc["version"] == 1 and len(doc["grants"]) == 3
+    assert all("scoped_grant" not in e and "format" not in e and "tenant" not in e and "id" in e for e in doc["grants"])
+    assert [e.get("revocation_epoch") for e in doc["grants"]] == [None, None, 1]      # the legacy shape plus the one extra key
+    assert _release_read(doc) == [("app", "a", T, R), ("role", "r", T, R), ("app", "b", T, R)]
 
 
-def test_a_grant_with_a_tenant_or_an_epoch_is_stored_in_the_versioned_envelope_not_flat(plain):
+def test_only_a_tenant_grant_is_stored_in_the_versioned_envelope(plain):
     plain.add("app", "a", T, R, revocation_epoch=0)                       # flat, legacy
-    plain.add("app", "a", T, R, tenant="t1")                               # tenant (+ auto epoch)
-    plain.add("app", "b", T, R)                                            # epoch only: auto-stamped, no tenant
+    plain.add("app", "a", T, R, tenant="t1")                               # tenant (+ auto epoch): enveloped
+    plain.add("app", "b", T, R)                                            # epoch only: flat
     doc = _doc(plain)
     assert doc["version"] == 2
     flat, scoped = [e for e in doc["grants"] if "id" in e], [e for e in doc["grants"] if "id" not in e]
-    assert len(flat) == 1 and len(scoped) == 2
-    assert all(e["format"] == 2 and "tenant" not in e and "revocation_epoch" not in e and "id" not in e for e in scoped)
-    assert "tenant" in json.dumps(scoped[0]) or "tenant" in json.dumps(scoped[1])
+    assert len(flat) == 2 and len(scoped) == 1
+    assert scoped[0]["format"] == 2 and "tenant" not in scoped[0] and "revocation_epoch" not in scoped[0]
+    assert scoped[0]["scoped_grant"]["tenant"] == "t1" and scoped[0]["scoped_grant"]["revocation_epoch"] == 1
+    assert all("tenant" not in e for e in flat)
 
 
 def test_the_new_reader_round_trips_everything_through_the_envelope(plain):
@@ -113,11 +117,60 @@ def test_rollback_to_the_release_reads_no_tenant_grant_as_a_wildcard(plain):
     assert seen == [("app", "legacy", T, R)]                               # the legacy grant is still served
 
 
-def test_rollback_to_the_release_does_not_revive_a_revoked_grant(plain):
-    plain.add("app", "support", T, R)                                      # epoch-protected, no tenant
+def test_rollback_to_the_release_does_not_revive_an_epoch_revoked_TENANT_grant(plain):
+    plain.add("app", "support", T, R, tenant="t1")
+    plain.revoke_epoch("app", "support", "t1")
+    assert not PermissionsPlane(plain).authorize(Identity(app="support", tenant="t1"), T, R, "read").allowed
+    assert _release_read(_doc(plain)) == []                                # enveloped: not read at all, so not live
+
+
+def test_residual_a_rollback_can_revive_an_epoch_revoked_untenanted_grant(plain):
+    """DOCUMENTED RESIDUAL (owner's lighter rule; docs/PERMISSIONS_MIGRATION.md section 7). An untenanted grant stays flat and carries
+    ``revocation_epoch`` as an extra key. The 0.6.0 reader copies the keys it knows and ignores the rest, and it has no epoch store
+    semantics, so a grant revoked by ``revoke_epoch`` is read as LIVE after a rollback. This test pins that behaviour so it cannot change
+    unnoticed in either direction; the mitigation is to revoke an untenanted grant by removing it before a rollback."""
+    g = plain.add("app", "support", T, R)
+    assert g.revocation_epoch == 1
     plain.revoke_epoch("app", "support")
-    assert not PermissionsPlane(plain).authorize(Identity(app="support"), T, R, "read").allowed
-    assert _release_read(_doc(plain)) == []                                # the release would have read it as live
+    assert not PermissionsPlane(plain).authorize(Identity(app="support"), T, R, "read").allowed      # this branch: revoked
+    assert _release_read(_doc(plain)) == [("app", "support", T, R)]                                    # 0.6.0: readable as live
+    plain.remove(g.id)                                                                                 # the documented mitigation
+    assert _release_read(_doc(plain)) == []
+
+
+def test_a_store_mixing_flat_and_tenant_grants_serves_each_correctly_on_both_readers(plain):
+    plain.add("app", "legacy", T, R, revocation_epoch=0)
+    plain.add("app", "stamped", T, R)
+    plain.add("app", "support", T, R, tenant="t1")
+    plain.add("app", "support", T, R, tenant="t2")
+    pl = PermissionsPlane(plain)
+    assert pl.authorize(Identity(app="legacy"), T, R, "read").allowed and pl.authorize(Identity(app="stamped"), T, R, "read").allowed
+    assert pl.authorize(Identity(app="support", tenant="t1"), T, R, "read").allowed
+    assert pl.authorize(Identity(app="support", tenant="t2"), T, R, "read").allowed
+    assert not pl.authorize(Identity(app="support"), T, R, "read").allowed
+    assert not pl.authorize(Identity(app="support", tenant="t3"), T, R, "read").allowed
+    assert _release_read(_doc(plain)) == [("app", "legacy", T, R), ("app", "stamped", T, R)]          # 0.6.0: tenant grants denied
+
+
+def test_upgrade_then_rollback_then_upgrade_loses_nothing_and_widens_nothing(plain):
+    plain.add("app", "legacy", T, R, revocation_epoch=0)                   # written before the upgrade
+    plain.add("app", "support", T, R, tenant="t1")                         # written after the upgrade
+    # rollback: the 0.6.0 writer adds a grant and rewrites the file at version 1 with every entry as stored
+    doc = _doc(plain)
+    doc["version"] = 1
+    doc["grants"].append({"id": "g-rolled", "subject_kind": "app", "subject": "during", "resource_kind": T, "resource_name": R,
+                          "actions": ["read"], "row_scope": "all", "row_column": "owner", "row_values": [], "masked_columns": [],
+                          "created_by": "", "at": 0.0})
+    plain.path.write_text(json.dumps(doc))
+    assert _release_read(doc) == [("app", "legacy", T, R), ("app", "during", T, R)]    # on 0.6.0 the tenant grant is denied
+    # upgrade again
+    again = GrantStore(plain.dir)
+    pl = PermissionsPlane(again)
+    assert pl.authorize(Identity(app="support", tenant="t1"), T, R, "read").allowed
+    assert not pl.authorize(Identity(app="support"), T, R, "read").allowed
+    assert pl.authorize(Identity(app="legacy"), T, R, "read").allowed and pl.authorize(Identity(app="during"), T, R, "read").allowed
+    again.add("app", "z", T, R, revocation_epoch=0)                        # the next write restores the version marker
+    assert _doc(again)["version"] == 2
 
 
 def test_a_release_rewrite_of_the_file_keeps_the_scoped_entries_and_they_stay_unread(plain):
@@ -144,7 +197,8 @@ _PROBE = textwrap.dedent("""
     pl = P.PermissionsPlane(st)
     print("tenant" in P.Grant.__dataclass_fields__,
           pl.authorize(P.Identity(app="support"), "table", "crm.customers", "read").allowed,
-          pl.authorize(P.Identity(app="legacy"), "table", "crm.customers", "read").allowed)
+          pl.authorize(P.Identity(app="legacy"), "table", "crm.customers", "read").allowed,
+          pl.authorize(P.Identity(app="stamped"), "table", "crm.customers", "read").allowed)
 """)
 
 
@@ -152,10 +206,25 @@ _PROBE = textwrap.dedent("""
 def test_the_real_release_code_denies_a_tenant_grant_in_a_store_this_code_wrote(plain, tmp_path):
     plain.add("app", "support", T, R, tenant="t1")
     plain.add("app", "legacy", T, R, revocation_epoch=0)
+    plain.add("app", "stamped", T, R)                                      # untenanted, epoch-stamped: flat, honoured by the release
     env = {"PATH": os.environ.get("PATH", ""), "TREE": os.environ["AGENTIC_OS_RELEASE_TREE"], "DIR": plain.dir,
            "PERMISSIONS_ALLOW_PLAINTEXT_DEV": "1"}
     out = subprocess.run([sys.executable, "-I", "-c", _PROBE], env=env, capture_output=True, text=True, check=True).stdout.split()
-    assert out == ["False", "False", "True"], out        # release has no tenant field; tenant grant: DENIED; legacy grant: allowed
+    # release has no tenant field; tenant grant: DENIED; legacy grant: allowed; untenanted epoch-stamped grant: allowed (flat)
+    assert out == ["False", "False", "True", "True"], out
+
+
+@pytest.mark.skipif(not os.environ.get("AGENTIC_OS_RELEASE_TREE"), reason="set AGENTIC_OS_RELEASE_TREE to a checkout of release/0.6.0")
+def test_the_real_release_code_shows_the_documented_residual_for_an_epoch_revoked_untenanted_grant(plain):
+    plain.add("app", "stamped", T, R)
+    plain.add("app", "legacy", T, R, revocation_epoch=0)
+    plain.add("app", "support", T, R, tenant="t1")
+    plain.revoke_epoch("app", "stamped")
+    plain.revoke_epoch("app", "support", "t1")
+    env = {"PATH": os.environ.get("PATH", ""), "TREE": os.environ["AGENTIC_OS_RELEASE_TREE"], "DIR": plain.dir,
+           "PERMISSIONS_ALLOW_PLAINTEXT_DEV": "1"}
+    out = subprocess.run([sys.executable, "-I", "-c", _PROBE], env=env, capture_output=True, text=True, check=True).stdout.split()
+    assert out == ["False", "False", "True", "True"], out   # the revoked tenant grant stays denied; the revoked untenanted one is LIVE on 0.6.0
 
 
 # ───────────────────────────── a newer format is refused ─────────────────────────────

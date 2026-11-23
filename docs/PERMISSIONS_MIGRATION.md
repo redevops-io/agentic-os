@@ -285,15 +285,21 @@ are separate steps; a link or reparse point (including some redirected or cloud-
 * **Forward again.** Start the new release: the restored `grants.jsonl` is migrated again.
 * A grants file written by the new release cannot be opened by it if the key changes; it fails closed (no grants,
   `sealed: true`) and is never overwritten.
-* **Back to a release that predates tenant labels and revocation epochs (0.6.0).** A grant that carries a `tenant` or a
-  `revocation_epoch` is stored in a versioned envelope (the document says `"version": 2` while one exists), not as a flat entry.
-  The older release cannot parse the envelope, counts it as malformed and honours nothing from it: after the rollback those
-  grants are **denied**, never read as untenanted (every tenant) and never read as un-revoked. They stay in the file, untouched by
-  the older release's writes, and are honoured again when the new release starts. Every grant added by the new release without an
-  explicit `revocation_epoch=0` is epoch-stamped and therefore also in the envelope, so a rollback denies the grants added since the
-  upgrade and keeps serving the ones that existed before it; re-add what you need as a flat grant on the older release, or do not
-  roll back. The new release refuses a store whose `version` (or envelope `format`) is newer than it knows: sealed, nothing honoured,
-  never overwritten.
+* **Back to a release that predates tenant labels and revocation epochs (0.6.0).** Only a grant that carries a **tenant** is stored in a
+  versioned envelope (the document says `"version": 2` while one exists); every untenanted grant stays a flat entry in the legacy format,
+  with `revocation_epoch` as one extra key when B1 stamped it. What 0.6.0 does with each:
+  * *Tenant grants:* it cannot parse the envelope, counts it as malformed and honours nothing from it. They are **denied** after the
+    rollback, never read as untenanted (every tenant). They stay in the file, untouched by the older release's writes, and are honoured
+    again when the new release starts.
+  * *Untenanted grants, with or without an epoch:* they are still **served**, exactly as before the upgrade. Grants added since the upgrade
+    are not lost by a rollback.
+  * **Residual (known, by decision): a rollback can revive an epoch-revoked UNTENANTED grant.** 0.6.0 copies the keys it knows and ignores
+    the rest, and has no epoch semantics, so an untenanted grant that `revoke_epoch` ended is read as **live** by 0.6.0. (A revoked tenant
+    grant is not revived: it is enveloped.) This release does not close it. Mitigation, documentation only: before a rollback, end an
+    untenanted grant by **removing** it (`DELETE /api/permissions/grants/{id}`) rather than relying on `revoke_epoch`, and treat any
+    untenanted grant that was ever epoch-revoked as live after a rollback until it is removed.
+  * The new release refuses a store whose `version` (or envelope `format`) is newer than it knows: sealed, nothing honoured, never
+    overwritten.
 * **Strict tenants (opt-in).** `PERMISSIONS_STRICT_TENANT=1` (or `PermissionsPlane(strict_tenant=True)`) removes the implicit
   wildcard tenant: an untenanted grant serves only an untenanted identity, a tenant-scoped grant must carry an epoch, a privileged role
   with no tenant context is not an implicit bypass (name it in `global_privileged_roles` to keep one), and a tenant the caller only

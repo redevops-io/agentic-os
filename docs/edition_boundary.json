@@ -70,7 +70,7 @@
       "test": "tests/test_tenant_strict_hybrid.py::test_strict_has_no_implicit_wildcard_tenant"
     },
     {
-      "capability": "a grant with a tenant or epoch is stored in a versioned envelope a release without those fields cannot misread; a newer format is refused",
+      "capability": "a grant with a tenant is stored in a versioned envelope a release without the field cannot misread as untenanted; a newer format is refused (documented residual: an epoch-revoked untenanted grant stays flat)",
       "test": "tests/test_grant_store_scoped_format.py::test_rollback_to_the_release_reads_no_tenant_grant_as_a_wildcard"
     }
   ],

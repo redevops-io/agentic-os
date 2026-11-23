@@ -620,21 +620,23 @@ def _snapshot(store) -> tuple:
 
 
 # ──────────────── store format guard (B3 hardening) ────────────────
-# A stored grant that carries a tenant label or a revocation epoch is NOT written in the flat v1 shape. A reader that predates those
-# fields (the 0.6.0 release among them) copies the keys it knows and DROPS the ones it does not, so a flat tenanted entry would be
-# read back as an UNTENANTED grant, i.e. every tenant (the implicit wildcard), and a revoked grant would be read back as live. Such an
-# entry is therefore written inside an envelope that has no ``id`` key: a reader that does not know the envelope cannot parse it into a
-# grant, counts it as malformed and honours nothing from it (fail closed), while it keeps the entry byte-for-byte when it rewrites the
-# file. Grants without tenant or epoch stay flat, so a store that never uses either is byte-identical to before. The document says which
-# format it needs (``version`` 2 as soon as one envelope is present) and THIS reader refuses a document, or an envelope, from a format it
-# does not know: sealed, nothing honoured, rather than guessed at.
+# A stored grant that carries a TENANT label is NOT written in the flat v1 shape. A reader that predates the field (the 0.6.0 release among
+# them) copies the keys it knows and DROPS the ones it does not, so a flat tenanted entry would be read back as an UNTENANTED grant, i.e.
+# every tenant (the implicit wildcard). Such an entry is therefore written inside an envelope that has no ``id`` key: a reader that does not
+# know the envelope cannot parse it into a grant, counts it as malformed and honours nothing from it (fail closed), while it keeps the
+# entry byte-for-byte when it rewrites the file. Grants WITHOUT a tenant stay flat even when they carry a revocation epoch, so a store with
+# no tenant grants is byte-identical to the legacy format and a rollback keeps serving every untenanted grant. RESIDUAL, by the owner's
+# choice: the older reader also ignores ``revocation_epoch``, so an untenanted grant that was revoked by epoch (``revoke_epoch``) reads as
+# live again after a rollback to a release that predates epochs; revoke such a grant by removing it before rolling back. The document says
+# which format it needs (``version`` 2 as soon as one envelope is present) and THIS reader refuses a document, or an envelope, from a
+# format it does not know: sealed, nothing honoured, rather than guessed at.
 STORE_FORMAT_FLAT = 1
 STORE_FORMAT_SCOPED = 2          # the newest format this reader understands
 _ENVELOPE_KEY = "scoped_grant"
 
 
 def _needs_envelope(entry) -> bool:
-    return isinstance(entry, dict) and _ENVELOPE_KEY not in entry and bool(entry.get("tenant") or entry.get("revocation_epoch"))
+    return isinstance(entry, dict) and _ENVELOPE_KEY not in entry and bool(entry.get("tenant"))
 
 
 def _wrap_entry(entry):
