@@ -64,6 +64,7 @@ def _env_yes(name: str, default: bool = False) -> bool:
     v = os.getenv(name)
     return default if v is None else v.strip().lower() in _YES
 
+RESERVED_TENANTS = ("*",)      # never a tenant label: neither a grant's nor an identity's (there is no wildcard tenant)
 ACTIONS = ("read", "write", "delete")
 SUBJECT_KINDS = ("app", "role", "user")
 RESOURCE_KINDS = ("database", "table", "corpus", "tool")
@@ -96,7 +97,7 @@ def _identity_of(obj) -> "Identity":
             return getattr(obj, name, default)
         except Exception:  # noqa: BLE001
             return None
-    return Identity(app=get("app", ""), user=get("user", ""), roles=get("roles", ()))
+    return Identity(app=get("app", ""), user=get("user", ""), roles=get("roles", ()), tenant=get("tenant", ""))
 
 
 def _clean_roles(roles) -> list:
@@ -155,13 +156,23 @@ class Grant:
     masked_columns: list = field(default_factory=list)
     created_by: str = ""
     at: float = 0.0
+    # contract v1 (authz_contract): optional tenancy + revocation epoch. Absent/empty is EXACTLY the
+    # pre-contract single-operator grant: same stored bytes, same decisions, same digests.
+    tenant: str = ""
+    revocation_epoch: int = 0
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "subject_kind": self.subject_kind, "subject": self.subject,
-                "resource_kind": self.resource_kind, "resource_name": self.resource_name,
-                "actions": self.actions, "row_scope": self.row_scope, "row_column": self.row_column,
-                "row_values": self.row_values, "masked_columns": self.masked_columns,
-                "created_by": self.created_by, "at": self.at}
+        d = {"id": self.id, "subject_kind": self.subject_kind, "subject": self.subject,
+             "resource_kind": self.resource_kind, "resource_name": self.resource_name,
+             "actions": self.actions, "row_scope": self.row_scope, "row_column": self.row_column,
+             "row_values": self.row_values, "masked_columns": self.masked_columns,
+             "created_by": self.created_by, "at": self.at}
+        # written only when set, so a legacy grant re-serializes byte-identically (PR-A compatibility pin)
+        if self.tenant:
+            d["tenant"] = self.tenant
+        if self.revocation_epoch:
+            d["revocation_epoch"] = self.revocation_epoch
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Grant":
@@ -170,7 +181,10 @@ class Grant:
                    actions=(["read"] if d.get("actions") is None else d["actions"]), row_scope=d.get("row_scope", "all"),
                    row_column=d.get("row_column", "owner"), row_values=d.get("row_values") or [],
                    masked_columns=d.get("masked_columns") or [], created_by=d.get("created_by", ""),
-                   at=d.get("at", 0.0))
+                   at=d.get("at", 0.0), tenant=d.get("tenant") or "",
+                   # NOT coerced: a non-integer epoch stays what it is so grant_problem refuses the grant,
+                   # the same way every other malformed stored field is refused rather than repaired.
+                   revocation_epoch=d.get("revocation_epoch") or 0)
 
     def covers(self, resource_name: str) -> bool:
         if not isinstance(resource_name, str) or not isinstance(self.resource_name, str):
@@ -186,6 +200,12 @@ class Grant:
     def matches(self, identity: "Identity") -> bool:
         subject = _clean_text(self.subject)
         if not subject:       # a grant with no subject belongs to nobody; "" must not match an empty identity
+            return False
+        # B1 fix: an untenanted grant (self.tenant == "") is EXACTLY the pre-contract case and matches any
+        # identity regardless of its own tenant — same stored bytes, same decisions, as documented on the
+        # field. A TENANT-SCOPED grant matches only the identity validated for that SAME tenant; a missing or
+        # different tenant on the identity side never satisfies it — fail closed on ambiguity, never "any tenant".
+        if self.tenant and _clean_text(self.tenant) != _clean_text(identity.tenant):
             return False
         if self.subject_kind == "app":
             return _clean_text(identity.app) == subject
@@ -271,29 +291,46 @@ def grant_problem(g: "Grant") -> str | None:
         return "row_column must be a clean column name (non-blank, no padding, no commas) for an own/in grant"
     if g.row_scope == "in" and not isinstance(g.row_values, (list, tuple, set, frozenset)):
         return "row_values must be a list"
+    if g.tenant and not _ids.valid_identifier(g.tenant):     # contract v1: a set tenant must be a clean id
+        return "tenant is not a valid identifier"
+    if g.tenant in RESERVED_TENANTS:       # B3 hardening: "*" is a wildcard everywhere else; as a tenant it would only ever be a trap
+        return "tenant is a reserved wildcard token"
+    if type(g.revocation_epoch) is not int or g.revocation_epoch < 0:
+        return "revocation_epoch must be a non-negative integer"
     return None
 
 
 @dataclass
 class Identity:
-    """The principal a request carries — app fixed at bootstrap, user/roles from the gateway."""
+    """The principal a request carries — app fixed at bootstrap, user/roles from the gateway, ``tenant`` the
+    ACTIVE tenant this request is scoped to (contract v1 extension, B1 fix). Absent (``""``) is the
+    pre-contract, single-tenant case: byte-identical decisions for any deployment that never sets it. A
+    tenant-scoped grant (``Grant.tenant`` set) never matches an identity whose own tenant is absent or
+    different — ambiguity fails CLOSED here, it is never read as "any tenant"."""
     app: str = ""
     user: str = ""
     roles: list = field(default_factory=list)
+    tenant: str = ""
 
     def invalid_reason(self) -> str | None:
-        """Why this principal is INVALID as a whole, or None. Strict, and computed here, once, at the identity boundary: ``app``
-        and ``user`` must be strings (a blank one is merely absent, not malformed) and ``roles`` a list, tuple or set of
+        """Why this principal is INVALID as a whole, or None. Strict, and computed here, once, at the identity boundary: ``app``,
+        ``user`` and ``tenant`` must be strings (a blank one is merely absent, not malformed) and ``roles`` a list, tuple or set of
         non-blank strings (so ``None``, a bare string, or a collection with any malformed member is invalid). The reason names
         the field only. An invalid principal grants nothing through ANY field and gets no admin bypass; nothing raises."""
         if not isinstance(self.app, str):
             return "app is not a string"
         if not isinstance(self.user, str):
             return "user is not a string"
+        if not isinstance(self.tenant, str):
+            return "tenant is not a string"
         if not _ids.absent(self.app) and not _ids.valid_identifier(self.app):
             return "app is not a valid identifier"
         if not _ids.absent(self.user) and not _ids.valid_identifier(self.user):
             return "user is not a valid identifier"
+        if not _ids.absent(self.tenant) and not _ids.valid_identifier(self.tenant):
+            return "tenant is not a valid identifier"
+        if self.tenant in RESERVED_TENANTS:
+            return "tenant is a reserved wildcard token"
         r = self.roles
         if type(r) not in _ROLE_COLLECTIONS or any(type(x) is not str or not _role_ok(x) for x in r):
             return "roles is not a valid role collection"
@@ -319,10 +356,19 @@ class AccessDecision:
     # rule masks it (exposed iff some matching rule exposes it). Empty for a decision with no per-grant detail
     # (a privileged bypass, a denial, a hand-built decision): then ``row_filter``/``masked_columns`` apply uniformly.
     rules: list = field(default_factory=list)
+    # contract v1 (authz_contract): echo of the tenancy/epoch the decision was evaluated under.
+    # Empty/0 is the pre-contract shape — omitted from to_dict, so every existing response is byte-identical.
+    tenant: str = ""
+    decision_epoch: int = 0
 
     def to_dict(self) -> dict:
-        return {"allowed": self.allowed, "reason": self.reason, "row_filter": self.row_filter,
-                "masked_columns": self.masked_columns, "rules": self.rules}
+        d = {"allowed": self.allowed, "reason": self.reason, "row_filter": self.row_filter,
+             "masked_columns": self.masked_columns, "rules": self.rules}
+        if self.tenant:
+            d["tenant"] = self.tenant
+        if self.decision_epoch:
+            d["decision_epoch"] = self.decision_epoch
+        return d
 
     @property
     def per_row_masks(self) -> bool:
@@ -573,6 +619,45 @@ def _snapshot(store) -> tuple:
     return list(grants), bool(getattr(store, "sealed", False))
 
 
+# ──────────────── store format guard (B3 hardening) ────────────────
+# A stored grant that carries a TENANT label is NOT written in the flat v1 shape. A reader that predates the field (the 0.6.0 release among
+# them) copies the keys it knows and DROPS the ones it does not, so a flat tenanted entry would be read back as an UNTENANTED grant, i.e.
+# every tenant (the implicit wildcard). Such an entry is therefore written inside an envelope that has no ``id`` key: a reader that does not
+# know the envelope cannot parse it into a grant, counts it as malformed and honours nothing from it (fail closed), while it keeps the
+# entry byte-for-byte when it rewrites the file. Grants WITHOUT a tenant stay flat even when they carry a revocation epoch, so a store with
+# no tenant grants is byte-identical to the legacy format and a rollback keeps serving every untenanted grant. RESIDUAL, by the owner's
+# choice: the older reader also ignores ``revocation_epoch``, so an untenanted grant that was revoked by epoch (``revoke_epoch``) reads as
+# live again after a rollback to a release that predates epochs; revoke such a grant by removing it before rolling back. The document says
+# which format it needs (``version`` 2 as soon as one envelope is present) and THIS reader refuses a document, or an envelope, from a
+# format it does not know: sealed, nothing honoured, rather than guessed at.
+STORE_FORMAT_FLAT = 1
+STORE_FORMAT_SCOPED = 2          # the newest format this reader understands
+_ENVELOPE_KEY = "scoped_grant"
+
+
+def _needs_envelope(entry) -> bool:
+    return isinstance(entry, dict) and _ENVELOPE_KEY not in entry and bool(entry.get("tenant"))
+
+
+def _wrap_entry(entry):
+    return {"format": STORE_FORMAT_SCOPED, _ENVELOPE_KEY: entry} if _needs_envelope(entry) else entry
+
+
+def _unwrap_entry(entry):
+    """The flat grant dict inside an envelope (any other entry is returned as stored). An envelope from a newer format raises."""
+    if isinstance(entry, dict) and _ENVELOPE_KEY in entry:
+        fmt = entry.get("format")
+        if type(fmt) is not int or fmt > STORE_FORMAT_SCOPED:
+            raise ValueError("unsupported store entry format")
+        inner = entry[_ENVELOPE_KEY]
+        return inner if isinstance(inner, dict) else entry      # a malformed envelope stays what it is: unreadable, never honoured
+    return entry
+
+
+def _store_format_of(entries: list) -> int:
+    return STORE_FORMAT_SCOPED if any(_needs_envelope(e) for e in entries) else STORE_FORMAT_FLAT
+
+
 class GrantStore:
     """Encrypted-at-rest grant store (AES-GCM), FAIL-CLOSED: if the file can't be decrypted/verified
     (tamper or wrong key), no grants are honored.
@@ -705,7 +790,8 @@ class GrantStore:
                     grants.append(Grant.from_dict(d).to_dict())
                 except Exception:  # noqa: BLE001
                     grants.append(d)
-            payload = json.dumps({"version": 1, "grants": grants, "meta": {"counter": 1}}).encode("utf-8")
+            payload = json.dumps({"version": _store_format_of(grants), "grants": [_wrap_entry(e) for e in grants],
+                                  "meta": {"counter": 1}}).encode("utf-8")
             blob = self._box.seal(payload)
             if self._box.unseal(blob) != payload:
                 raise ValueError("encrypted copy did not verify")
@@ -790,6 +876,10 @@ class GrantStore:
             meta = data.get("meta", {}) if isinstance(data, dict) else {}
             if not isinstance(items, list) or not isinstance(meta, dict):
                 raise ValueError("malformed store document")
+            version = data.get("version", STORE_FORMAT_FLAT) if isinstance(data, dict) else STORE_FORMAT_FLAT
+            if type(version) is not int or version < STORE_FORMAT_FLAT or version > STORE_FORMAT_SCOPED:
+                raise ValueError("unsupported store format version")       # a NEWER writer: refuse, never guess
+            items = [_unwrap_entry(e) for e in items]
             counter = meta.get("counter", 0)
             if type(counter) is not int or counter < 0:
                 raise ValueError("malformed store counter")
@@ -853,7 +943,8 @@ class GrantStore:
         """Persist the grant entries (dicts) and metadata. Callers hold the transaction lock."""
         meta = dict(meta or {})
         meta["counter"] = int(meta.get("counter", 0)) + 1        # strictly increasing, inside the authenticated payload
-        payload = json.dumps({"version": 1, "grants": entries, "meta": meta}).encode("utf-8")
+        payload = json.dumps({"version": _store_format_of(entries), "grants": [_wrap_entry(e) for e in entries],
+                              "meta": meta}).encode("utf-8")
         if self.encrypted:
             payload = self._box.seal(payload)
         else:
@@ -970,19 +1061,29 @@ class GrantStore:
     def add(self, subject_kind: str, subject: str, resource_kind: str, resource_name: str, *,
             actions: list | None = None, row_scope: str = "all", row_column: str = "owner",
             row_values: list | None = None, masked_columns: list | None = None, created_by: str = "",
-            stable_id: str | None = None) -> Grant:
+            stable_id: str | None = None, tenant: str = "", revocation_epoch: int | None = None) -> Grant:
         """APPEND a new grant and return it (with its new id). Grants coexist: nothing is replaced because kind, subject and
         resource match — a role may hold several grants on one resource, OR-ed by the plane. Two identical adds make two
         grants (intended). ``stable_id`` lets a caller (``seed``) name a grant with a fixed token; an id that already exists
-        is refused, never overwritten. Removal is by id (:meth:`remove`); a change is :meth:`update`."""
+        is refused, never overwritten. Removal is by id (:meth:`remove`); a change is :meth:`update`.
+
+        ``tenant`` (contract v1, B1 fix): ``""`` is the pre-contract, untenanted grant (matches any identity's
+        tenant); a non-empty value scopes this grant to exactly that tenant. ``revocation_epoch``, left ``None``
+        (the default), is auto-stamped one generation ahead of THIS store's current epoch for
+        ``(subject_kind, subject, tenant)`` — real, meaningful protection for every grant added from here on,
+        never 0 (0 is reserved for "never opted in": every grant already on disk before this fix, read back via
+        :meth:`Grant.from_dict`, keeps that value and is therefore completely unaffected by any
+        :meth:`revoke_epoch` call — true backward compatibility for EXISTING data, not a promise that brand-new
+        grants stay unprotected). Pass an explicit ``revocation_epoch=0`` to opt a specific new grant OUT."""
         with self._txn():
             return self._add_locked(subject_kind, subject, resource_kind, resource_name, actions=actions,
                                     row_scope=row_scope, row_column=row_column, row_values=row_values,
-                                    masked_columns=masked_columns, created_by=created_by, stable_id=stable_id)
+                                    masked_columns=masked_columns, created_by=created_by, stable_id=stable_id,
+                                    tenant=tenant, revocation_epoch=revocation_epoch)
 
     def _add_locked(self, subject_kind, subject, resource_kind, resource_name, *, actions=None,
                     row_scope="all", row_column="owner", row_values=None, masked_columns=None,
-                    created_by="", stable_id=None) -> Grant:
+                    created_by="", stable_id=None, tenant="", revocation_epoch=None) -> Grant:
         if not _clean_text(subject) or not _clean_text(resource_name):
             raise GrantError("a grant needs a subject and resource_name that are valid identifiers (non-empty, no padding, no "
                              "control/format/surrogate/unassigned/bidi characters)")
@@ -998,15 +1099,70 @@ class GrantStore:
         gid = stable_id
         while gid is None or gid in taken:
             gid = new_grant_id()
+        if revocation_epoch is None:
+            # auto-stamp one generation AHEAD of the current epoch (never 0 — see PermissionsPlane._epoch_ok's
+            # "+1 / strictly greater" note): a key that has never been revoked is at epoch 0, so a fresh grant
+            # here is stamped 1, never colliding with the "0 = never opted in" sentinel.
+            revocation_epoch = self._current_epoch_of(doc.meta, subject_kind, subject, tenant) + 1
         g = Grant(id=gid, subject_kind=subject_kind, subject=subject, resource_kind=resource_kind,
                   resource_name=resource_name, actions=(["read"] if actions is None else actions), row_scope=row_scope,
                   row_column=row_column, row_values=row_values or [], masked_columns=masked_columns or [],
-                  created_by=created_by, at=time.time())
+                  created_by=created_by, at=time.time(), tenant=tenant, revocation_epoch=revocation_epoch)
         problem = grant_problem(g)
         if problem:
             raise GrantError(f"malformed grant: {problem}")
         self._write([*entries, g.to_dict()], doc.meta)
         return g
+
+    # ──────────────────────── revocation epochs (contract v1, B1 fix) ────────────────────────
+    # A mass-revocation primitive, independent of touching any individual grant: bumping the epoch for one
+    # (subject_kind, subject, tenant) key immediately makes every EPOCH-PROTECTED grant for that exact key
+    # stale, on the very next ``authorize()`` — including one already cached by a caller, since the caller
+    # re-evaluates from the store on every call, never from a cached decision. A grant stamped ``0`` (the
+    # pre-contract default, and the default for anyone who never calls :meth:`revoke_epoch`) opted OUT of
+    # epoch protection and is NEVER affected — this is what keeps every existing stored grant, and every new
+    # one added by a caller who never uses this feature, byte-identical to before this contract existed.
+
+    @staticmethod
+    def _epoch_key(subject_kind: str, subject: str, tenant: str) -> str:
+        return f"{subject_kind}:{subject}:{tenant}"
+
+    @staticmethod
+    def _current_epoch_of(meta: dict, subject_kind: str, subject: str, tenant: str) -> int:
+        epochs = meta.get("epochs")
+        if not isinstance(epochs, dict):
+            return 0
+        v = epochs.get(GrantStore._epoch_key(subject_kind, subject, tenant), 0)
+        return v if isinstance(v, int) and v >= 0 else 0
+
+    def current_epoch(self, subject_kind: str, subject: str, tenant: str = "") -> int:
+        """The current revocation epoch for this exact ``(subject_kind, subject, tenant)`` — 0 until it is ever
+        bumped. Lock-free (the file is replaced atomically, so a reader always sees a complete document); a
+        sealed store answers 0 deliberately — ``PermissionsPlane._epoch_ok`` treats "the store could not say" as
+        failing the grant CLOSED, not as "fine", so a sealed read still denies everything, never lets a stale
+        grant through by reporting an innocent-looking 0."""
+        doc = self._load_raw()
+        if doc.sealed:
+            return 0
+        return self._current_epoch_of(doc.meta, subject_kind, subject, tenant)
+
+    def revoke_epoch(self, subject_kind: str, subject: str, tenant: str = "") -> int:
+        """Mass-revoke every CURRENT, epoch-protected grant for this exact ``(subject_kind, subject, tenant)``:
+        bump its epoch counter by one and persist it. Returns the new epoch. A grant whose own
+        ``revocation_epoch`` field is at or below the new value stops matching immediately (a freshly-added
+        grant is stamped exactly one generation ahead, so the very first bump that reaches it is enough); one
+        stamped ``0`` (never opted in) is untouched, by design — see the class-level note above."""
+        if not _clean_text(subject):
+            raise GrantError("subject must be a valid identifier")
+        with self._txn():
+            doc = self._load_raw()
+            if doc.sealed:
+                raise RuntimeError("grants store is sealed (decrypt failed) — refusing to overwrite")
+            epochs = dict(doc.meta.get("epochs") or {}) if isinstance(doc.meta.get("epochs"), dict) else {}
+            key = self._epoch_key(subject_kind, subject, tenant)
+            epochs[key] = int(epochs.get(key, 0)) + 1
+            self._write(doc.items, {**doc.meta, "epochs": epochs})
+            return epochs[key]
 
     _UPDATABLE = ("actions", "row_scope", "row_column", "row_values", "masked_columns")
 
@@ -1158,10 +1314,85 @@ def _row_matches(row_filter: dict, record: dict) -> bool:
     return False
 
 
+# ──────────────── tenant verifier hook (B3 hardening) ────────────────
+# The tenant on an identity is a LABEL the caller asserted. This tree cannot say whether the principal really belongs to it; resolving
+# membership is the enterprise edition's job. The seam is a callable, or an object with ``verify(identity)``, that answers ``True`` ONLY
+# when it has established that this principal belongs to ``identity.tenant``. It is called with a private copy of the cleaned identity.
+# ``False``, ``None``, any other value, or an exception is "not verified". The core imports nothing from an enterprise package: the
+# deployment registers the verifier (``register_tenant_verifier``) or passes one to ``PermissionsPlane``.
+_TENANT_VERIFIER = None
+
+
+def register_tenant_verifier(verifier) -> None:
+    """Register the process-wide tenant verifier (``None`` clears it). Used by a plane that was not given its own."""
+    global _TENANT_VERIFIER
+    if verifier is not None and not (callable(verifier) or callable(getattr(verifier, "verify", None))):
+        raise TypeError("a tenant verifier is a callable or an object with a verify(identity) method")
+    _TENANT_VERIFIER = verifier
+
+
+def registered_tenant_verifier():
+    return _TENANT_VERIFIER
+
+
+def _verify_tenant(verifier, identity: "Identity") -> str | None:
+    """None when ``verifier`` says ``True`` for this identity, otherwise the reason it is refused (never the verifier's own message)."""
+    fn = verifier if callable(verifier) else getattr(verifier, "verify", None)
+    if not callable(fn):
+        return "the registered verifier is not callable"
+    try:
+        verdict = fn(Identity(app=identity.app, user=identity.user, roles=list(identity.roles), tenant=identity.tenant))
+    except Exception:  # noqa: BLE001 - "cannot say" is not "yes"
+        return "the verifier failed"
+    return None if verdict is True else "the verifier did not confirm the tenant"
+
+
 class PermissionsPlane:
-    def __init__(self, store: GrantStore, privileged_roles: tuple = ("admin",)):
+    def __init__(self, store: GrantStore, privileged_roles: tuple = ("admin",), global_privileged_roles: tuple = (), *,
+                 strict_tenant: bool | None = None, tenant_verifier=None):
+        """``privileged_roles`` bypass grant-matching entirely, but ONLY for an identity with no active tenant —
+        the pre-contract, single-tenant case, byte-identical to before this contract existed. An identity that
+        DOES carry a tenant gets no automatic bypass from a privileged role: that role is authority WITHIN its
+        tenant only, same as any other role-based grant (B1 fix — "wildcard and privileged-role grants cannot
+        bypass tenant boundaries"). ``global_privileged_roles`` is the separate, narrower, explicitly-named
+        escape for a genuine cross-tenant admin capability; empty by default, so nothing is global unless a
+        deployment opts in on purpose."""
         self.store = store
         self.privileged_roles = set(privileged_roles)
+        self.global_privileged_roles = set(global_privileged_roles)
+        # B3 hardening, both off by default (the default decisions are exactly the ones above):
+        # ``strict_tenant`` (None = PERMISSIONS_STRICT_TENANT, default off) removes the implicit wildcard tenant: an UNTENANTED grant serves only an
+        # untenanted identity, a tenant-scoped grant must carry a revocation epoch (a missing or 0 epoch is refused, never read as "fine"), and a tenant
+        # the caller merely asserts must be confirmed by a verifier or the identity is denied. ``tenant_verifier`` (None = the one registered with
+        # ``register_tenant_verifier``, looked up at decision time) applies in either mode whenever one is present.
+        self.strict_tenant = _env_yes("PERMISSIONS_STRICT_TENANT") if strict_tenant is None else bool(strict_tenant)
+        self.tenant_verifier = tenant_verifier
+
+    def _strict_ok(self, g: "Grant", identity: Identity) -> bool:
+        if not self.strict_tenant:
+            return True
+        if g.tenant:
+            return bool(g.revocation_epoch) and _clean_text(g.tenant) == identity.tenant
+        return not identity.tenant        # an untenanted grant is not a grant for every tenant
+
+    def _epoch_ok(self, g: "Grant") -> bool:
+        """A grant stamped ``0`` (the pre-contract default) never opted into epoch protection and is always
+        current. A stamped grant (always >= 1 — see ``GrantStore._add_locked``'s "+1" auto-stamp, which never
+        produces 0) is current only while it is STRICTLY GREATER than the store's current epoch for its own
+        subject+tenant: a freshly-stamped grant is exactly one generation ahead, so the very next
+        ``revoke_epoch`` for that key — which raises the current epoch to equal the stamp — makes it stale
+        immediately, not one bump later. A store that cannot answer (no ``current_epoch`` method) fails this
+        grant CLOSED rather than silently skip the check — the grant explicitly asked for epoch protection, so
+        "the store can't say" is never read as "fine"."""
+        if not g.revocation_epoch:
+            return True
+        current = getattr(self.store, "current_epoch", None)
+        if not callable(current):
+            return False
+        try:
+            return int(g.revocation_epoch) > int(current(g.subject_kind, g.subject, g.tenant))
+        except Exception:  # noqa: BLE001 — an unreadable epoch answer is "can't say": fail closed, same as above
+            return False
 
     def authorize(self, identity: Identity, resource_kind: str, resource_name: str, action: str = "read") -> AccessDecision:
         grants, sealed = _snapshot(self.store)      # ONE read: its sealed state belongs to this decision alone
@@ -1177,12 +1408,23 @@ class PermissionsPlane:
         if invalid:       # an invalid principal grants nothing through any field, and gets no admin bypass
             return AccessDecision(False, f"denied: invalid principal ({invalid})")
         identity = Identity(app=_clean_text(identity.app), user=_clean_text(identity.user),
-                            roles=_clean_roles(identity.roles))
-        if any(r in self.privileged_roles for r in identity.roles):
-            return AccessDecision(True, f"privileged role — full access (bypass)")
+                            roles=_clean_roles(identity.roles), tenant=_clean_text(identity.tenant))
+        verifier = self.tenant_verifier if self.tenant_verifier is not None else _TENANT_VERIFIER
+        if identity.tenant and (verifier is not None or self.strict_tenant):
+            # a tenant is only a claim until something confirms it; strict mode with nothing to confirm it denies, and so does a verifier that
+            # says anything but True. Nothing below (privileged role included) is reached by an unverified tenant.
+            why = "nothing in this deployment can verify it" if verifier is None else _verify_tenant(verifier, identity)
+            if why:
+                return AccessDecision(False, f"denied: tenant not verified ({why})")
+        privileged = [r for r in identity.roles if r in self.privileged_roles]
+        # strict mode: a privileged role with NO tenant context is not an implicit cross-tenant bypass either (missing context fails closed);
+        # only a role the deployment named in ``global_privileged_roles`` bypasses, and only after its tenant (if any) was verified above.
+        implicit = not identity.tenant and not self.strict_tenant
+        if privileged and (implicit or any(r in self.global_privileged_roles for r in privileged)):
+            return AccessDecision(True, "privileged role — full access (bypass)", tenant=identity.tenant)
         matching = [g for g in grants
                     if g.matches(identity) and g.resource_kind == resource_kind
-                    and g.covers(resource_name) and action in g.actions]
+                    and g.covers(resource_name) and action in g.actions and self._epoch_ok(g) and self._strict_ok(g, identity)]
         if not matching:
             who = identity.app or identity.user or (identity.roles[0] if identity.roles else "principal")
             return AccessDecision(False, f"denied: no '{action}' grant for {who} on {resource_kind} '{resource_name}'")
@@ -1204,7 +1446,7 @@ class PermissionsPlane:
                         else {c for g in matching for c in g.masked_columns})
         scope = "all rows" if row_filter is None else _describe_filter(row_filter)
         return AccessDecision(True, f"allow · {scope}" + (f" · masked {masked}" if masked else ""),
-                              row_filter=row_filter, masked_columns=masked, rules=rules)
+                              row_filter=row_filter, masked_columns=masked, rules=rules, tenant=identity.tenant)
 
     @staticmethod
     def _applicable(decision: AccessDecision, record: dict) -> list:

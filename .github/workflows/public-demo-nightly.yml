@@ -1,0 +1,33 @@
+name: public-demo-nightly
+
+# Live availability and response-contract check for the intentionally public demo surfaces
+# (audit/public_demo_contract.json, owner clarification 2026-11-08). Read-only: GETs against documented
+# public journeys plus the pinned privileged probes, which must stay refused. Stdlib only.
+#
+# This job never validates functionality — that is what the PR checks do offline
+# (tests/test_public_demo_contract.py runs the repo's own demo apps). Its job is the hosted surface: if a
+# documented public page stops answering, or a privileged route starts answering anonymously, this goes red.
+on:
+  schedule:
+    - cron: "23 5 * * *"   # daily 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Probe the hosted demo against its pinned contract
+        run: python scripts/probe_public_demo.py
+      - name: Run the contract's own live checks (the same tests CI skips offline)
+        env:
+          DEMO_BASE_URL: https://demo.redevops.io
+        run: |
+          python -m pip install --quiet -e ".[dev]"
+          python -m pytest -q tests/test_public_demo_contract.py -k live

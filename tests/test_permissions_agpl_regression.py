@@ -11,8 +11,15 @@ handling and grant storage. It is deliberately separate from the direct-context 
                                       ``test_ENTERPRISE_*``       states the enterprise behaviour and is a strict
                                       xfail — if it ever starts passing, the docs and edition table must change.
 
-Not guaranteed in AGPL (enterprise): multi-tenant isolation; revocation across conversations and caches;
-end-to-end document / row / column / graph authorisation; identity integration (SSO, RBAC/ABAC admin).
+Not guaranteed in AGPL (enterprise): resolving WHICH tenant an external identity belongs to (SSO/membership
+lookup, multi-tenant provisioning, cross-tenant delegation — see ``TestNotGuaranteedInAgpl``); revocation
+across conversations and caches; end-to-end document / row / column / graph authorisation; identity
+integration (SSO, RBAC/ABAC admin).
+
+Guaranteed in AGPL as of 2026-11-22 (B1 fix): if a grant or identity carries a tenant, the core ENFORCES it
+correctly — fail-closed on a missing or mismatched tenant, including for privileged-role bypasses and
+revocation epochs (see ``TestTenantIsolationGuaranteed``). This was a security fix, not an edition change:
+the schema already had these fields; nothing checked them.
 """
 from __future__ import annotations
 
@@ -21,7 +28,7 @@ import json
 import pytest
 
 from agentic_os import permissions as perm
-from agentic_os.permissions import AccessDecision, GrantStore, Identity, PermissionsPlane, make_authorizer
+from agentic_os.permissions import AccessDecision, Grant, GrantStore, Identity, PermissionsPlane, make_authorizer
 
 TABLE = "crm.customers"
 ROWS = [
@@ -218,22 +225,128 @@ class TestGrantStorageGuaranteed:
         assert store.list() == [] and store.sealed
 
 
+# ───────────────────────── tenant isolation (contract v1, B1 fix, 2026-11-22) ─────────────────────────
+#
+# EDITION TABLE UPDATE: ``test_ENTERPRISE_identities_carry_a_tenant`` used to be a strict xfail here, pinning
+# "tenant isolation is Enterprise-only, Identity cannot even carry one." The independent authorization-stack
+# review (finding B1) found this was already false in a dangerous direction: ``Grant.tenant`` and
+# ``Grant.revocation_epoch`` were ALREADY present in the AGPL core's own schema (validated, serialized,
+# round-tripped) while nothing — not even ``Identity`` — could ever populate or check them. A tenant-scoped
+# grant that somehow entered the store was silently treated as untenanted, which is an authorization bug, not
+# an edition boundary. Per this docstring's own stated convention ("if it ever starts passing, the docs and
+# edition table must change"): it now passes, on purpose, and the table changes here.
+#
+# The new AGPL/Enterprise line: the CORE now guarantees that a tenant-scoped grant is enforced correctly
+# (fail-closed on a missing/mismatched tenant) if one exists in the store — this is a security guarantee, not
+# a product feature, and insecure-by-default is not an acceptable edition boundary. What stays Enterprise is
+# everything ABOUT deciding tenancy: resolving which tenant an external identity belongs to (SSO/membership
+# lookup), multi-tenant provisioning/onboarding, and cross-tenant delegation — none of which this fix adds.
+
+
+class TestTenantIsolationGuaranteed:
+    def test_identities_carry_a_tenant(self):
+        """B1 fix: Identity has a real tenant field in AGPL core — enforcement needs this to exist at all."""
+        ident = Identity(app="support", tenant="t2")
+        assert ident.tenant == "t2" and ident.is_valid()
+
+    def test_a_tenant_scoped_grant_matches_only_its_own_tenant(self, store):
+        """The actual B1 vulnerability, reproduced and fixed: the SAME subject name in two tenants, with a
+        grant scoped to only one, must not authorize the other."""
+        store.add("app", "support", "table", TABLE, tenant="t1")
+        plane = PermissionsPlane(store)
+        assert plane.authorize(Identity(app="support", tenant="t1"), "table", TABLE).allowed
+        assert not plane.authorize(Identity(app="support", tenant="t2"), "table", TABLE).allowed
+
+    def test_a_tenant_scoped_grant_never_matches_a_missing_tenant_context(self, store):
+        """Fail closed on ambiguity: an identity with NO tenant set never satisfies a tenant-scoped grant,
+        even though it shares the grant's subject name exactly."""
+        store.add("app", "support", "table", TABLE, tenant="t1")
+        assert not PermissionsPlane(store).authorize(Identity(app="support"), "table", TABLE).allowed
+
+    def test_an_untenanted_grant_still_matches_any_tenant_pre_contract_behaviour_preserved(self, store):
+        """``tenant=""`` (the default, and every grant stored before this fix) is EXACTLY the pre-contract,
+        single-operator case: it still matches any identity regardless of tenant. This is what keeps every
+        existing deployment's decisions byte-identical."""
+        _g(store, "support")
+        plane = PermissionsPlane(store)
+        assert plane.authorize(Identity(app="support"), "table", TABLE).allowed
+        assert plane.authorize(Identity(app="support", tenant="t1"), "table", TABLE).allowed
+
+    def test_privileged_role_is_scoped_to_its_own_tenant_not_global_by_default(self, store):
+        """B1 fix: a privileged role no longer bypasses tenant boundaries by default. An identity with a
+        tenant and a privileged role gets no automatic cross-tenant bypass — it needs a real, tenant-scoped
+        grant, same as any other role-based grant."""
+        plane = PermissionsPlane(store)  # default privileged_roles=("admin",), global_privileged_roles=()
+        assert not plane.authorize(Identity(app="x", roles=["admin"], tenant="t1"), "table", TABLE).allowed
+        store.add("role", "admin", "table", TABLE, tenant="t1")
+        assert plane.authorize(Identity(app="x", roles=["admin"], tenant="t1"), "table", TABLE).allowed
+        assert not plane.authorize(Identity(app="x", roles=["admin"], tenant="t2"), "table", TABLE).allowed
+
+    def test_privileged_role_still_bypasses_for_an_untenanted_identity_pre_contract_behaviour_preserved(self, store):
+        """An identity with no tenant set (the pre-contract case) keeps the exact old behaviour: a privileged
+        role is a full, unconditional bypass. Nothing changes for a deployment that never sets ``tenant``."""
+        assert PermissionsPlane(store).authorize(Identity(app="x", roles=["admin"]), "table", TABLE).allowed
+
+    def test_global_privileged_roles_is_the_explicit_separate_escape_for_real_cross_tenant_admin(self, store):
+        """A genuinely cross-tenant admin capability is available, but only via a separate, narrowly-named,
+        explicitly-opted-into parameter — never the default behaviour of ``privileged_roles`` generally."""
+        plane = PermissionsPlane(store, privileged_roles=("admin",), global_privileged_roles=("admin",))
+        assert plane.authorize(Identity(app="x", roles=["admin"], tenant="t1"), "table", TABLE).allowed
+        assert plane.authorize(Identity(app="x", roles=["admin"], tenant="t2"), "table", TABLE).allowed
+
+    def test_revocation_epoch_invalidates_a_stale_grant_at_decision_time(self, store):
+        """B1 fix: revoking a subject's epoch makes every grant stamped before the bump stop matching on the
+        very next decision — no cache, no session, survives it."""
+        g = store.add("app", "support", "table", TABLE, tenant="t1")
+        plane = PermissionsPlane(store)
+        ident = Identity(app="support", tenant="t1")
+        assert plane.authorize(ident, "table", TABLE).allowed            # fresh decision, before revocation
+        assert plane.authorize(ident, "table", TABLE).allowed            # a second, "already cached" decision
+        store.revoke_epoch("app", "support", "t1")
+        assert not plane.authorize(ident, "table", TABLE).allowed        # same grant id, now stale
+        assert g.revocation_epoch == 1                                  # auto-stamped one generation ahead of
+                                                                          # epoch 0; the bump to epoch 1 reaches it
+
+    def test_a_grant_added_after_revocation_is_immediately_current_not_born_stale(self, store):
+        store.revoke_epoch("app", "support", "t1")   # current epoch for this key is now 1
+        store.add("app", "support", "table", TABLE, tenant="t1")   # auto-stamped at epoch 1, not 0
+        assert PermissionsPlane(store).authorize(Identity(app="support", tenant="t1"), "table", TABLE).allowed
+
+    def test_a_grant_stamped_zero_never_opted_in_and_is_unaffected_by_revocation(self, store):
+        """``revocation_epoch=0`` explicitly opts OUT: a legacy-shaped grant is never caught by a later revoke,
+        same as before this contract existed."""
+        store.add("app", "support", "table", TABLE, tenant="t1", revocation_epoch=0)
+        store.revoke_epoch("app", "support", "t1")
+        assert PermissionsPlane(store).authorize(Identity(app="support", tenant="t1"), "table", TABLE).allowed
+
+    def test_a_store_that_cannot_answer_current_epoch_fails_the_grant_closed(self, store):
+        """An epoch-protected grant (anything stamped nonzero) is denied, not silently waved through, against
+        a store-like object with no ``current_epoch`` method — "can't say" is never "fine"."""
+        class _NoEpochStore:
+            sealed = False
+            def snapshot(self):
+                return [Grant(id="g1", subject_kind="app", subject="support", resource_kind="table",
+                              resource_name=TABLE, tenant="t1", revocation_epoch=5)], False
+        plane = PermissionsPlane(_NoEpochStore())
+        assert not plane.authorize(Identity(app="support", tenant="t1"), "table", TABLE).allowed
+
+
 # ───────────────────────── NOT guaranteed in AGPL (enterprise) ─────────────────────────
 
 
 class TestNotGuaranteedInAgpl:
-    # -- multi-tenant isolation ------------------------------------------------------------------
+    # -- tenant MEMBERSHIP RESOLUTION (deciding WHICH tenant an identity belongs to) --------------
 
-    def test_NOT_GUARANTEED_grants_have_no_tenant_boundary(self, store):
-        """A grant is keyed by app/user/role names only: the same name in another tenant matches it."""
+    def test_NOT_GUARANTEED_nothing_resolves_which_tenant_an_external_identity_belongs_to(self, store):
+        """The core enforces whatever tenant an ``Identity`` already carries (see
+        ``TestTenantIsolationGuaranteed`` above) — it has no opinion on how that tenant got there. Resolving
+        tenancy from an SSO claim, a membership table, or a request header is the caller's job; the enterprise
+        plane's ``connections_service``/identity overlays are where that resolution actually lives."""
         _g(store, "support")
         plane = PermissionsPlane(store)
-        tenant_a, tenant_b = Identity(app="support"), Identity(app="support")   # nothing tells them apart
+        # two identities with nothing BUT a name in common, and no tenant resolution applied by the core itself
+        tenant_a, tenant_b = Identity(app="support"), Identity(app="support")
         assert plane.authorize(tenant_a, "table", TABLE).allowed and plane.authorize(tenant_b, "table", TABLE).allowed
-
-    @pytest.mark.xfail(strict=True, raises=TypeError, reason="enterprise: tenant isolation (optional Enterprise package)")
-    def test_ENTERPRISE_identities_carry_a_tenant(self):
-        Identity(app="support", tenant="t2")
 
     # -- revocation across conversations and caches ----------------------------------------------
 

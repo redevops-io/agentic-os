@@ -227,10 +227,12 @@ class TestMalformedStoredGrantsStopApplying:
         bad = _raw("old-bad", actions=["read", ""])
         _plant(store, [bad, _raw("good")])
         _g(store, "newcomer")
-        raw = json.loads(store._box.unseal(store.path.read_bytes()))["grants"]
+        # a grant added now carries an epoch and is stored in the versioned envelope (B3): compare the grant records, as stored
+        stored = lambda: [perm._unwrap_entry(d) for d in json.loads(store._box.unseal(store.path.read_bytes()))["grants"]]
+        raw = stored()
         assert bad in raw and {d["subject"] for d in raw} == {"old-bad", "good", "newcomer"}      # nothing silently dropped
         assert store.remove(bad["id"]) is True
-        assert "old-bad" not in {d["subject"] for d in json.loads(store._box.unseal(store.path.read_bytes()))["grants"]}
+        assert "old-bad" not in {d["subject"] for d in stored()}
 
     def test_the_plane_ignores_a_malformed_grant_from_any_store_facade(self):
         class Facade:
