@@ -19,6 +19,7 @@ from typing import ClassVar, Dict, Mapping, Optional, Tuple
 from runtime_contracts.protocol import content_hash
 
 from ..integrations.business.contracts import BusinessObject
+from .synthetic_refs import is_synthetic_ref
 
 DIRECTIONS = ("up", "down")
 
@@ -69,6 +70,9 @@ def freeze_experiment(hypothesis: CommercialHypothesis, *, control: str, treatme
     """Freeze a hypothesis into an experiment: seal the success definition + evidence so results can't move
     the goalposts. The seal is a content hash over exactly the fields evaluation is allowed to read."""
     guardrails = dict(guardrails or {})
+    if any(is_synthetic_ref(r) for r in hypothesis.evidence_refs):
+        raise ValueError("a synthetic study reference is a hypothesis pointer and is refused as sealed "
+                         "experiment evidence")
     evidence_snapshot = tuple(hypothesis.evidence_refs)
     seal = content_hash({
         "hypothesis": hypothesis.digest(), "control": control, "treatment": treatment,
