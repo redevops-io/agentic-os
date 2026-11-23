@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from runtime_contracts.world import IdentityGraph, WorldEvent
 
 from .adapters import AdapterRegistry
+from .models import ExecutionMode
 from .objects import APP_CATALOG, canonical_from_entity
 
 
@@ -32,16 +33,24 @@ class ProjectionSeeder:
         self._registry = AdapterRegistry(overrides=adapters or {}, store=self.store, allow_real=allow_real)
         self.projections: List[Dict[str, Any]] = []      # per-projection: app, native_id, adapter, realism
 
-    def project(self, event: WorldEvent, graph: IdentityGraph) -> List[Tuple[str, str]]:
+    def project(self, event: WorldEvent, graph: IdentityGraph,
+                *, mode: Optional[ExecutionMode] = None) -> List[Tuple[str, str]]:
         """Project every carried entity into each app whose catalog covers its kind. Returns the (app,
-        native_id) pairs created/confirmed. Idempotent — a re-seed of the same event is a no-op."""
+        native_id) pairs created/confirmed. Idempotent — a re-seed of the same event is a no-op.
+
+        ``mode`` is the run's :class:`ExecutionMode`. Anything but ``LIVE`` (the orchestrator's own default
+        is ``SIMULATE``) never reaches a real external system here, however the registry's adapters are
+        configured — a world run must not depend on which credentials happen to be set in the environment
+        to decide whether it writes for real (B3). ``mode=None`` (no caller opinion) keeps the prior,
+        registry-decides behaviour, for callers outside the orchestrator that construct a seeder directly."""
         created: List[Tuple[str, str]] = []
         for ent in event.entity_ids:
             obj = canonical_from_entity(ent, event)
             for app in self._plan:
                 if not (obj.kind in self._plan.get(app, ()) ):
                     continue
-                adapter = self._registry.for_app(app)
+                adapter = (self._registry.for_app(app) if mode is None or mode == ExecutionMode.LIVE
+                          else self._registry.in_memory(app))
                 if not adapter.accepts(obj.kind):
                     continue
                 native_id = adapter.upsert(obj)

@@ -91,14 +91,25 @@ def test_demo_app_has_no_blanket_auth(name):
 
 
 def test_unclassified_surfaces_are_pinned_and_flagged():
-    """pending-owner entries pin TODAY's behaviour so /admin-style surfaces cannot drift silently."""
-    ids = {e["id"] for e in CONTRACT["pending_owner"]}
-    assert {"admin-api", "admin-page"} <= ids
+    """pending-owner entries pin TODAY's behaviour so an unclassified surface cannot drift silently."""
     for ep in CONTRACT["pending_owner"]:
         r = _client(ep["app"]).get(ep["path"])
         assert r.status_code in ep["pinned_status"], \
             f"{ep['id']} changed WITHOUT owner classification: {r.status_code} not in {ep['pinned_status']}"
         assert ep["marker"] in r.text
+
+
+def test_admin_console_was_resolved_out_of_pending_owner_not_just_dropped():
+    """B3 (audit/02-authority-and-execution.md) + the owner-clarification contract both pinned
+    /admin + /api/admin as a question, not an answer. Resolving the question must move them into
+    `protected_anonymous` (a real, tested denial) — the entries may never simply disappear from the
+    contract file, which would look identical to someone forgetting to classify them at all."""
+    pending_ids = {e["id"] for e in CONTRACT["pending_owner"]}
+    assert "admin-api" not in pending_ids and "admin-page" not in pending_ids
+    protected_ids = {e["id"]: e for e in CONTRACT["protected_anonymous"]}
+    assert {"admin-api", "admin-page"} <= set(protected_ids)
+    for eid in ("admin-api", "admin-page"):
+        assert protected_ids[eid]["app"] == "admin"
 
 
 # ── LIVE: availability + response contract (nightly; skipped in ordinary CI) ───────────────────────

@@ -304,6 +304,16 @@ class AdapterRegistry:
                 return candidate
         return InMemoryAdapter(app, self._store)
 
+    def in_memory(self, app: str) -> Any:
+        """``app``'s adapter with real-core resolution forced off (an explicit override still wins): the
+        caller already decided — e.g. a non-LIVE :class:`ExecutionMode` — that this run must never reach a
+        real external system, regardless of which credentials happen to be configured in the environment."""
+        if app in self._cache:
+            return self._cache[app]
+        adapter = self._overrides.get(app) or InMemoryAdapter(app, self._store)
+        self._cache[app] = adapter
+        return adapter
+
     def resolved(self) -> Dict[str, str]:
         """Which adapter (+ realism) is in play per cached app — for the demo/console to show honestly."""
         return {app: {"adapter": a.name, "realism": a.realism} for app, a in self._cache.items()}

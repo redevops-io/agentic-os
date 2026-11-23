@@ -6,6 +6,10 @@ services:
     container_name: admin-api
     restart: unless-stopped
     environment:
+      # Admin credential (B3): required, no default — the console runs the real engine and must not answer
+      # anonymously. Put a key of 24+ characters in a host-only .env (never committed). A short or unset key
+      # is treated as none: the route stays DISABLED (503), never open.
+      - ADMIN_CONSOLE_API_KEY=${ADMIN_CONSOLE_API_KEY:?set ADMIN_CONSOLE_API_KEY to a key of at least 24 characters}
       # Wire the Lago adapter at the live reference billing core so one OSS core reads REAL-LIVE (the seam,
       # proven end-to-end). Point these at a production Lago and nothing else changes.
       # Both are required (no default URL, no default key): LAGO_API_URL is the core's base URL and LAGO_API_KEY the
