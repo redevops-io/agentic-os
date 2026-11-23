@@ -648,7 +648,7 @@ def permissions_demo_page(scenarios, nonce: str = "") -> str:
 <h1>&#128273; Permissions &mdash; access control, by example</h1>
 <p class="sub">Pick a scenario to see what a grant lets a principal read, over a <b>synthetic</b> customer table. Every scenario is built in memory for this page: it never touches a real grant store, and you cannot choose an identity, a role or a resource &mdash; only a scenario. This page is an illustration with synthetic data, not a running enforcement point.</p>
 <div class="card"><h2>Scenario</h2>
-  <select id="sc">__OPTS__</select> <button class="btn" id="run">Show</button>
+  <select id="sc" aria-label="Scenario">__OPTS__</select> <button class="btn" id="run">Show</button>
   <p id="expl" class="note"></p><div id="sres"></div></div>
 <div class="card"><h2>Administration</h2>
   <p class="note">Inert until you enter the admin key. It then calls the admin API with the key in a header; nothing here is public.</p>
