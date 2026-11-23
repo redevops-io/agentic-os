@@ -285,6 +285,21 @@ are separate steps; a link or reparse point (including some redirected or cloud-
 * **Forward again.** Start the new release: the restored `grants.jsonl` is migrated again.
 * A grants file written by the new release cannot be opened by it if the key changes; it fails closed (no grants,
   `sealed: true`) and is never overwritten.
+* **Back to a release that predates tenant labels and revocation epochs (0.6.0).** A grant that carries a `tenant` or a
+  `revocation_epoch` is stored in a versioned envelope (the document says `"version": 2` while one exists), not as a flat entry.
+  The older release cannot parse the envelope, counts it as malformed and honours nothing from it: after the rollback those
+  grants are **denied**, never read as untenanted (every tenant) and never read as un-revoked. They stay in the file, untouched by
+  the older release's writes, and are honoured again when the new release starts. Every grant added by the new release without an
+  explicit `revocation_epoch=0` is epoch-stamped and therefore also in the envelope, so a rollback denies the grants added since the
+  upgrade and keeps serving the ones that existed before it; re-add what you need as a flat grant on the older release, or do not
+  roll back. The new release refuses a store whose `version` (or envelope `format`) is newer than it knows: sealed, nothing honoured,
+  never overwritten.
+* **Strict tenants (opt-in).** `PERMISSIONS_STRICT_TENANT=1` (or `PermissionsPlane(strict_tenant=True)`) removes the implicit
+  wildcard tenant: an untenanted grant serves only an untenanted identity, a tenant-scoped grant must carry an epoch, a privileged role
+  with no tenant context is not an implicit bypass (name it in `global_privileged_roles` to keep one), and a tenant the caller only
+  asserts is denied unless a verifier registered with `register_tenant_verifier` (or passed as `tenant_verifier=`) answers `True` for
+  it. Off by default; a deployment that never sets it decides exactly as before. Registering a verifier without strict mode also
+  applies it to every tenanted identity.
 
 ## 7a. Deployments with neither a key nor a key file
 

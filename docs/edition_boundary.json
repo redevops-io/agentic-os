@@ -64,6 +64,14 @@
     {
       "capability": "tenant-scoped grants and revocation epochs enforced fail-closed on one host",
       "test": "tests/test_permissions_agpl_regression.py::test_a_tenant_scoped_grant_matches_only_its_own_tenant"
+    },
+    {
+      "capability": "strict tenants: no implicit wildcard tenant, an epoch on every tenant grant, an asserted tenant denied unless a registered verifier confirms it",
+      "test": "tests/test_tenant_strict_hybrid.py::test_strict_has_no_implicit_wildcard_tenant"
+    },
+    {
+      "capability": "a grant with a tenant or epoch is stored in a versioned envelope a release without those fields cannot misread; a newer format is refused",
+      "test": "tests/test_grant_store_scoped_format.py::test_rollback_to_the_release_reads_no_tenant_grant_as_a_wildcard"
     }
   ],
   "enterprise_only": [
@@ -101,7 +109,7 @@
   "decisions": {
     "B1": "enterprise; the single-deployment tenant labelling shipped since v0.3.43 is kept, is not an isolation guarantee, and does not grow",
     "B2": "community",
-    "B3": "amended: optional tenant label and revocation_epoch on Grant/Identity, enforced fail-closed by the core; resolving tenant membership stays enterprise"
+    "B3": "amended: optional tenant label and revocation_epoch on Grant/Identity, enforced fail-closed by the core (strict mode, verifier hook and store format guard opt-in or automatic as documented); an asserted tenant is not authenticated unless a verifier is registered; resolving tenant membership stays enterprise"
   },
   "legacy_tenant_surface": {
     "note": "pre-existing since v0.3.43; pinned so it cannot grow without a change to this file and to docs/EDITION_BOUNDARY.md",
