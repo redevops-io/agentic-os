@@ -53,7 +53,7 @@ import os
 # be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
 from . import secret_files as _secret_files  # noqa: E402  (must run before anything reads the environment)
 _secret_files.load_file_secrets()                # NAME_FILE -> NAME (Docker/Kubernetes secrets)
-from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
+from agentic_os.app_gate import RequestContext as _RequestContext, console_authorizer as _console_authorizer, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
 from agentic_os.app_gate import with_authorization as _with_authorization
 _GATE_APP = "edge-sentinel"
 _req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
@@ -887,9 +887,16 @@ def _triage(body: dict) -> dict:
 
 # ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
 try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
+    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole
+    from agentic_os.app_gate import validate_console as _validate_console
+    from agentic_os.tool_actions import console_tool as _console_tool
 except Exception:  # noqa: BLE001 — context-runtime absent → no console
     _AgentConsole = None
+
+# Each tool's risk class is read from agentic_os/tool_actions.py, where the launcher behind it was read line by
+# line (a scanner that starts a process and writes a cache is ``write`` whatever its name says). A class typed at
+# a registration here would be a second table, and a side-effecting tool classified ``read`` refuses to register.
+_crtool = _console_tool(_GATE_APP) if _AgentConsole is not None else None
 
 _SENTINEL_PRIMER = """CrowdSec is the open-source engine watching your network. It reads your logs, spots attacks, and records ban decisions for attacking IP addresses; whether anything is actually blocked depends on a bouncer, which edge-sentinel neither provides nor checks. edge-sentinel is the agent layer on top: you can ask it what CrowdSec currently holds, and it keeps a human in the loop before any block is executed.
 
@@ -1462,11 +1469,15 @@ def _build_sentinel_console(console_cls, _crtool):
         suggestions=_chips(),
         subtitle="Ask what CrowdSec holds, to explain an alert, to look up a CVE, or to read the sample network and backup reviews.",
         model=_GovernedConsoleModel(),
+        # named, not inherited: the console answers on the gate's plane, in the shape a ToolRegistry reads
+        authorizer=_console_authorizer(_GATE_APP),
         allow_side_effects=[],  # ban_ip stays gated → the harness asks for human approval before blocking
     )
 
 
 _SENTINEL_CONSOLE = _build_sentinel_console(_AgentConsole, _crtool) if _AgentConsole is not None else None
+if _SENTINEL_CONSOLE is not None:
+    _validate_console(_GATE_APP, _SENTINEL_CONSOLE)   # gated or not at all: the chat cannot offer a scan it is not allowed to start
 
 
 # --- routes ------------------------------------------------------------------
