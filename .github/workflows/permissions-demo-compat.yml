@@ -25,23 +25,9 @@ on:
       - "apps/*/requirements.txt"
       - ".github/workflows/permissions-demo-compat.yml"
   pull_request:
-    paths:
-      - "agentic_os/permissions*.py"
-      - "agentic_os/tool_actions.py"
-      - "agentic_os/control_plane.py"
-      - "agentic_os/cli.py"
-      - "agentic_os/app_gate.py"
-      - "deploy/permissions-showcase-demo/**"
-      - "tests/test_demo_compatibility.py"
-      - "tests/test_permissions_*.py"
-      - "tests/test_authorization_bridge*.py"
-      - "tests/test_agent_console_authorization.py"
-      - "tests/test_classification_single_source.py"
-      - "tests/test_dependency_pins.py"
-      - "tests/test_sc*.py"
-      - "tests/_page_js_harness.js"
-      - "apps/*/requirements.txt"
-      - ".github/workflows/permissions-demo-compat.yml"
+    # No path filter here: `authorization-seam` is a REQUIRED status check on main, and a required check that only
+    # runs for some paths can never be satisfied by a pull request that touches none of them (it stays "expected"
+    # forever and the PR cannot merge). It runs on every pull request; pushes to main keep the filter above.
 
 permissions:
   contents: read
