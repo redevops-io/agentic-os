@@ -10,7 +10,8 @@ leaves to the enterprise edition. The rules below are the owner's decisions; `te
 
 The basic permissions plane authorises the *application instance*, not callers: grants say which app, role or user may read, write or delete
 which tool, table or corpus, and may restrict rows and columns inside the documented scope. It does not know who the caller is beyond the
-local profile, and it does not separate tenants.
+local profile, and it does not manage or authenticate tenants. It can compare a tenant label carried on a grant with a tenant label carried on the
+identity and refuse a mismatch (decision B3 below); that comparison is the whole of what this edition does about tenants.
 
 ### In this edition (community)
 
@@ -20,6 +21,7 @@ local profile, and it does not separate tenants.
 | Tool execution controls: operator `/invoke` authority checks, execution authorization, route authorization | `mission/invoke_gate.py`, `app_kit/route_authz.py` |
 | Basic grants and resource permissions over tools, tables and corpora; basic row and column restrictions within their documented scope | `permissions*.py`, `app_gate.py` |
 | Single-host capability revocation epochs (per store, per process or host): revoking an authority takes effect at the next decision | `mission/authority.py` (`revoke`, `revoke_all`, `epoch`) |
+| An optional tenant label and revocation epoch on a permissions grant, compared fail-closed against the identity's tenant label at the next decision, on one host (B3) | `permissions.py` (`Grant`, `Identity`, `PermissionsPlane`, `GrantStore.revoke_epoch`) |
 | Local single-user identity from the local profile; no identity taken from a request header; no implicit admin bypass | `local_capability.py`, `permissions.py` |
 | Extension seams with working standalone defaults (`overlays.set_*`, `execution_context.set_*`) | `overlays.py`, `execution_context.py` |
 | A request for an enterprise capability without the enterprise package fails closed with a named missing-capability error | `app_gate.py`, `tool_actions.py`, `trusted_import.py` |
@@ -33,7 +35,7 @@ local profile, and it does not separate tenants.
 | Tenant identity and tenant-scoped tokens and visibility (B1); multi-tenant authorization and isolation as a managed capability: tenant provisioning, cross-tenant delegation, per-tenant secret namespaces | vocabulary check, pinned legacy surface |
 | Revocation across conversations, caches and hosts; stale-cache invalidation | pinned (no cross-host field) |
 | Permission-aware retrieval; end-to-end document, row, column and graph authorization | pinned (no enforcement claim) |
-| Cross-host tenant authorization | pinned (no tenant argument on `authorize`) |
+| Cross-host tenant authorization; tenant membership resolution | pinned (`authorize` takes no resolver or membership argument) |
 | Any dependency of this runtime on an enterprise identity or permission service | import check |
 
 ## Decisions recorded for borderline cases
@@ -42,7 +44,7 @@ local profile, and it does not separate tenants.
 |---|---|---|
 | B1 | Tenant-scoped tokens and tenant visibility | **Enterprise.** This tree still contains the single-deployment tenant labelling that has shipped since v0.3.43 (`AGENTIC_OS_TENANT_TOKENS`, `AGENTIC_OS_TENANT_LIMITS`, a 404 for another tenant's mission, tenant-aware drill-down). It is kept so existing callers do not break, it is **not** a tenant-isolation guarantee, and no further tenant-isolation feature is added here. Removing or relocating it is a separate, breaking change that has not been made. |
 | B2 | Single-host capability revocation epochs | **Community.** |
-| B3 | Tenant and epoch fields on grants | **Not an enforced authorization.** This tree has no `tenant` or `revocation_epoch` field on a permissions `Grant`, and `authorize()` takes no tenant. A release that adds such fields before they are enforced must not describe them as isolation; `tests/test_edition_boundary.py` pins their absence so the document has to change the day they arrive. |
+| B3 | Tenant and epoch fields on grants | **Amended (hybrid).** The core carries and ENFORCES, on one host, an optional `tenant` label and `revocation_epoch` on a permissions `Grant`, an optional `tenant` label on an `Identity`, and echoes the tenant on an `AccessDecision`. What it enforces, fail closed: a tenant-scoped grant never matches an identity whose tenant is missing, empty or different (comparison is exact: `""`, `*`, padding, case and look-alike characters are not wildcards); a privileged role is not authority across tenants (only a role named in `global_privileged_roles`, empty by default, is); a grant carrying an epoch ends at the next decision once `GrantStore.revoke_epoch` has moved the epoch for its (subject kind, subject, tenant), and a store that cannot report the epoch denies the grant; a malformed tenant or epoch makes the grant or the principal unusable. Absent tenant and epoch is the pre-contract single-operator case, with the same stored bytes and decisions: an untenanted grant keeps its pre-contract meaning and matches whatever tenant label the identity carries. What it does NOT do, and what stays **Enterprise**: authenticate the label (the tenant on an identity is whatever the caller asserted; nothing in this edition resolves which tenant a principal belongs to or checks membership), provision tenants, resolve identities from an identity provider, delegate across tenants, grant fine-grained per-tenant permissions, or revoke across hosts, conversations and caches. B1 stands: this is a single-host label comparison, not a tenant-isolation capability, and it must not be described as one. |
 
 Distributed tenant identity, permission-aware retrieval and cross-host tenant authorization remain enterprise whatever the vocabulary in this
 tree says.
@@ -58,7 +60,7 @@ enterprise-only capability with the evidence that this tree does not provide it.
   `tenant_provision*`) without an entry in the catalogue;
 * the project declares a plug-in entry-point group, or an enterprise package as a dependency, or the kernel reads `importlib.metadata`
   entry points;
-* the permissions `Grant` or `authorize` gains a tenant or epoch (B3);
+* the tenant or epoch on a `Grant` stops being optional and inert-when-absent, or `authorize` gains a membership resolver or tenant argument (B3);
 * the catalogue names a test that does not exist.
 
 The checks work from names, hashes and symbols. They cannot read what a real enterprise adapter does; that is verified in the enterprise

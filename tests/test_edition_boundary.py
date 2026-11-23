@@ -4,7 +4,8 @@ They work from names, hashes and symbols: they cannot read what a real enterpris
 * no module outside a reviewed allow-list names an enterprise package, and every such import is lazy (inside a function);
 * no module or top-level definition uses enterprise vocabulary (SSO, OIDC, SAML, SCIM, JWKS, ABAC, break-glass, tenant provisioning);
 * no plug-in entry-point group and no enterprise dependency is declared, and the kernel reads no entry points;
-* decision B3: a permissions Grant carries no tenant or revocation epoch and authorize() takes no tenant;
+* decision B3 (amended): a permissions Grant/Identity may carry an optional tenant label and revocation epoch that are inert when absent;
+  authorize() takes no tenant argument and no membership resolver (resolving who belongs to a tenant stays enterprise);
 * decision B1: the legacy single-deployment tenant surface is exactly the catalogued one;
 * the catalogue names tests that exist, and the document carries the licence wording rule.
 """
@@ -110,15 +111,22 @@ def test_no_entry_point_group_and_no_enterprise_dependency():
         assert not re.search(r"\bentry_points\s*\(", t), f"{rel} reads plug-in entry points"
 
 
-def test_grants_and_authorize_carry_no_tenant_or_epoch_b3():
+def test_grant_tenant_and_epoch_are_optional_inert_when_absent_and_authorize_resolves_no_membership_b3():
+    """B3 (amended). The fields exist, default to absent, serialise to nothing when absent, and `authorize` takes no tenant argument
+    and no resolver: who belongs to which tenant is not decided in this tree."""
     from dataclasses import fields
 
     from agentic_os import permissions
 
-    names = {f.name for f in fields(permissions.Grant)}
-    assert not {n for n in names if "tenant" in n or "epoch" in n}, names
-    assert "tenant" not in inspect.signature(permissions.PermissionsPlane.authorize).parameters
-    assert not {n for n in {f.name for f in fields(permissions.Identity)} if "tenant" in n or "epoch" in n}
+    g = permissions.Grant(id="g", subject_kind="app", subject="a", resource_kind="table", resource_name="t")
+    assert {"tenant", "revocation_epoch"} <= {f.name for f in fields(permissions.Grant)}
+    assert g.tenant == "" and g.revocation_epoch == 0 and "tenant" not in g.to_dict() and "revocation_epoch" not in g.to_dict()
+    assert set(inspect.signature(permissions.PermissionsPlane.authorize).parameters) == {"self", "identity", "resource_kind", "resource_name", "action"}
+    assert permissions.Identity().tenant == "" and permissions.AccessDecision(True, "x").tenant == ""
+    assert "tenant" not in permissions.AccessDecision(True, "x").to_dict()
+    # nothing in this tree resolves membership: no public hook on the plane or the identity that looks one up
+    public = {n for n in dir(permissions.PermissionsPlane) + dir(permissions.Identity) if not n.startswith("_")}
+    assert not {n for n in public if any(w in n for w in ("member", "resolve", "directory", "sso"))}, public
 
 
 def test_the_legacy_tenant_surface_is_exactly_the_catalogued_one_b1():

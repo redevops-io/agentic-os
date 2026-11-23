@@ -248,6 +248,7 @@
   "tests/test_stale_executor.py",
   "tests/test_standing_grants.py",
   "tests/test_temporal_graph.py",
+  "tests/test_tenant_fail_closed_b3.py",
   "tests/test_the_package_describes_itself.py",
   "tests/test_verification.py",
   "tests/test_world_admin.py",

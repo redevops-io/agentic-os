@@ -60,13 +60,17 @@
     {
       "capability": "the enterprise package is imported only when it is an installed distribution",
       "test": "tests/test_dr02_enterprise_import_trust.py"
+    },
+    {
+      "capability": "tenant-scoped grants and revocation epochs enforced fail-closed on one host",
+      "test": "tests/test_permissions_agpl_regression.py::test_a_tenant_scoped_grant_matches_only_its_own_tenant"
     }
   ],
   "enterprise_only": [
     {
-      "capability": "tenant identity on the permissions plane",
-      "test": "tests/test_permissions_agpl_regression.py::test_ENTERPRISE_identities_carry_a_tenant",
-      "pin": "strict xfail"
+      "capability": "resolving which tenant an external identity belongs to (membership, SSO)",
+      "test": "tests/test_permissions_agpl_regression.py::test_NOT_GUARANTEED_nothing_resolves_which_tenant_an_external_identity_belongs_to",
+      "pin": "assertion"
     },
     {
       "capability": "revocation across conversations and caches",
@@ -84,8 +88,8 @@
       "pin": "strict xfail"
     },
     {
-      "capability": "tenant and epoch fields on a permissions grant, tenant argument on authorize (B3)",
-      "test": "tests/test_edition_boundary.py::test_grants_and_authorize_carry_no_tenant_or_epoch_b3",
+      "capability": "tenant and epoch on a grant are optional and inert when absent; authorize takes no membership resolver (B3)",
+      "test": "tests/test_edition_boundary.py::test_grant_tenant_and_epoch_are_optional_inert_when_absent_and_authorize_resolves_no_membership_b3",
       "pin": "assertion"
     },
     {
@@ -97,7 +101,7 @@
   "decisions": {
     "B1": "enterprise; the single-deployment tenant labelling shipped since v0.3.43 is kept, is not an isolation guarantee, and does not grow",
     "B2": "community",
-    "B3": "not an enforced authorization; no tenant or epoch field on a permissions Grant in this tree"
+    "B3": "amended: optional tenant label and revocation_epoch on Grant/Identity, enforced fail-closed by the core; resolving tenant membership stays enterprise"
   },
   "legacy_tenant_surface": {
     "note": "pre-existing since v0.3.43; pinned so it cannot grow without a change to this file and to docs/EDITION_BOUNDARY.md",
