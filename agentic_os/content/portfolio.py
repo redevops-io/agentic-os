@@ -97,7 +97,7 @@ def scan_portfolio(client, sites: List[Site], *, days: int = 30, min_median: flo
               "watching": r["queue"]["watching"]} for r in per_site]
     table.sort(key=lambda t: t["actions"], reverse=True)
 
-    return {
+    rollup = {
         "sites": len(sites),
         "sites_with_data": sum(1 for r in per_site if r["pages"] > 0),
         "total_pages": sum(r["pages"] for r in per_site),
@@ -107,3 +107,10 @@ def scan_portfolio(client, sites: List[Site], *, days: int = 30, min_median: flo
         "top_opportunities": top[:top_n],
         "per_site": table,
     }
+    # Unknown / conflicting relevance (SR-04): surfaced as totals only when present, so the rollup is unchanged
+    # unless the unknown-aware flag or the relevance hook produced such signals.
+    for key in ("not_assessable", "relevance_conflicts"):
+        total = sum(r["queue"].get(key, 0) for r in per_site)
+        if total:
+            rollup["total_" + key] = total
+    return rollup

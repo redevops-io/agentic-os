@@ -8,6 +8,8 @@ idempotent on the wire.
 Capabilities (syscalls):
   radar.add_watch  — start monitoring a new competitor/price page (creates a watch)
   radar.brief      — read-only competitive-intelligence summary of what changed (fact `market_brief`)
+  radar.synthetic_study — read-only SYNTHETIC buyer study of message variants (off unless AGENTIC_OS_SYNTHETIC_RESEARCH=1);
+                     its output is a hypothesis for human review, never evidence
 
 Per modules.yaml there is NO approval gate for market-radar: add_watch is non-destructive
 (it only starts observing a public page) and brief is read-only, so neither is parked as a
@@ -18,7 +20,7 @@ from __future__ import annotations
 
 from agentic_os.mission.operator_sdk import Operator, capability
 
-from . import core
+from . import core, synthetic
 
 
 def build_market_radar_operator() -> Operator:
@@ -42,5 +44,14 @@ def build_market_radar_operator() -> Operator:
             outputs={"market_brief": "read-only summary of what changed across the tracked watches"},
             estimated_value="high", deterministic=False, latency_ms=800,
             concurrency_mode="read_only",
+        ),
+        capability(
+            "radar.synthetic_study",
+            lambda inp: synthetic.synthetic_study(inp),
+            provides=["synthetic_study_run"],
+            inputs={"variants": "2-4 message variants ({id, headline, body, cta})", "audience": "sme | enterprise"},
+            outputs={"synthetic_study_run": "a SYNTHETIC buyer study of the variants: hypotheses for human review, never evidence"},
+            estimated_value="low", deterministic=False, latency_ms=120000,
+            permissions=["market-radar:write"], concurrency_mode="read_only",   # no data is written; it spends model calls, so it needs the stricter permission
         ),
     ])

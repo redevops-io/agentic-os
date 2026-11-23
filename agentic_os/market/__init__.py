@@ -45,9 +45,27 @@ from .funnel import FunnelChange, FunnelHistory, diff_funnels
 from .experiment_design import (
     CommercialExperiment, CommercialHypothesis, ExperimentEvaluation, evaluate, freeze_experiment,
 )
-from .outcomes_join import (
-    FirstPartyLedger, FirstPartyMetric, MeasuredOutcome, conversion_delta, measure_experiment,
-)
+# The first-party ledger names are loaded LAZILY (PEP 562): importing `agentic_os.market.<anything>` (notably the
+# synthetic-research package) must not load `outcomes_join` / `ingestion`. `from agentic_os.market import
+# FirstPartyLedger` and `import agentic_os.market.outcomes_join` behave exactly as before.
+_LAZY_LEDGER = ("FirstPartyLedger", "FirstPartyMetric", "MeasuredOutcome", "conversion_delta", "measure_experiment")
+_LAZY_SUBMODULES = ("outcomes_join",)       # base exposed `agentic_os.market.outcomes_join` as an attribute
+
+
+def __getattr__(name):
+    if name in _LAZY_LEDGER or name in _LAZY_SUBMODULES:
+        import importlib
+        module = importlib.import_module(".outcomes_join", __name__)
+        value = module if name in _LAZY_SUBMODULES else getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY_LEDGER) | set(_LAZY_SUBMODULES))
+
+
 from .execution_governed import (
     CommerceSurfaceProvider, PriceChangeResult, PricingPolicy, apply_price_change,
 )

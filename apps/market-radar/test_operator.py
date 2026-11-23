@@ -108,7 +108,7 @@ def client():
 def test_capabilities_manifest(client):
     m = client.get("/capabilities").json()
     caps = {c["name"]: c for c in m["capabilities"]}
-    assert set(caps) == {"radar.add_watch", "radar.brief"}
+    assert set(caps) == {"radar.add_watch", "radar.brief", "radar.synthetic_study"}
     # Per modules.yaml there is NO gate for market-radar — neither capability is approval-gated.
     assert caps["radar.add_watch"]["approval_required"] is False
     assert caps["radar.brief"]["approval_required"] is False

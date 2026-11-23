@@ -125,21 +125,41 @@ def permissions_requested(env=None) -> bool:
 
 
 REQUIRE_SETTING = "AGENTIC_OS_REQUIRE_PERMISSIONS_SETTING"
+#: What running a console with UNRESOLVED tool classifications costs the operator: a written reason, in this
+#: variable. Registration of an unclassified (discovered) tool is allowed and its execution stays denied, but a
+#: production process that serves with a capability nobody has classified is a policy decision, not an accident —
+#: so it has to be signed for. A bare ``1`` is not a reason; the value is recorded and reported on ``/health``.
+CONSOLE_ACK = "AGENTIC_OS_ACK_UNCLASSIFIED_CONSOLE_TOOLS"
 _NOTICED: set = set()               # apps whose "authorization is not enforced" notice has been logged
 _PROCESS_AUTHORIZER = None          # the kernel's own process-wide authorizer (basic mode)
 _GATES: dict = {}                   # app name -> AppGate (basic mode)
 _ENTERPRISE: dict = {}              # app name -> (principal_for, tool table) once the enterprise bootstrap installed its gate for it
+_CONSOLE_STATE: dict = {}           # app name -> what its agent console's start-up check found (see ``validate_console``)
+_INSTALLED_ENGINE_DEFAULT = None    # the exact authorizer THIS module installed as the engine's default (reset clears ours, nobody else's)
 _REQUEST: contextvars.ContextVar = contextvars.ContextVar("agentic_os_app_gate_request", default=None)
 
 
 def reset_state() -> None:
     """Clear the process-wide gate state (the gates, the enterprise gates, the "not enforced" notices and the process authorizer), in place so every importer sees the reset. For tests and for a
     harness that re-imports apps in one process; production never needs it (``install_gate`` starts each app from a clean entry)."""
-    global _PROCESS_AUTHORIZER
+    global _PROCESS_AUTHORIZER, _INSTALLED_ENGINE_DEFAULT
     _GATES.clear()
     _ENTERPRISE.clear()
+    _CONSOLE_STATE.clear()
     _NOTICED.clear()
     _PROCESS_AUTHORIZER = None
+    # The engine's default is process-wide state too, and it outlives every one of these registries: an app that
+    # joined a plane during one test keeps answering for every later one — including the tests that assert what an
+    # app does when NOTHING was requested. Only what this module installed is cleared, and only if nothing
+    # overwrote it since (the enterprise bootstrap installs its own authorizer, and that one is not ours to touch).
+    installed, _INSTALLED_ENGINE_DEFAULT = _INSTALLED_ENGINE_DEFAULT, None
+    if installed is not None and _cr_default_authorizer() is installed:
+        try:
+            from context_runtime.tools import base
+        except ImportError:
+            return
+        if callable(getattr(base, "set_default_authorizer", None)):
+            base.set_default_authorizer(None)
 
 
 class RequestContext:
@@ -228,18 +248,81 @@ def _cr_default_authorizer_strict():
     return None if value is _NOT_FOUND else value
 
 
+# ───────────── the two shapes of "may this run?" and the one place they meet ─────────────
+
+
+def _deny_reason(answer) -> str | None:
+    """One authorizer's answer, in THIS repository's contract: None = allowed, a non-empty string = why not.
+
+    The engine's ``authz/v1`` answer is read as the decision it is (``allowed`` / ``message``). Everything the kernel
+    cannot read as a decision is a denial and says so — including the two shapes that used to mean "allowed" by
+    accident: a bare ``None`` from an engine that has stopped using it for that, and an empty string. This is the
+    function that decides whether an app's assistant answers or blocks, so guessing in either direction is the bug."""
+    if answer is None:
+        return None                                            # the kernel contract: the gate checked it and allowed it
+    if isinstance(answer, str):
+        return answer or "the authorizer returned no reason (treated as a denial)"
+    if isinstance(answer, bool):
+        return None if answer else "denied by the authorizer"
+    allowed = getattr(answer, "allowed", None)
+    if isinstance(allowed, bool):                              # a decision from an engine that speaks authz/v1
+        if allowed:
+            return None
+        return str(getattr(answer, "message", "")).strip() or "denied by the authorizer"
+    return f"the authorizer returned {type(answer).__name__}, not a decision"
+
+
 def default_authorizer():
-    """The process-wide authorizer, read at call time. PRECEDENCE (FR-10): when BOTH the engine's default (what the enterprise bootstrap installs, or anything that
-    called ``set_default_authorizer``) and the kernel's own (basic mode) are installed, the answer is the STRICTER of the two: a call is allowed only when BOTH allow
-    (the first deny reason wins), so a permissive default installed later can never loosen basic mode and basic mode can never loosen the enterprise gate. One of
-    them alone is returned as is; neither is None."""
+    """The process-wide authorizer, read at call time, returned UNCHANGED. PRECEDENCE (FR-10): when BOTH the engine's default (what the enterprise bootstrap installs,
+    or anything that called ``set_default_authorizer``) and the kernel's own (basic mode) are installed, the answer is the STRICTER of the two: a call is allowed only
+    when BOTH allow (the first deny reason wins), so a permissive default installed later can never loosen basic mode and basic mode can never loosen the enterprise
+    gate. One of them alone is returned AS IS — the object that was installed, never a copy or a wrapper, because an app that installed one authorizer must be able to
+    read that exact one back — and neither is None.
+
+    RETURNED AS IS covers the ANSWER too: it keeps whatever shape the installed callable answers in, which is why nothing is wrapped here. Two kinds of caller read this
+    function. The route guards and the legacy consoles (``apps/*/assistant.py``) CALL it and treat a truthy answer as "blocked"; they take the answer through
+    ``_deny_reason``, which reads either dialect, so a decision or a string answers them alike. A caller that hands the authorizer to a ``ToolRegistry`` needs the
+    engine's own dialect, and it does not get one from here: the callable carries its own engine-shaped twin in
+    ``engine_authorizer``, which is what a registry calls when it is handed this one (basic mode attaches it at
+    install; the stricter-of-two below attaches its own). A console an app builds asks for its plane by name, which
+    is ``console_authorizer`` below. An authorizer that raises is a denial."""
     engine, kernel = _cr_default_authorizer(), _PROCESS_AUTHORIZER
     if engine is None or kernel is None or engine is kernel:
         return engine or kernel
 
     def both(principal, spec, args):
-        return kernel(principal, spec, args) or engine(principal, spec, args)
+        # Either side may answer in either dialect; what reaches this repository's callers is always this repository's shape.
+        return _deny_reason(kernel(principal, spec, args)) or _deny_reason(engine(principal, spec, args))
+
+    # The same offer a single-plane callable makes (see ``_install_basic``): whoever hands this to a tool registry
+    # gets the engine's dialect off the attribute instead of a string this repository would have written. Built
+    # lazily and never fatal: an engine without the authz vocabulary gets the callable back unchanged.
+    from .permissions import make_engine_authorizer
+    both.engine_authorizer = make_engine_authorizer(both, label="the enterprise gate and basic mode, together")
     return both
+
+
+def console_authorizer(app_name: str = ""):
+    """The authorizer an app's ``AgentConsole`` should be BUILT with — the same plane its routes are gated by, in the shape a tool registry speaks.
+
+    A console built without one inherits the engine's PROCESS default: whichever authorizer was installed last, by whoever installed it. In a single-app process that
+    is the app's own plane and the app works; in a process that mounts several apps (a test session, a gateway) it is whichever app happened to boot last, and a
+    console can end up asking another app's grants. Naming the plane here makes the decision the app's own and visible in ``console_state()["authorizer"]``.
+
+    WHAT is returned is the app's gate authorizer — basic mode — or, when the app is gated by the enterprise bootstrap, ``default_authorizer()``: the stricter of the
+    enterprise gate and basic mode, exactly as the route guards read it. It is then converted to the engine's contract, because a console hands this straight to a
+    ``ToolRegistry``, and an engine from the authz seam on reads a kernel-shaped ``None`` as "nobody decided" and denies what the plane just allowed. An app with NO
+    authorizer installed anywhere gets ``None``: the unconfigured single-user case, whose console runs on the engine's legacy default and says so in ``console_state()``.
+    """
+    gate = _GATES.get(app_name)
+    combined = default_authorizer() if gate is None else gate.authorizer
+    if combined is None:
+        return None
+    engine = getattr(combined, "engine_authorizer", None)
+    if callable(engine):                                   # already carries the engine's own shape
+        return engine
+    from .permissions import make_engine_authorizer        # answers None/str: the registry needs a decision
+    return make_engine_authorizer(combined, label=f"the {app_name or 'app'} permissions plane")
 
 
 def _engine_importable() -> bool:
@@ -308,7 +391,7 @@ class AppGate:
         """The deny reason for running ``tool`` (None = allowed). A tool that is not in the app's table is denied."""
         spec = SimpleNamespace(name=tool, side_effecting=self.table.get(tool) in ("write", "delete"), approval_required=False)
         try:
-            return self.authorizer(self.principal if principal is None else principal, spec, {})
+            return _deny_reason(self.authorizer(self.principal if principal is None else principal, spec, {}))
         except Exception as e:  # noqa: BLE001 — fail closed
             return f"authorizer error ({type(e).__name__})"
 
@@ -325,7 +408,7 @@ def _enterprise_denial(app_name: str, tool: str):
     spec = SimpleNamespace(name=tool, side_effecting=table.get(tool) in ("write", "delete"), approval_required=False)
     try:
         # the principal of THIS request (the bootstrap resolves it from the verified credential); no request (a background job) = the anonymous principal
-        return auth(principal_for(_REQUEST.get()), spec, {})
+        return _deny_reason(auth(principal_for(_REQUEST.get()), spec, {}))
     except Exception as e:  # noqa: BLE001 — fail closed
         return f"authorizer error ({type(e).__name__})"
 
@@ -547,7 +630,7 @@ def _install_basic(app_name: str, env):
     from .permissions import GrantStore, Identity, PermissionsPlane, make_authorizer
     from .permissions_setup import default_dir, local_user
     from .tool_actions import resolve_tool_actions
-    global _PROCESS_AUTHORIZER
+    global _PROCESS_AUTHORIZER, _INSTALLED_ENGINE_DEFAULT
     try:
         table = resolve_tool_actions(app_name, enterprise=False) or {}          # the kernel's table; basic permissions never read the enterprise one
     except Exception as e:  # noqa: BLE001 — a conflicting or unreadable table is a real failure, not "no grants"
@@ -583,6 +666,23 @@ def _install_basic(app_name: str, env):
     if _trusted_engine():                                    # the harness engine (public package, only from an installed distribution) reads its own default: same authorizer
         try:
             from context_runtime.tools import base
+            from .permissions import make_engine_authorizer
+            # KD-1: ONE callable in both seats, and it carries its own twin. The two consumers read different
+            # dialects of the same decision — this repository answers "allowed" with a bare None, where a registry
+            # from the authz seam on reads that None as "nobody decided" and denies what was just allowed. So the
+            # callable handed to the engine carries ``engine_authorizer``: the same decisions in the engine's
+            # contract, which is what a registry that was given the process default calls
+            # (``agent_harness.tools.engine_authorizer_of``), while this module and every route guard keep calling
+            # the callable itself. A callable that could not carry the twin would leave the engine answering every
+            # tool call with a silent denial, so that is refused here rather than discovered on the first call.
+            try:
+                authorizer.engine_authorizer = make_engine_authorizer(authorizer,
+                                                                      label=f"basic permissions ({app_name})")
+            except (AttributeError, TypeError) as exc:
+                raise _refuse(app_name, "the permissions authorizer cannot carry the shape the engine's tool "
+                                        "registry reads (engine_authorizer), which would leave every tool call a "
+                                        "silent denial", exc, kind="basic") from exc
+            _INSTALLED_ENGINE_DEFAULT = authorizer
             base.set_default_authorizer(authorizer)
         except ImportError:
             pass
@@ -672,23 +772,166 @@ def _unconfigured_or_standalone(app_name: str, env) -> None:
                      "directly on a loopback address this is only the single-user quickstart.", app_name, BASIC_SWITCH, BASIC_SWITCH, REQUIRE_SETTING, BASIC_SWITCH)
 
 
-def authorization_fields(app_name: str, env=None) -> dict:
-    """What an app reports about its authorization on ``/health`` and ``/_security``: ``authorization`` is ``enforced`` (a gate decides, grants provisioned), ``restricted`` (permissions are
-    requested but no permissions key is provisioned or no gate is installed: everything protected is denied) or ``unenforced`` (nothing requested, or deliberately off: every tool runs for anyone who
-    can reach the app); ``authorization_setting`` says why (``on``, ``off``, ``unset``)."""
+# ───────────────── the agent console: checked before it is allowed to serve ─────────────────
+
+_SWITCH_WORDS = frozenset({"1", "0", "true", "false", "yes", "no", "on", "off"})
+
+
+def _console_ack(env) -> str | None:
+    """The operator's written reason for serving with UNRESOLVED tool classifications (``CONSOLE_ACK``), else None.
+
+    A reason, not a switch: ``1`` / ``true`` / ``on`` are refused here on purpose. The variable exists to put a
+    sentence into the deployment's record — why this process is serving a capability nobody has read — and a
+    bare flag carries no such sentence (the same rule ``local_trust_reason`` follows on the tool-registry seam)."""
+    raw = str(env.get(CONSOLE_ACK, "")).strip()
+    return None if not raw or raw.lower() in _SWITCH_WORDS else raw
+
+
+def validate_console(app_name: str, console, *, env=None) -> dict:
+    """Run the console's own start-up check before the app serves a request, and record the outcome for ``/health``.
+
+    An app calls this at import, right after building its ``AgentConsole`` — the console is reachable from
+    ``/api/agent``, so "at import" is "before anything it runs can be asked to run". The check is the console's
+    (``AgentConsole.validate()``: is there a plane to ask, and does every tool carry a class the plane can be
+    asked about); this function decides what the answer MEANS for this deployment:
+
+    * **authorization was requested** (``AGENTIC_OS_PERMISSIONS`` / the enterprise switches) and the console is
+      not ready → ``GateStartupError``: the app does not start. A console that answers every tool call with
+      ``missing_explicit_grant`` looks like a broken policy plane to the person using it, and a policy plane
+      that was asked for and silently missing is exactly the failure this repository refuses to run with.
+    * **nothing was requested** (the standalone/dev default) → the app still starts, because that mode is a
+      documented choice, but the state is RECORDED and reported: the console's tool path fails closed on its
+      own, so an app running with no plane has an assistant whose every action is denied. Liveness is not
+      readiness, and ``/health`` now says which one it has.
+    * **tools registered without a class** (a discovered module the fleet registered but nobody has read) → they
+      stay registered and stay denied, which is the safe half of the answer. Serving like that in production is a
+      decision, so it has to be signed for: with authorization requested it needs a written reason in
+      ``{CONSOLE_ACK}``, and the reason is recorded and reported beside the tool names.
+
+    Returns the recorded state (also kept for ``authorization_fields``); raises nothing when the console is ready."""
     envm = os.environ if env is None else env
-    gate = _GATES.get(app_name)
-    if gate is not None:
-        return {"authorization": "restricted" if gate.restricted else "enforced", "authorization_setting": "on"}
-    if app_name in _ENTERPRISE:
-        return {"authorization": "enforced", "authorization_setting": "enterprise"}
+    validate = getattr(console, "validate", None)
+    if not callable(validate):
+        raise GateStartupError(
+            f"app {app_name!r} cannot check its agent console before serving: the console object has no validate(). "
+            f"A console built by an older context-runtime cannot prove its tools are classified — pin the "
+            f"context-runtime that ships AgentConsole.validate() instead of serving an unchecked console.")
+    report = validate(strict=False)
+    plane = getattr(report, "authorizer", "none") or "none"
+    problems = [str(p) for p in (getattr(report, "problems", ()) or ())]
+    warnings_ = [str(w) for w in (getattr(report, "warnings", ()) or ())]
+    registry = getattr(console, "registry", None)
+    listed = getattr(registry, "unclassified", None)
+    unclassified = sorted(listed()) if callable(listed) else []
+
+    ack = _console_ack(envm)
+    blockers: list[str] = []
+    if plane == "none":
+        blockers.append("no authorization plane is visible to the console: every tool call answers "
+                        "missing_explicit_grant (install the gate before building the console, or pass authorizer=...)")
+    # Anything else the console itself refuses to start on is reported verbatim. The two phrases filtered out are
+    # the same two findings this function states in its own (longer, actionable) words — cosmetic de-duplication,
+    # never a reason that goes uncounted: `report.problems` is still the whole verdict.
+    blockers += [p for p in problems if "no authorizer is installed" not in p and "no risk class" not in p]
+    if unclassified and ack is None:
+        blockers.append(f"{len(unclassified)} tool(s) are registered without a risk class and cannot be authorized "
+                        f"by any grant: {', '.join(unclassified)}. Classify them (agentic_os/tool_actions.py) or "
+                        f"acknowledge the state with a written reason in {CONSOLE_ACK}")
+    ready = not blockers
+
     try:
         requested = permissions_requested(envm)
     except GateStartupError:
-        requested = True
+        requested = True                     # a switch the app could not read is a gate that was asked for
+    state = {"app": app_name, "ready": ready, "authorizer": plane, "unclassified": unclassified,
+             "ack": ack, "blockers": blockers, "warnings": warnings_, "enforcement_requested": requested}
+    _CONSOLE_STATE[app_name] = state
+
+    if ready:
+        if unclassified:      # resolved by the operator's written reason, not by the code looking away
+            _log.warning("app %r serves with %d tool(s) still unclassified (%s) — every one of them is DENIED at the "
+                         "call; acknowledged in %s as: %s", app_name, len(unclassified), ", ".join(unclassified),
+                         CONSOLE_ACK, ack)
+        return state
     if requested:
-        return {"authorization": "restricted", "authorization_setting": "on"}
-    return {"authorization": "unenforced", "authorization_setting": "off" if str(envm.get(BASIC_SWITCH, "")).strip() != "" else "unset"}
+        raise GateStartupError(
+            f"app {app_name!r} cannot start: its agent console is not ready to serve, and permissions were "
+            f"requested: {'; '.join(blockers)}. The app refuses to serve an assistant whose actions it cannot "
+            f"authorize. Fix the cause (install the gate before building the console; classify the tool in "
+            f"agentic_os/tool_actions.py), or run without permissions on purpose to get the deny-everything "
+            f"console instead of this refusal.")
+    _log.warning("app %r: the agent console is NOT ready to authorize anything (%s). It stays mounted and every tool "
+                 "call is denied by the tool registry itself — an app running without permissions has an assistant "
+                 "that can talk but not act. /health reports this as authorization_ready=false.",
+                 app_name, "; ".join(blockers))
+    return state
+
+
+def console_state(app_name: str) -> dict | None:
+    """What ``validate_console`` recorded for this app (None when the app has no agent console)."""
+    return _CONSOLE_STATE.get(app_name)
+
+
+def may_start_helper_process(app_name: str) -> bool:
+    """Whether this app may start something of its OWN right now — a helper server, a scanner, a client session.
+
+    A RESTRICTED app (permissions were requested, nothing is provisioned yet) answers every protected call with the
+    ``permissions init`` hint and executes nothing. That promise is about more than its routes: an app that spawns a
+    helper process at import has started work before anyone decided it may, and — because the tool behind that
+    process is only classified once the process answers — discovery is the one place where "register the tool" and
+    "run something" are the same action. So discovery waits for provisioning, and the mount says why when it is off.
+
+    Unconfigured and enterprise apps return True: this is not a switch to turn a feature off with, it is the
+    restricted state's own rule."""
+    gate = _GATES.get(app_name)
+    if gate is not None and gate.restricted:
+        _log.warning("app %r is RESTRICTED (permissions requested, no grants provisioned), so it starts no helper "
+                     "process of its own: its discovered tools are not registered either. Run "
+                     "`agentic-os permissions init` and restart to get them.", app_name)
+        return False
+    return True
+
+
+def authorization_fields(app_name: str, env=None) -> dict:
+    """What an app reports about its authorization on ``/health`` and ``/_security``: ``authorization`` is ``enforced`` (a gate decides, grants provisioned), ``restricted`` (permissions are
+    requested but no permissions key is provisioned or no gate is installed: everything protected is denied) or ``unenforced`` (nothing requested, or deliberately off: every tool runs for anyone who
+    can reach the app); ``authorization_setting`` says why (``on``, ``off``, ``unset``).
+
+    An app that mounted an agent console also reports what THAT can do, because the two are different questions:
+    ``authorization_ready`` is whether the console has a plane to ask and every tool a class to ask with, and
+    ``authorization_blockers`` / ``unclassified_tools`` say what is missing. A process can be alive, answer 200 on
+    ``/health``, and be unable to authorize one action — liveness is not readiness, so the two are reported apart
+    and a monitoring rule can page on the one it means."""
+    envm = os.environ if env is None else env
+    gate = _GATES.get(app_name)
+    if gate is not None:
+        fields = {"authorization": "restricted" if gate.restricted else "enforced", "authorization_setting": "on"}
+    elif app_name in _ENTERPRISE:
+        fields = {"authorization": "enforced", "authorization_setting": "enterprise"}
+    else:
+        try:
+            requested = permissions_requested(envm)
+        except GateStartupError:
+            requested = True
+        if requested:
+            fields = {"authorization": "restricted", "authorization_setting": "on"}
+        else:
+            off = str(envm.get(BASIC_SWITCH, "")).strip() != ""
+            fields = {"authorization": "unenforced", "authorization_setting": "off" if off else "unset"}
+    # What the console can do is its own question, kept apart from the one ``authorization`` answers: does the
+    # process have a plane, and can the assistant it mounted ask that plane about every tool it offers. The two are
+    # reported separately so a monitoring rule can page on the one it means — an app can be enforcing and still
+    # have mounted an assistant whose tools nobody classified, and vice versa.
+    state = _CONSOLE_STATE.get(app_name)
+    if state is not None:
+        fields["authorization_ready"] = bool(state["ready"])
+        if not state["ready"] and state["blockers"]:
+            fields["authorization_blockers"] = list(state["blockers"])
+    if state and state["unclassified"]:
+        fields["unclassified_tools"] = list(state["unclassified"])
+        if state["ack"]:
+            fields["unclassified_ack"] = state["ack"]
+    return fields
 
 
 def with_authorization(app_name: str, payload: dict) -> dict:
