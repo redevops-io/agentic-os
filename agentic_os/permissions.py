@@ -96,7 +96,7 @@ def _identity_of(obj) -> "Identity":
             return getattr(obj, name, default)
         except Exception:  # noqa: BLE001
             return None
-    return Identity(app=get("app", ""), user=get("user", ""), roles=get("roles", ()))
+    return Identity(app=get("app", ""), user=get("user", ""), roles=get("roles", ()), tenant=get("tenant", ""))
 
 
 def _clean_roles(roles) -> list:
@@ -200,6 +200,12 @@ class Grant:
         subject = _clean_text(self.subject)
         if not subject:       # a grant with no subject belongs to nobody; "" must not match an empty identity
             return False
+        # B1 fix: an untenanted grant (self.tenant == "") is EXACTLY the pre-contract case and matches any
+        # identity regardless of its own tenant — same stored bytes, same decisions, as documented on the
+        # field. A TENANT-SCOPED grant matches only the identity validated for that SAME tenant; a missing or
+        # different tenant on the identity side never satisfies it — fail closed on ambiguity, never "any tenant".
+        if self.tenant and _clean_text(self.tenant) != _clean_text(identity.tenant):
+            return False
         if self.subject_kind == "app":
             return _clean_text(identity.app) == subject
         if self.subject_kind == "user":
@@ -293,24 +299,33 @@ def grant_problem(g: "Grant") -> str | None:
 
 @dataclass
 class Identity:
-    """The principal a request carries — app fixed at bootstrap, user/roles from the gateway."""
+    """The principal a request carries — app fixed at bootstrap, user/roles from the gateway, ``tenant`` the
+    ACTIVE tenant this request is scoped to (contract v1 extension, B1 fix). Absent (``""``) is the
+    pre-contract, single-tenant case: byte-identical decisions for any deployment that never sets it. A
+    tenant-scoped grant (``Grant.tenant`` set) never matches an identity whose own tenant is absent or
+    different — ambiguity fails CLOSED here, it is never read as "any tenant"."""
     app: str = ""
     user: str = ""
     roles: list = field(default_factory=list)
+    tenant: str = ""
 
     def invalid_reason(self) -> str | None:
-        """Why this principal is INVALID as a whole, or None. Strict, and computed here, once, at the identity boundary: ``app``
-        and ``user`` must be strings (a blank one is merely absent, not malformed) and ``roles`` a list, tuple or set of
+        """Why this principal is INVALID as a whole, or None. Strict, and computed here, once, at the identity boundary: ``app``,
+        ``user`` and ``tenant`` must be strings (a blank one is merely absent, not malformed) and ``roles`` a list, tuple or set of
         non-blank strings (so ``None``, a bare string, or a collection with any malformed member is invalid). The reason names
         the field only. An invalid principal grants nothing through ANY field and gets no admin bypass; nothing raises."""
         if not isinstance(self.app, str):
             return "app is not a string"
         if not isinstance(self.user, str):
             return "user is not a string"
+        if not isinstance(self.tenant, str):
+            return "tenant is not a string"
         if not _ids.absent(self.app) and not _ids.valid_identifier(self.app):
             return "app is not a valid identifier"
         if not _ids.absent(self.user) and not _ids.valid_identifier(self.user):
             return "user is not a valid identifier"
+        if not _ids.absent(self.tenant) and not _ids.valid_identifier(self.tenant):
+            return "tenant is not a valid identifier"
         r = self.roles
         if type(r) not in _ROLE_COLLECTIONS or any(type(x) is not str or not _role_ok(x) for x in r):
             return "roles is not a valid role collection"
@@ -996,19 +1011,29 @@ class GrantStore:
     def add(self, subject_kind: str, subject: str, resource_kind: str, resource_name: str, *,
             actions: list | None = None, row_scope: str = "all", row_column: str = "owner",
             row_values: list | None = None, masked_columns: list | None = None, created_by: str = "",
-            stable_id: str | None = None) -> Grant:
+            stable_id: str | None = None, tenant: str = "", revocation_epoch: int | None = None) -> Grant:
         """APPEND a new grant and return it (with its new id). Grants coexist: nothing is replaced because kind, subject and
         resource match — a role may hold several grants on one resource, OR-ed by the plane. Two identical adds make two
         grants (intended). ``stable_id`` lets a caller (``seed``) name a grant with a fixed token; an id that already exists
-        is refused, never overwritten. Removal is by id (:meth:`remove`); a change is :meth:`update`."""
+        is refused, never overwritten. Removal is by id (:meth:`remove`); a change is :meth:`update`.
+
+        ``tenant`` (contract v1, B1 fix): ``""`` is the pre-contract, untenanted grant (matches any identity's
+        tenant); a non-empty value scopes this grant to exactly that tenant. ``revocation_epoch``, left ``None``
+        (the default), is auto-stamped one generation ahead of THIS store's current epoch for
+        ``(subject_kind, subject, tenant)`` — real, meaningful protection for every grant added from here on,
+        never 0 (0 is reserved for "never opted in": every grant already on disk before this fix, read back via
+        :meth:`Grant.from_dict`, keeps that value and is therefore completely unaffected by any
+        :meth:`revoke_epoch` call — true backward compatibility for EXISTING data, not a promise that brand-new
+        grants stay unprotected). Pass an explicit ``revocation_epoch=0`` to opt a specific new grant OUT."""
         with self._txn():
             return self._add_locked(subject_kind, subject, resource_kind, resource_name, actions=actions,
                                     row_scope=row_scope, row_column=row_column, row_values=row_values,
-                                    masked_columns=masked_columns, created_by=created_by, stable_id=stable_id)
+                                    masked_columns=masked_columns, created_by=created_by, stable_id=stable_id,
+                                    tenant=tenant, revocation_epoch=revocation_epoch)
 
     def _add_locked(self, subject_kind, subject, resource_kind, resource_name, *, actions=None,
                     row_scope="all", row_column="owner", row_values=None, masked_columns=None,
-                    created_by="", stable_id=None) -> Grant:
+                    created_by="", stable_id=None, tenant="", revocation_epoch=None) -> Grant:
         if not _clean_text(subject) or not _clean_text(resource_name):
             raise GrantError("a grant needs a subject and resource_name that are valid identifiers (non-empty, no padding, no "
                              "control/format/surrogate/unassigned/bidi characters)")
@@ -1024,15 +1049,70 @@ class GrantStore:
         gid = stable_id
         while gid is None or gid in taken:
             gid = new_grant_id()
+        if revocation_epoch is None:
+            # auto-stamp one generation AHEAD of the current epoch (never 0 — see PermissionsPlane._epoch_ok's
+            # "+1 / strictly greater" note): a key that has never been revoked is at epoch 0, so a fresh grant
+            # here is stamped 1, never colliding with the "0 = never opted in" sentinel.
+            revocation_epoch = self._current_epoch_of(doc.meta, subject_kind, subject, tenant) + 1
         g = Grant(id=gid, subject_kind=subject_kind, subject=subject, resource_kind=resource_kind,
                   resource_name=resource_name, actions=(["read"] if actions is None else actions), row_scope=row_scope,
                   row_column=row_column, row_values=row_values or [], masked_columns=masked_columns or [],
-                  created_by=created_by, at=time.time())
+                  created_by=created_by, at=time.time(), tenant=tenant, revocation_epoch=revocation_epoch)
         problem = grant_problem(g)
         if problem:
             raise GrantError(f"malformed grant: {problem}")
         self._write([*entries, g.to_dict()], doc.meta)
         return g
+
+    # ──────────────────────── revocation epochs (contract v1, B1 fix) ────────────────────────
+    # A mass-revocation primitive, independent of touching any individual grant: bumping the epoch for one
+    # (subject_kind, subject, tenant) key immediately makes every EPOCH-PROTECTED grant for that exact key
+    # stale, on the very next ``authorize()`` — including one already cached by a caller, since the caller
+    # re-evaluates from the store on every call, never from a cached decision. A grant stamped ``0`` (the
+    # pre-contract default, and the default for anyone who never calls :meth:`revoke_epoch`) opted OUT of
+    # epoch protection and is NEVER affected — this is what keeps every existing stored grant, and every new
+    # one added by a caller who never uses this feature, byte-identical to before this contract existed.
+
+    @staticmethod
+    def _epoch_key(subject_kind: str, subject: str, tenant: str) -> str:
+        return f"{subject_kind}:{subject}:{tenant}"
+
+    @staticmethod
+    def _current_epoch_of(meta: dict, subject_kind: str, subject: str, tenant: str) -> int:
+        epochs = meta.get("epochs")
+        if not isinstance(epochs, dict):
+            return 0
+        v = epochs.get(GrantStore._epoch_key(subject_kind, subject, tenant), 0)
+        return v if isinstance(v, int) and v >= 0 else 0
+
+    def current_epoch(self, subject_kind: str, subject: str, tenant: str = "") -> int:
+        """The current revocation epoch for this exact ``(subject_kind, subject, tenant)`` — 0 until it is ever
+        bumped. Lock-free (the file is replaced atomically, so a reader always sees a complete document); a
+        sealed store answers 0 deliberately — ``PermissionsPlane._epoch_ok`` treats "the store could not say" as
+        failing the grant CLOSED, not as "fine", so a sealed read still denies everything, never lets a stale
+        grant through by reporting an innocent-looking 0."""
+        doc = self._load_raw()
+        if doc.sealed:
+            return 0
+        return self._current_epoch_of(doc.meta, subject_kind, subject, tenant)
+
+    def revoke_epoch(self, subject_kind: str, subject: str, tenant: str = "") -> int:
+        """Mass-revoke every CURRENT, epoch-protected grant for this exact ``(subject_kind, subject, tenant)``:
+        bump its epoch counter by one and persist it. Returns the new epoch. A grant whose own
+        ``revocation_epoch`` field is at or below the new value stops matching immediately (a freshly-added
+        grant is stamped exactly one generation ahead, so the very first bump that reaches it is enough); one
+        stamped ``0`` (never opted in) is untouched, by design — see the class-level note above."""
+        if not _clean_text(subject):
+            raise GrantError("subject must be a valid identifier")
+        with self._txn():
+            doc = self._load_raw()
+            if doc.sealed:
+                raise RuntimeError("grants store is sealed (decrypt failed) — refusing to overwrite")
+            epochs = dict(doc.meta.get("epochs") or {}) if isinstance(doc.meta.get("epochs"), dict) else {}
+            key = self._epoch_key(subject_kind, subject, tenant)
+            epochs[key] = int(epochs.get(key, 0)) + 1
+            self._write(doc.items, {**doc.meta, "epochs": epochs})
+            return epochs[key]
 
     _UPDATABLE = ("actions", "row_scope", "row_column", "row_values", "masked_columns")
 
@@ -1185,9 +1265,36 @@ def _row_matches(row_filter: dict, record: dict) -> bool:
 
 
 class PermissionsPlane:
-    def __init__(self, store: GrantStore, privileged_roles: tuple = ("admin",)):
+    def __init__(self, store: GrantStore, privileged_roles: tuple = ("admin",), global_privileged_roles: tuple = ()):
+        """``privileged_roles`` bypass grant-matching entirely, but ONLY for an identity with no active tenant —
+        the pre-contract, single-tenant case, byte-identical to before this contract existed. An identity that
+        DOES carry a tenant gets no automatic bypass from a privileged role: that role is authority WITHIN its
+        tenant only, same as any other role-based grant (B1 fix — "wildcard and privileged-role grants cannot
+        bypass tenant boundaries"). ``global_privileged_roles`` is the separate, narrower, explicitly-named
+        escape for a genuine cross-tenant admin capability; empty by default, so nothing is global unless a
+        deployment opts in on purpose."""
         self.store = store
         self.privileged_roles = set(privileged_roles)
+        self.global_privileged_roles = set(global_privileged_roles)
+
+    def _epoch_ok(self, g: "Grant") -> bool:
+        """A grant stamped ``0`` (the pre-contract default) never opted into epoch protection and is always
+        current. A stamped grant (always >= 1 — see ``GrantStore._add_locked``'s "+1" auto-stamp, which never
+        produces 0) is current only while it is STRICTLY GREATER than the store's current epoch for its own
+        subject+tenant: a freshly-stamped grant is exactly one generation ahead, so the very next
+        ``revoke_epoch`` for that key — which raises the current epoch to equal the stamp — makes it stale
+        immediately, not one bump later. A store that cannot answer (no ``current_epoch`` method) fails this
+        grant CLOSED rather than silently skip the check — the grant explicitly asked for epoch protection, so
+        "the store can't say" is never read as "fine"."""
+        if not g.revocation_epoch:
+            return True
+        current = getattr(self.store, "current_epoch", None)
+        if not callable(current):
+            return False
+        try:
+            return int(g.revocation_epoch) > int(current(g.subject_kind, g.subject, g.tenant))
+        except Exception:  # noqa: BLE001 — an unreadable epoch answer is "can't say": fail closed, same as above
+            return False
 
     def authorize(self, identity: Identity, resource_kind: str, resource_name: str, action: str = "read") -> AccessDecision:
         grants, sealed = _snapshot(self.store)      # ONE read: its sealed state belongs to this decision alone
@@ -1203,12 +1310,13 @@ class PermissionsPlane:
         if invalid:       # an invalid principal grants nothing through any field, and gets no admin bypass
             return AccessDecision(False, f"denied: invalid principal ({invalid})")
         identity = Identity(app=_clean_text(identity.app), user=_clean_text(identity.user),
-                            roles=_clean_roles(identity.roles))
-        if any(r in self.privileged_roles for r in identity.roles):
-            return AccessDecision(True, f"privileged role — full access (bypass)")
+                            roles=_clean_roles(identity.roles), tenant=_clean_text(identity.tenant))
+        privileged = [r for r in identity.roles if r in self.privileged_roles]
+        if privileged and (not identity.tenant or any(r in self.global_privileged_roles for r in privileged)):
+            return AccessDecision(True, "privileged role — full access (bypass)", tenant=identity.tenant)
         matching = [g for g in grants
                     if g.matches(identity) and g.resource_kind == resource_kind
-                    and g.covers(resource_name) and action in g.actions]
+                    and g.covers(resource_name) and action in g.actions and self._epoch_ok(g)]
         if not matching:
             who = identity.app or identity.user or (identity.roles[0] if identity.roles else "principal")
             return AccessDecision(False, f"denied: no '{action}' grant for {who} on {resource_kind} '{resource_name}'")
@@ -1230,7 +1338,7 @@ class PermissionsPlane:
                         else {c for g in matching for c in g.masked_columns})
         scope = "all rows" if row_filter is None else _describe_filter(row_filter)
         return AccessDecision(True, f"allow · {scope}" + (f" · masked {masked}" if masked else ""),
-                              row_filter=row_filter, masked_columns=masked, rules=rules)
+                              row_filter=row_filter, masked_columns=masked, rules=rules, tenant=identity.tenant)
 
     @staticmethod
     def _applicable(decision: AccessDecision, record: dict) -> list:
