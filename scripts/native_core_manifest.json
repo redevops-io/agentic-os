@@ -241,7 +241,6 @@
   "tests/test_temporal_graph.py",
   "tests/test_the_package_describes_itself.py",
   "tests/test_verification.py",
-  "tests/test_world_admin.py",
   "tests/test_world_attention.py",
   "tests/test_world_contact_center.py",
   "tests/test_world_gtm.py",
