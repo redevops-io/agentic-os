@@ -16,7 +16,7 @@ import re
 
 import pytest
 
-from agentic_os.permissions import GrantStore, make_authorizer
+from agentic_os.permissions import GrantStore, make_authorizer, make_engine_authorizer
 from agentic_os.permissions_profiles import (ApprovedOperation, DemoPrincipal, SimulatedEffects, build_gate, simulated_effects)
 from agentic_os.tool_actions import TOOL_ACTIONS, tool_actions
 
@@ -215,7 +215,10 @@ class TestSC04TheProfileSubstitutesTheRealBody:
         assert reg.run("ban", {}, principal=DemoPrincipal(app="u", user="u")).text == "REAL" and ran == [1]
 
     def test_the_explicit_helper_still_works_for_a_registry_built_elsewhere(self, store):
-        reg = tools_mod.ToolRegistry()
+        # A registry with no policy plane to ask. "Allowed" has to be answered in the installed engine's words:
+        # the same ``None`` that meant "allowed" before the authz seam reads as "nobody decided" after it, and the
+        # call would be denied before the simulation helper ever got a turn (see ``make_engine_authorizer``).
+        reg = tools_mod.ToolRegistry(authorizer=make_engine_authorizer(lambda principal, spec, args: None))
         ran = []
         reg.register(tools_mod.function_tool("t", lambda a: (ran.append(1), tools_mod.ToolResult(text="REAL"))[1], side_effecting=True))
         fx = simulated_effects(reg, ["t"])
