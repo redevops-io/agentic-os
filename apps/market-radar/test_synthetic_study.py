@@ -57,16 +57,30 @@ def test_every_result_says_it_is_synthetic_and_for_review(on):
     assert all(h.endswith("real buyers before changing anything.") or "no reason to prefer" in h for h in res["hypotheses"])
 
 
-def test_a_study_whose_controls_fail_gives_no_ranking(on, monkeypatch):
+def _break(monkeypatch, which):
     real = synthetic.summarise
 
-    def with_failed_control(result):
+    def broken(result):
         import dataclasses
-        broken = tuple({**dict(c), "passed": False} if i == 0 else c for i, c in enumerate(result.controls))
-        return real(dataclasses.replace(result, controls=broken))
-    monkeypatch.setattr(synthetic, "summarise", with_failed_control)
+        # every control's outcome is set here, so the test does not depend on how the fake respondent happens to score
+        return real(dataclasses.replace(result, controls=tuple({**dict(c), "passed": not which(c)} for c in result.controls)))
+    monkeypatch.setattr(synthetic, "summarise", broken)
+
+
+def test_a_construct_whose_controls_fail_has_its_ranking_withheld_and_the_other_keeps_its_own(on, monkeypatch):
+    _break(monkeypatch, lambda c: c["construct"] == "trust" and c["control"] == "empty_offer")
     res = run()
-    assert res["verdict"] == "inconclusive" and res["hypotheses"] == [] and res["inconclusive_reasons"][0].startswith("control failed")
+    assert res["verdict"] == "hypotheses" and res["withheld_constructs"] == ["trust"]
+    by = {c["construct"]: c for c in res["comparisons"]}
+    assert by["trust"]["controls_passed"] is False and by["trust"]["ranking"] == [] and by["trust"]["separated_from_first"] == []
+    assert by["purchase_intent"]["controls_passed"] is True and by["purchase_intent"]["ranking"]
+    assert res["inconclusive_reasons"] == ["control failed: empty_offer (trust)"]
+
+
+def test_a_study_with_no_passing_construct_is_inconclusive(on, monkeypatch):
+    _break(monkeypatch, lambda c: c["control"] == "empty_offer")
+    res = run()
+    assert res["verdict"] == "inconclusive" and res["hypotheses"] == []
     assert all(c["ranking"] == [] and c["separated_from_first"] == [] for c in res["comparisons"])
 
 

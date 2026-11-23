@@ -48,5 +48,5 @@ Studies compare only like with like: `compare_results` refuses to compare studie
 * Off unless `AGENTIC_OS_SYNTHETIC_RESEARCH` is set; with it off the capability answers `disabled` and touches nothing.
 * Respondent model: `SYNTHETIC_RESEARCH_LLM_URL` and `SYNTHETIC_RESEARCH_LLM_MODEL` (in-boundary only). Embedder: `SYNTHETIC_RESEARCH_EMBEDDER=sentence-transformers:<model>` (in-process) or `SYNTHETIC_RESEARCH_EMBED_URL` and `SYNTHETIC_RESEARCH_EMBED_MODEL` (in-boundary only); `SYNTHETIC_RESEARCH_EMBED_REVISION` records the pinned revision.
 * Every result carries `synthetic: true`, `evidence_class: synthetic-hypothesis` and `requires_human_review: true`.
-* A study in which any built-in control fails, or more than a quarter of the answers are excluded, is returned with `verdict: inconclusive`, no ranking and no hypotheses.
+* Controls are judged per construct: a construct whose controls fail has its ranking withheld (`withheld_constructs`). When no construct passes, or more than a quarter of the answers are excluded, the study is `verdict: inconclusive` with no ranking and no hypotheses.
 * The module imports nothing from the watch service, an outcome store or the ledger, and writes nowhere.
