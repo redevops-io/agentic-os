@@ -161,6 +161,9 @@ def test_sf1_stress_repeated_async_exceptions_at_random_points_never_poison_a_ke
     stop.set()
     t.join(5)
     assert not t.is_alive()
+    deadline = time.time() + 5                                            # abandoned workers finish in milliseconds
+    while sf.abandoned_alive() and time.time() < deadline:
+        time.sleep(0.005)
     t0 = time.time()
     assert sf.run("k", lambda: ("ok", 2), 0.5) == ("ok", 2)               # a leftover flight (dead leader) is replaced
     assert time.time() - t0 < 1.0
