@@ -10,7 +10,7 @@ anyio==4.16.0
 certifi==2026.10.23
 cffi==2.1.1
 click==8.5.1
-context-runtime @ https://github.com/redevops-io/context-runtime/archive/e44ed9f3dbe0a7a63126976bba3bdb62b554dcb6.tar.gz
+context-runtime @ https://github.com/redevops-io/context-runtime/archive/69fcf6891e90c64ad40a2f0b62da27142f623a6d.tar.gz#sha256=a705767b7710c29a7ab0f9d1f4d43467862882eeece690bd7d71761e5389887a
 cryptography==50.0.2
 discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@b49f66c60e25ea54273f2d23845db027d21db762
 fastapi==0.162.6
