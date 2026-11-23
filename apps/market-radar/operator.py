@@ -52,6 +52,6 @@ def build_market_radar_operator() -> Operator:
             inputs={"variants": "2-4 message variants ({id, headline, body, cta})", "audience": "sme | enterprise"},
             outputs={"synthetic_study_run": "a SYNTHETIC buyer study of the variants: hypotheses for human review, never evidence"},
             estimated_value="low", deterministic=False, latency_ms=120000,
-            permissions=["market-radar:read"], concurrency_mode="read_only",
+            permissions=["market-radar:write"], concurrency_mode="read_only",   # no data is written; it spends model calls, so it needs the stricter permission
         ),
     ])

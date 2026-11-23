@@ -154,7 +154,7 @@ _OPERATOR_CAPABILITIES: dict[str, dict[str, str]] = {
     "compliance": {"compliance.explain": "read", "compliance.scan": "write", "compliance.remediate": "write", "compliance.file_consent": "write"},
     "edge-sentinel": {"sentinel.triage": "read", "sentinel.block_ip": "write", "sentinel.unblock_ip": "write"},
     "growth-engine": {"growth.analyze": "read", "growth.reallocate_budget": "write"},
-    "market-radar": {"radar.brief": "read", "radar.add_watch": "write"},
+    "market-radar": {"radar.brief": "read", "radar.add_watch": "write", "radar.synthetic_study": "write"},   # writes nothing, but spends model calls: held to the stricter action
 }
 for _app, _caps in _OPERATOR_CAPABILITIES.items():
     TOOL_ACTIONS[_app].update(_caps)
