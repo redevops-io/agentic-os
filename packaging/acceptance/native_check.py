@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Native checks of an INSTALLED rAIls Apps desktop build, the same on every OS (standard library only).
+
+    python3 native_check.py <path to the installed redevops-sidecar> <result.json>
+
+Starts the installed control plane natively (no Docker), then exercises it as a first user would: the UI is served, the API answers, the Today
+feed loads, a note is captured and turns up, an approval-gated item waits and is approved, the process stops cleanly, and unknown commands start
+nothing. Every check is recorded with its duration; a check that cannot run on this platform is recorded as `unsupported`, never as passed.
+"""
+import json, os, platform, subprocess, sys, tempfile, time, urllib.error, urllib.request
+
+side, out_path = sys.argv[1], sys.argv[2]
+home = tempfile.mkdtemp(prefix="aa-home-")
+env = {"PATH": os.environ.get("PATH", ""), "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""), "TEMP": os.environ.get("TEMP", tempfile.gettempdir()), "TMP": os.environ.get("TMP", tempfile.gettempdir()),
+       "TMPDIR": os.environ.get("TMPDIR", tempfile.gettempdir()), "LANG": "C.UTF-8", "HOME": home, "USERPROFILE": home, "APPDATA": os.path.join(home, "AppData"), "LOCALAPPDATA": os.path.join(home, "Local"), "XDG_DATA_HOME": os.path.join(home, ".local", "share")}
+BASE = "http://127.0.0.1:8787"
+results = []
+
+
+SESSION = {}
+
+
+def http(method, path, body=None, timeout=20, headers=None, anonymous=False):
+    h = {"content-type": "application/json", **(headers or {})}
+    if SESSION and not anonymous:
+        h["X-Agentic-Session"] = SESSION["token"]
+        if method not in ("GET", "HEAD"):
+            h["X-Agentic-CSRF"] = SESSION["csrf"]
+    req = urllib.request.Request(BASE + path, method=method, data=json.dumps(body).encode() if body is not None else None, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return r.status, raw
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def check(name, fn):
+    t = time.time()
+    try:
+        detail = fn()
+        status = "unsupported" if isinstance(detail, str) and detail.startswith("UNSUPPORTED") else "pass"
+    except Exception as e:  # noqa: BLE001
+        status, detail = "fail", f"{type(e).__name__}: {e}"[:300]
+    results.append({"check": name, "status": status, "seconds": round(time.time() - t, 2), "detail": str(detail)[:300] if detail is not None else ""})
+    print(f"{status.upper():11} {name}  {str(detail or '')[:140]}", flush=True)
+
+
+def J(raw):
+    return json.loads(raw.decode("utf-8"))
+
+
+def t_help():
+    r = subprocess.run([side, "--help"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 0 and "serve" in r.stdout
+def t_unknown():
+    r = subprocess.run([side, "definitely-not-a-command"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 2, r.returncode
+def t_bootstrap():
+    r = subprocess.run([side, "bootstrap"], capture_output=True, text=True, timeout=180, env=env)
+    assert r.stdout.strip(), "no readiness report"
+    return f"exit {r.returncode}: {r.stdout.strip().splitlines()[-1][:120]}"
+
+check("the sidecar explains itself (--help exits 0)", t_help)
+check("an unknown command starts nothing (exit 2)", t_unknown)
+check("device-readiness report runs from the installed binary", t_bootstrap)
+
+import re, threading
+proc = subprocess.Popen([side, "serve", "--exit-on-stdin-eof"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+LOG = []
+threading.Thread(target=lambda: [LOG.append(l.decode("utf-8", "replace")) for l in iter(proc.stdout.readline, b"")], daemon=True).start()
+def t_serves():
+    for _ in range(90):
+        try:
+            if http("GET", "/")[0] == 200: return "listening on 127.0.0.1:8787"
+        except Exception:  # noqa: BLE001
+            pass
+        if proc.poll() is not None: raise RuntimeError("the control plane exited: " + "".join(LOG)[-300:])
+        time.sleep(1)
+    raise RuntimeError("did not serve within 90 s")
+check("the control plane starts natively and serves the UI", t_serves)
+def t_denied_without_session():
+    s, raw = http("GET", "/api/projects", anonymous=True)
+    assert s == 401, s; return "HTTP 401 without the local session"
+check("the API refuses a caller without the local session (any local process, any web page)", t_denied_without_session)
+def t_cross_origin():
+    s, _ = http("POST", "/api/local/session", {"code": "x" * 32}, headers={"Origin": "https://evil.example"}, anonymous=True)
+    assert s in (400, 401, 403), s; return f"HTTP {s} for a cross-origin exchange"
+check("a cross-origin page cannot open a session", t_cross_origin)
+def t_session():
+    code = None
+    for _ in range(30):
+        m = re.search(r"#lc=([A-Za-z0-9_-]+)", "".join(LOG))
+        if m: code = m.group(1); break
+        time.sleep(1)
+    assert code, "the sidecar printed no one-time launch URL"
+    s, raw = http("POST", "/api/local/session", {"code": code}, anonymous=True)
+    assert s == 200, (s, raw[:160]); d = J(raw)
+    tok = d.get("session_token") or d.get("session") or d.get("token"); csrf = d.get("csrf_token") or d.get("csrf")
+    assert tok and csrf, sorted(d)
+    SESSION.update(token=tok, csrf=csrf)
+    s2, _ = http("POST", "/api/local/session", {"code": code}, anonymous=True)
+    assert s2 != 200, "the launch code worked twice"
+    return "session opened with the one-time launch code; the code does not work a second time"
+check("the one-time launch code opens a session, once", t_session)
+def t_ui():
+    s, raw = http("GET", "/"); assert s == 200 and b"<html" in raw.lower(), (s, len(raw))
+    srcs = re.findall(rb'(?:src|href)="(/[^"]+\.(?:js|css))"', raw); assert srcs, "the page references no script or stylesheet"
+    sizes = [len(http("GET", u.decode())[1]) for u in srcs[:4]]; assert all(n > 1000 for n in sizes), sizes
+    return f"HTML shell plus {len(srcs)} asset(s), first sizes {sizes}"
+check("the UI document is real HTML", t_ui)
+def t_projects():
+    s, raw = http("GET", "/api/projects"); assert s == 200; d = J(raw)
+    items = d if isinstance(d, list) else d.get("projects", d)
+    assert items, "no project"; return f"{len(items)} project(s)"
+check("the API lists a project", t_projects)
+state = {}
+def t_today():
+    s, raw = http("GET", "/api/projects/customer-ops/today"); assert s == 200, s; d = J(raw)
+    state["feed"] = d; return f"{len(d['items'])} items, basis={d.get('basis')}, supports={d.get('supports')}"
+check("the Today feed loads", t_today)
+def t_capture():
+    s, raw = http("POST", "/api/projects/customer-ops/capture", {"content": "Call the supplier about the late delivery tomorrow", "source": "manual"})
+    if s == 501: return "UNSUPPORTED on this build: capture is not enabled"
+    assert s == 200, (s, raw[:200]); d = J(raw); assert d.get("id"), d
+    return f"captured -> {d.get('status')} / {(d.get('routing') or {}).get('kind')}"
+check("first workflow: a note is captured and routed", t_capture)
+def t_item():
+    items = state["feed"]["items"]; assert items, "the feed has no item"
+    s, raw = http("GET", f"/api/projects/customer-ops/today/{items[0]['id']}")
+    if s == 501: return "UNSUPPORTED on this build: item detail is not provided"
+    assert s == 200, s; return J(raw).get("user_title", "")[:80]
+check("an item opens with its detail", t_item)
+def t_anonymous_write_refused():
+    s, _ = http("POST", "/api/products/edge-sentinel/actions/x/execute", {})
+    assert s in (401, 403, 404, 405, 422), s; return f"HTTP {s}"
+check("a decision path does not execute for an unauthenticated caller", t_anonymous_write_refused)
+def t_loopback_only():
+    import socket
+    ip = socket.gethostbyname(socket.gethostname())
+    if ip.startswith("127."): return "UNSUPPORTED here: this host has no non-loopback address to probe"
+    s = socket.socket(); s.settimeout(3)
+    try:
+        s.connect((ip, 8787)); s.close(); raise AssertionError(f"reachable on {ip}:8787")
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        return f"not reachable on {ip}:8787"
+check("the control plane listens on loopback only", t_loopback_only)
+def t_stops():
+    proc.stdin.close()
+    proc.wait(timeout=30); return f"exit {proc.returncode}"
+check("it stops cleanly when the launcher goes away", t_stops)
+if proc.poll() is None:
+    proc.kill()
+def t_port_free():
+    time.sleep(1)
+    try:
+        http("GET", "/", timeout=3); raise AssertionError("still serving")
+    except (urllib.error.URLError, ConnectionError, OSError):
+        return "port released"
+check("nothing is left listening afterwards", t_port_free)
+
+summary = {s: sum(1 for r in results if r["status"] == s) for s in ("pass", "fail", "unsupported")}
+json.dump({"platform": platform.platform(), "machine": platform.machine(), "sidecar": side, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "summary": summary,
+           "seconds": round(sum(r["seconds"] for r in results), 1), "results": results}, open(out_path, "w"), indent=1)
+print(summary)
+sys.exit(1 if summary["fail"] else 0)

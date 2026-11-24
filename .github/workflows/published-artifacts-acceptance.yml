@@ -1,0 +1,113 @@
+# Installs the PUBLISHED desktop artifacts of a release on real macOS, Windows and Linux machines and exercises the installed app natively
+# (packaging/acceptance/native_check.py): hash against the signed manifest, platform signature, native install, the control plane started
+# from the installed binary (no Docker), the local-session handshake, UI assets, a first workflow, clean stop, uninstall.
+# Nothing is built here. A check that cannot run on a platform is recorded as "unsupported", never as passed.
+name: published-artifacts-acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release whose assets are tested, for example v0.6.1"
+        required: true
+  # A change to the check or to this workflow is itself tested against the current release's artifacts.
+  pull_request:
+    paths:
+      - .github/workflows/published-artifacts-acceptance.yml
+      - packaging/acceptance/native_check.py
+permissions:
+  contents: read
+jobs:
+  native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: macos-arm64 (dmg), runner: macos-15, pattern: "*_aarch64.dmg"}
+          - {name: windows-x64 (msi), runner: windows-2022, pattern: "*_x64_en-US.msi"}
+          - {name: windows-x64 (nsis exe), runner: windows-2022, pattern: "*_x64-setup.exe"}
+          - {name: linux-arm64 (deb), runner: ubuntu-24.04-arm, pattern: "*_arm64.deb"}
+          - {name: linux-arm64 (AppImage), runner: ubuntu-24.04-arm, pattern: "*_aarch64.AppImage"}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag || 'v0.6.1' }}
+      PATTERN: ${{ matrix.pattern }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download the published asset and check it against the release manifest
+        shell: bash
+        run: |
+          mkdir -p dl && gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$PATTERN" -p release-manifest.json -D dl
+          python - <<'PY'
+          import glob, hashlib, json, os
+          asset = [f for f in glob.glob("dl/*") if not f.endswith("release-manifest.json")][0]
+          h = hashlib.sha256(open(asset, "rb").read()).hexdigest()
+          ok = h in json.dumps(json.load(open("dl/release-manifest.json")))
+          print(asset, h, "listed in the manifest:", ok)
+          open(os.environ["GITHUB_ENV"], "a").write(f"ASSET={asset}\nASSET_SHA256={h}\n")
+          raise SystemExit(0 if ok else 1)
+          PY
+      - name: macOS - signature, notarization, install
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/aa "$ASSET"
+          APP="$(ls -d /tmp/aa/*.app | head -1)"
+          codesign --verify --deep --strict "$APP"
+          spctl -a -vv "$APP"
+          xcrun stapler validate "$ASSET"
+          mkdir -p "$HOME/aa-install" && cp -R "$APP" "$HOME/aa-install/"
+          echo "SIDECAR=$HOME/aa-install/$(basename "$APP")/Contents/MacOS/redevops-sidecar" >> "$GITHUB_ENV"
+      - name: Windows - signature and silent install
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature $env:ASSET
+          "$($sig.Status) $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "the installer's Authenticode signature is $($sig.Status)" }
+          if ($env:ASSET -like '*.msi') { $p = Start-Process msiexec -ArgumentList '/i', (Resolve-Path $env:ASSET), '/qn', '/norestart' -Wait -PassThru }
+          else { $p = Start-Process (Resolve-Path $env:ASSET) -ArgumentList '/S' -Wait -PassThru }
+          if ($p.ExitCode -ne 0) { throw "installer exit code $($p.ExitCode)" }
+          $side = Get-ChildItem -Path "$env:ProgramFiles", "$env:LOCALAPPDATA" -Recurse -Filter 'redevops-sidecar.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $side) { throw 'redevops-sidecar.exe not found after install' }
+          $s2 = Get-AuthenticodeSignature $side.FullName
+          if ($s2.Status -ne 'Valid') { throw "the installed sidecar's signature is $($s2.Status)" }
+          "SIDECAR=$($side.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Linux - install the .deb
+        if: runner.os == 'Linux' && endsWith(env.ASSET, '.deb')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y "./$ASSET"
+          echo "SIDECAR=$(command -v redevops-sidecar || echo /usr/bin/redevops-sidecar)" >> "$GITHUB_ENV"
+      - name: Linux - unpack the AppImage
+        if: runner.os == 'Linux' && endsWith(env.ASSET, '.AppImage')
+        run: |
+          chmod +x "$ASSET" && "./$ASSET" --appimage-extract >/dev/null
+          echo "SIDECAR=$(find "$PWD/squashfs-root" -name redevops-sidecar -type f | head -1)" >> "$GITHUB_ENV"
+      - name: Native checks of the installed app
+        shell: bash
+        run: python packaging/acceptance/native_check.py "$SIDECAR" native_result.json
+      - name: Windows - uninstall leaves nothing running
+        if: runner.os == 'Windows' && endsWith(env.ASSET, '.msi')
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/x', (Resolve-Path $env:ASSET), '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exit code $($p.ExitCode)" }
+          if (Test-Path $env:SIDECAR) { throw 'the sidecar is still on disk after uninstall' }
+      - name: Linux - uninstall the .deb
+        if: runner.os == 'Linux' && endsWith(env.ASSET, '.deb')
+        run: |
+          sudo apt-get remove -y "$(dpkg-deb -f "$ASSET" Package)"
+          test ! -e /usr/bin/redevops-sidecar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ strategy.job-index }}
+          path: native_result.json
+          if-no-files-found: warn
