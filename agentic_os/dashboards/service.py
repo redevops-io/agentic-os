@@ -21,6 +21,7 @@ from .sources import SOURCE_META, Context, SourceCache
 from .store import DAY, DashboardStore, open_store
 
 MAX_DRILL = 200
+FRESH_MIN_INTERVAL_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ class DashboardService:
         self.ctx = Context(provider=provider, config=self.config, store=self.store, default_project=self._default_project(), now=clock,
                            clients=dict(clients or {}))
         self.cache = SourceCache(self.ctx)
+        self._last_fresh = -1e9
 
     # ── projects ──────────────────────────────────────────────────────────────────────────────────
     def _provider_projects(self) -> List[Dict[str, Any]]:
@@ -157,7 +159,9 @@ class DashboardService:
             raise Forbidden(filters.project)
         if filters.project and filters.project not in {str(p["id"]) for p in self.projects()}:
             raise NotFound(filters.project)
-        if fresh:
+        if fresh and time.monotonic() - self._last_fresh >= FRESH_MIN_INTERVAL_S:
+            # a caller may ask for a new read, but not make this server hammer the connected applications
+            self._last_fresh = time.monotonic()
             self.cache.invalidate()
         d = Dashboard(id=df.id, title=df.title, priority=df.priority)
         b = Build(dashboard=d, cache=self.cache, access=acc, store=self.store, filters=filters, projects=self.projects(), now=self.clock())

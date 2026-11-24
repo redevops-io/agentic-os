@@ -22,6 +22,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 SCHEMA = "aos.dashboard/v1"
 
+
+def safe_url(url: Any) -> str:
+    """A link the UI may render: http(s) only. A record's link comes from another system's data, so anything else
+    (``javascript:``, ``data:``, a relative path) is dropped rather than trusted."""
+    u = str(url or "").strip()
+    return u if (u.startswith("https://") or u.startswith("http://")) and len(u) <= 2000 and not any(ord(c) < 33 for c in u) else ""
+
 # source states, most to least usable
 OK, STALE, UNAVAILABLE, NOT_CONNECTED, UNAUTHORIZED, GATED = "ok", "stale", "unavailable", "not_connected", "unauthorized", "gated"
 SOURCE_STATES = (OK, STALE, UNAVAILABLE, NOT_CONNECTED, UNAUTHORIZED, GATED)
@@ -50,7 +57,7 @@ class Record:
     def to_dict(self) -> Dict[str, Any]:
         return {"source": self.source, "kind": self.kind, "id": self.id, "title": self.title, "status": self.status,
                 "project": self.project, "at": self.at, "fields": dict(self.fields), "ref": self.ref or f"{self.source}:{self.id}",
-                "url": self.url}
+                "url": safe_url(self.url)}
 
 
 @dataclass(frozen=True)
@@ -173,4 +180,4 @@ class Dashboard:
 
 
 __all__ = ["SCHEMA", "OK", "STALE", "UNAVAILABLE", "NOT_CONNECTED", "UNAUTHORIZED", "GATED", "SOURCE_STATES", "USABLE",
-           "TONES", "PANEL_KINDS", "Record", "SourceStatus", "Filters", "Metric", "Panel", "Drill", "Dashboard"]
+           "TONES", "PANEL_KINDS", "safe_url", "Record", "SourceStatus", "Filters", "Metric", "Panel", "Drill", "Dashboard"]

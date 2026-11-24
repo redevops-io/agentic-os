@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 DAY = 86400.0
 QA_STATUSES = ("passed", "failed", "unsupported", "blocked")       # "unexecuted" is derived, never stored
 MAX_VIEWS_PER_OWNER = 50
+MAX_DEMO_VIEWS = 2000           # all anonymous demo sessions together; the oldest are dropped beyond this
 MAX_RESULTS_PER_BATCH = 20000
 _NAME = re.compile(r"^[^\x00-\x1f]{1,80}$")
 
@@ -141,6 +142,9 @@ class DashboardStore:
                 if n >= MAX_VIEWS_PER_OWNER:
                     raise StoreError(409, "limit", f"a person can keep {MAX_VIEWS_PER_OWNER} views; delete one first")
                 view_id, created = "view-" + uuid.uuid4().hex[:16], now
+                if owner.startswith("demo:"):          # anonymous sandboxes are bounded as a whole, like the Today demo ledger
+                    self._db.execute("DELETE FROM saved_views WHERE id IN (SELECT id FROM saved_views WHERE owner LIKE 'demo:%' "
+                                     "ORDER BY updated_at DESC LIMIT -1 OFFSET ?)", (MAX_DEMO_VIEWS - 1,))
             if is_default:
                 self._db.execute("UPDATE saved_views SET is_default=0 WHERE owner=? AND dashboard=?", (owner, dashboard))
             self._db.execute(

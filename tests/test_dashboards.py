@@ -546,3 +546,23 @@ def test_market_reads_traffic_and_keeps_the_two_systems_side_by_side(monkeypatch
     assert {k: _metric(d, k)["value"] for k in ("visitors", "pageviews", "bounce", "sites")} == {"visitors": 350.0, "pageviews": 1000.0, "bounce": 36.0, "sites": 2}
     assert _panel(d, "pages")["rows"][0]["cells"] == {"page": "/pricing", "site": "shop.example", "views": 120}
     assert "fixed 30-day window" in _panel(d, "summary")["note"] and not any(p["id"] == "funnel" for p in d["panels"])      # no CRM connected: no funnel is invented
+
+
+def test_links_from_application_data_are_http_only_and_demo_state_is_bounded(monkeypatch, tmp_path):
+    from agentic_os.dashboards import service as svcmod, store as storemod
+    from agentic_os.dashboards.contracts import Record, safe_url
+    assert safe_url("https://crm.example/x") and not any(safe_url(u) for u in ("javascript:alert(1)", "data:text/html,x", "/relative", "http://a b", ""))
+    assert Record(source="postiz", kind="post", id="1", url="javascript:alert(1)").to_dict()["url"] == ""
+    monkeypatch.setattr(storemod, "MAX_DEMO_VIEWS", 5)
+    st = DashboardStore("")
+    for i in range(9):
+        st.save_view(f"demo:10.0.0.{i}|s", name=f"v{i}", dashboard="qa", filters={}, layout={}, now=T0 + i)
+    st.save_view("user:operator", name="kept", dashboard="qa", filters={}, layout={}, now=T0)
+    left = [st.views(f"demo:10.0.0.{i}|s") for i in range(9)]
+    assert sum(len(x) for x in left) == 5 and left[0] == [] and left[8] and st.views("user:operator")      # the oldest demo views went; a person's stay
+    c, svc, _ = _app(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(svc.cache, "invalidate", lambda: calls.append(1))
+    for _ in range(4):
+        c.get("/api/dashboards/missions", params={"fresh": "true"})
+    assert len(calls) == 1 and svcmod.FRESH_MIN_INTERVAL_S >= 1

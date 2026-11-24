@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .access import Access
-from .contracts import NOT_CONNECTED, OK, STALE, UNAUTHORIZED, Dashboard, Drill, Filters, Metric, Panel, Record, SourceStatus
+from .contracts import safe_url, NOT_CONNECTED, OK, STALE, UNAUTHORIZED, Dashboard, Drill, Filters, Metric, Panel, Record, SourceStatus
 from .sources import SourceCache
 from .store import DAY, DashboardStore, day_of
 
@@ -176,7 +176,7 @@ def panel(pid: str, title: str, kind: str, *, sources: Sequence[str] = (), span:
 
 
 def row(cells: Mapping[str, Any], *, tone: str = "", drill: str = "", ref: str = "", url: str = "") -> Dict[str, Any]:
-    return {"cells": dict(cells), "tone": tone, "drill": drill, "ref": ref, "url": url}
+    return {"cells": dict(cells), "tone": tone, "drill": drill, "ref": ref, "url": safe_url(url)}
 
 
 def col(cid: str, label: str, align: str = "left") -> Dict[str, Any]:
