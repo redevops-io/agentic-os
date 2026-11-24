@@ -715,13 +715,29 @@ def postiz(ctx: Context) -> SourceResult:
     now, project, rows = ctx.now(), ctx.config.source_project("postiz"), []
     iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))  # noqa: E731
     get = (c or {}).get("get") or _http_json
+    posts: List[Mapping[str, Any]] = []
     try:
         code, data = get(f"{url}/public/v1/posts", headers={"Authorization": key}, params={"startDate": iso(now - 60 * DAY), "endDate": iso(now + 30 * DAY)})
+        if code in (301, 302, 307, 308, 404):
+            # an older Postiz serves the public API under /api and pages it by calendar month instead of a date range
+            seen: Dict[str, Mapping[str, Any]] = {}
+            for back in (0, 1, 2, -1):
+                t = time.gmtime(now - back * 30 * DAY)
+                code, data = get(f"{url}/api/public/v1/posts", headers={"Authorization": key},
+                                 params={"display": "month", "year": t.tm_year, "month": t.tm_mon, "week": max(1, min(52, int(time.strftime("%V", t)))), "day": 0})
+                if code >= 400 or not isinstance(data, Mapping):
+                    break
+                for p in data.get("posts") or []:
+                    if isinstance(p, Mapping):
+                        seen[str(p.get("id"))] = p
+            else:
+                data = {"posts": list(seen.values())}
     except Exception as e:  # noqa: BLE001
         return SourceResult(_status("postiz", UNAVAILABLE, detail=f"Postiz did not answer ({type(e).__name__})"))
     if code >= 400 or not isinstance(data, Mapping):
-        return SourceResult(_status("postiz", UNAVAILABLE, detail=f"Postiz answered {code}", remedy="check POSTIZ_API_KEY"))
-    for p in data.get("posts") or []:
+        return SourceResult(_status("postiz", UNAVAILABLE, detail=f"Postiz answered {code}", remedy="check POSTIZ_API_KEY and POSTIZ_API_URL"))
+    posts = [p for p in data.get("posts") or [] if isinstance(p, Mapping)]
+    for p in posts:
         integ = p.get("integration") if isinstance(p.get("integration"), Mapping) else {}
         rows.append(Record(source="postiz", kind="post", id=str(p.get("id", "")), title=re.sub(r"<[^>]+>", "", str(p.get("content") or ""))[:120], status=str(p.get("status") or "").lower(),
                            project=project, at=parse_ts(p.get("publishDate")),
@@ -784,6 +800,10 @@ def metabase(ctx: Context) -> SourceResult:
     public = str(opts.get("public_url") or getattr(w, "base_url", "")).rstrip("/")
     try:
         with w._client() as c:
+            who = w._req(c, "GET", "/api/user/current")       # a source with no card configured must still prove it can sign in
+            if who.status_code >= 400:
+                return SourceResult(_status("metabase", UNAVAILABLE, detail=f"Metabase did not accept the sign-in ({who.status_code})",
+                                            remedy="renew METABASE_SESSION, or set METABASE_ADMIN_EMAIL and METABASE_ADMIN_PASSWORD"))
             for series, card_id in cards.items():
                 if isinstance(card_id, bool) or not isinstance(card_id, int):
                     continue

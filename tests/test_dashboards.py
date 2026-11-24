@@ -473,6 +473,19 @@ def test_finance_support_procurement_and_marketing_compute_from_application_reco
     mkt = c.get("/api/dashboards/marketing").json()
     assert {k: _metric(mkt, k)["value"] for k in ("published", "scheduled", "post_failed", "emails", "open_rate", "click_rate", "subscribers")} == \
         {"published": 1, "scheduled": 1, "post_failed": 1, "emails": 200.0, "open_rate": 40.0, "click_rate": 5.0, "subscribers": 240.0}
+    # an older Postiz: /public/v1 redirects to the sign-in page, the API lives under /api and is paged by month
+    def old_postiz(url, *, headers, params=None, timeout=10.0):
+        if url.endswith("/api/public/v1/posts"):
+            assert {"display", "year", "month", "week", "day"} <= set(params)
+            return 200, {"posts": [{"id": "p1", "content": "Launch", "status": "published", "publishDate": iso(-86400), "releaseURL": "https://x.example/1",
+                                    "integration": {"providerIdentifier": "x", "name": "@acme"}}]}
+        return 307, None
+    newer = svc.ctx.clients["postiz"]["get"]
+    svc.ctx.clients["postiz"]["get"] = old_postiz
+    svc.cache.invalidate()
+    assert _metric(c.get("/api/dashboards/marketing").json(), "published")["value"] == 1
+    svc.ctx.clients["postiz"]["get"] = newer
+    svc.cache.invalidate()
     # one of two sources down: its metrics are unknown, the other's stay
     svc.ctx.clients["listmonk"]["get"] = _http_stub({})
     half = c.get("/api/dashboards/marketing", params={"fresh": "true"}).json()
@@ -566,3 +579,33 @@ def test_links_from_application_data_are_http_only_and_demo_state_is_bounded(mon
     for _ in range(4):
         c.get("/api/dashboards/missions", params={"fresh": "true"})
     assert len(calls) == 1 and svcmod.FRESH_MIN_INTERVAL_S >= 1
+
+
+def test_metabase_must_prove_its_sign_in_even_with_no_card_configured(monkeypatch, tmp_path):
+    c, svc, _ = _app(monkeypatch, tmp_path)
+
+    class Resp:
+        def __init__(self, code, body=None):
+            self.status_code, self._b = code, body or {}
+
+        def json(self):
+            return self._b
+
+    class Mb:
+        base_url, code = "http://bi.test", 401
+
+        def _client(self):
+            import contextlib
+            return contextlib.nullcontext(object())
+
+        def _req(self, c, method, path, json=None):
+            return Resp(self.code) if path == "/api/user/current" else Resp(200, {"data": {"cols": [{"name": "month"}, {"name": "revenue"}], "rows": [["2026-10", 10], ["2026-11", 12]]}})
+    mb = Mb()
+    svc.config.sources["metabase"] = {"cards": {"revenue_by_month": 7}}
+    svc.ctx.clients["metabase"] = mb
+    svc.cache.invalidate()
+    d = c.get("/api/dashboards/revenue").json()
+    assert {s["id"]: s["state"] for s in d["sources"]}["metabase"] == "unavailable" and "sign-in" in d["sources"][-1]["detail"] + d["sources"][0]["detail"]
+    mb.code = 200
+    d = c.get("/api/dashboards/revenue", params={"fresh": "true"}).json()
+    assert _panel(d, "revenue_month")["series"][0]["values"] == [10, 12]
