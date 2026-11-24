@@ -17,6 +17,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.4; no version set)
 
+- **A read-only mission step that reports its own failure now fails (behaviour change).** A step that is not side-effecting and answered `{"status": "error", ...}` was recorded as succeeded: its error became the world fact of its outcome and later steps ran on it. The runtime now applies the shared failure classifier to read steps too (`NodeFailed`, reason `operator_reported_failure`, with the operator's own short error). **A mission that relied on continuing past a failed read will now stop at it.**
+- **Market Intelligence loop as a mission template (`market_intelligence_loop`).** watch brief + site audit + analytics → recommendations with evidence and machine checks → a person's approval bound to the list's digest → QA on the live site (fails until the change is live) → analytics again → reassessment. New Market Radar capabilities `radar.site_audit`, `radar.recommend`, `radar.approve_plan`, `radar.verify_change`, `radar.reassess` (`apps/market-radar/loop.py`; nothing writes to the audited site) and `growth.remeasure`. First real run (2026-11-24): redevops.io had 74 of 80 audited descriptions over 170 characters; redevops.app had buttons with no analytics event on 32 of 60 pages.
+
 - **Bundle 0.1.7 supersedes 0.1.6.** 0.1.6 was published with Edge Sentinel 0.6.3: the publish workflow set the image tags in its own environment and they had not followed the compose default (0.6.5). The finding loop fails on 0.1.6 at its last step (0.6.3 has no resolution endpoint); everything else in 0.1.6 works. The workflow pin is corrected and `tests/test_bundle_publish_pins.py` keeps the workflow, the compose default and the example environment together.
 
 ## v0.4.4 (a quality finding as a security case; synthetic study reliability)
