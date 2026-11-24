@@ -1,13 +1,13 @@
 {
- "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-2bbb9811.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. RE-PINNED 2026-11-19: the source commit is now a PUBLISHED commit of the public redevops-projects repository (source_commit_published: true) -- see packaging/projects_ui.lock.json's own _comment for why (the previous local, unpublished commit this bundle was built from was lost in the 2026-11-07 scratchpad wipe and could not be recovered; this build drops the features that only existed there). index.html, the JavaScript and the CSS are build output; hero.jpg is not (D-LIC-8 option c: it is dropped, never packed).",
+ "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-e6032e8e.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. RE-PINNED 2026-11-19: the source commit is now a PUBLISHED commit of the public redevops-projects repository (source_commit_published: true) -- see packaging/projects_ui.lock.json's own _comment for why (the previous local, unpublished commit this bundle was built from was lost in the 2026-11-07 scratchpad wipe and could not be recovered; this build drops the features that only existed there). index.html, the JavaScript and the CSS are build output; hero.jpg is not (D-LIC-8 option c: it is dropped, never packed). RE-PINNED 2026-11-24 to e6032e8e (redevops-projects PRs #28 and #29 on top of 2bbb9811).",
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "84f17fceddb84d1af909a5919b5efbb2956b2b22",
  "base_commit_public": true,
- "source_commit": "2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c",
- "source_tree": "5667b187be1d5221d63f50942cbf4b9d5addf330",
+ "source_commit": "e6032e8ea31ce9f0024c4b77de61722da670be29",
+ "source_tree": "974c0c40eb15fbaae8abdb17154b726e8358b7bc",
  "source_commit_published": true,
- "source_status": "public commit on the redevops-projects repository's own main branch, reachable today at https://github.com/redevops-io/redevops-projects/commit/2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c (\"today: don't offer Snooze on live signals (the server can only refuse it)\", #26); descends from the public v0.2.0 release (base_commit) via PR #24 (shared routing, restore-last-place and connection states), PR #25 (agent audit findings) and #26.",
- "previous_source_commit": "ea9e53e56b4cbaa1afb22404a6468695e49c24fa",
+ "source_status": "public commit on the redevops-projects repository's own main branch, reachable today at https://github.com/redevops-io/redevops-projects/commit/e6032e8ea31ce9f0024c4b77de61722da670be29 (\"today: don't offer Snooze on live signals (the server can only refuse it)\", #26); descends from the public v0.2.0 release (base_commit) via PR #24 (shared routing, restore-last-place and connection states), PR #25 (agent audit findings) and #26.",
+ "previous_source_commit": "2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c",
  "previous_bundle": "the entire previous local-source lineage (assets/index-76LJRJ18.js sha256 828bb55cbbdbc60df8ecad9fffc76ec3c0d2ba918c9b072d0d1d92b3a728649c, built from the now-unrecoverable local commit ea9e53e5, and its own ancestor chain back through 9a1788b1/5751e9e5/312a811a/2f24719e/ee958a01/2fdef7f5) is superseded; see packaging/projects_ui.lock.json's previous_pin for the full chain, kept as history.",
  "package_json_git_blob": "1fae6a7db7899b5ef1a45d4a5c5a2a7a960204f8",
  "package_json_sha256": "7f5d60f109331d32b1e9c684203a815e1b641c09d41d3c75f74d9667d75c8c98",
@@ -22,16 +22,16 @@
    "npm ci",
    "VITE_PROJECTS_API=/ npm run build -- --base=/"
   ],
-  "reproduced": "built three times from a clean git archive of the source commit, each in its own throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.3, npm 11.19.1): index.html, the JavaScript and the CSS are byte-identical"
+  "reproduced": "built once on 2026-11-24 from a clean checkout of the source commit in a throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.3, npm 11.19.1); the 2bbb9811 pin was reproduced three times with the same recipe"
  },
  "files": {
-  "index.html": "1bfab1341b116f0dad6768cca4f0f6fcafacab7e4fdbd9327331d796ba1f004c",
-  "assets/index-BLDZ6xHu.js": "135ce86d96051caecc3569b939b5095a0b46099d0c5e9a9dae3a70597bea3afc",
-  "assets/index-CQkwzXZc.css": "16f2605d92a4b1716a4a8a89a78be8a4a3b0299a017bd824e9391e478a8e268d"
+  "index.html": "c54b3c5c86aed3482748eb5a8cc076f2b0e844f943d3c12166996ed9f6420409",
+  "assets/index-C1cDSXvA.js": "f8c576104ace9cbd9e976e5c68fcd18ae8b52278d51ad7c2bdf9ea70d9d70a35",
+  "assets/index-CFlj1zr2.css": "99573e01c3a70cf21533ac6b4b92bffba121da659b413fbb1a96f294c06d149d"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-2bbb9811.tgz",
-  "sha256": "55711fbd9c68dd97988d2fe1f6e557ae2d1abbab917dbc3c7380dbb2f27f86ab",
+  "path": "packaging/ui-artifacts/projects-ui-root-e6032e8e.tgz",
+  "sha256": "af481612d94a5879d6a87abba29c1a9dda61911a47695110723dcef4bd93a7d1",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",
