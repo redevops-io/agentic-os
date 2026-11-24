@@ -27,7 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04     # → .deb + AppImage   (release target now)
+          - os: ubuntu-24.04     # → .deb + AppImage, x86_64 (amd64)
+          - os: ubuntu-24.04-arm # → .deb + AppImage, aarch64 (arm64): the architecture v0.6.1 shipped; both are built from this one recipe
           - os: windows-2022     # → .msi / .nsis      (unsigned until P2; the frozen v0.3.2 run used windows-latest = windows-2025)
           - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
           # macos-13 (Intel/x86_64) dropped — GitHub is retiring the Intel runners and jobs queue
