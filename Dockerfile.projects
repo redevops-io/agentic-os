@@ -11,6 +11,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY . /app
 RUN pip install --no-cache-dir '.[projects]'
+# A shipped image is a packaged deployment: it refuses to start until AGENTIC_OS_PROFILE is set explicitly (agentic_os/mission/profile.py).
+ENV AGENTIC_OS_PACKAGED=1
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
 EXPOSE 8787
 CMD ["agentic-os-projects"]

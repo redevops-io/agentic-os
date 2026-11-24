@@ -22,6 +22,10 @@ services:
       # the supported activation: a registry file, mounted read-only; the app registers only what this file lists
       - AGENTIC_OS_PRODUCTS=/etc/products/products.yaml
       - PROJECTS_PROVIDER=registered
+      # Enforced profile: authority is checked against durable stores on the projects-state volume. A missing profile stops the container at start.
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-production}
+      - AGENTIC_OS_AUTHORITY_DB=/state/authority.db
+      - AGENTIC_OS_REPLAY_DB=/state/replay.db
       # what fronts this service (docs/SECURITY_MODEL.md, same declaration as deploy/projects-sidekick):
       # the port is published, so the bind inside the container is routable and every peer address is
       # enforced; BEHIND_PROXY=0 states that as shipped nothing forwards to it. The host-side publish stays
@@ -37,6 +41,7 @@ services:
       retries: 8
       start_period: 20s
     volumes:
+      - projects-state:/state
       - ./products.yaml:/etc/products/products.yaml:ro
       - ./secrets/edge-sentinel.service_token:/run/products/edge-sentinel.service_token:ro
       - ./secrets/redevops-qa.service_token:/run/products/redevops-qa.service_token:ro
@@ -82,6 +87,7 @@ services:
     networks: [sentinel]
 
 volumes:
+  projects-state:
   qa-data:
 
 networks:

@@ -34,4 +34,6 @@ ENV CR_SKY_LEDGER=/home/app/.sky-placement-ledger.json
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app && chown -R app:app /app
 USER 10001
 EXPOSE 8000
+# A shipped image is a packaged deployment: it refuses to start until AGENTIC_OS_PROFILE is set explicitly (agentic_os/mission/profile.py).
+ENV AGENTIC_OS_PACKAGED=1
 CMD ["uvicorn", "sidekick_server:app", "--host", "0.0.0.0", "--port", "8000"]

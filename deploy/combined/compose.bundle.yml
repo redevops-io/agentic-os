@@ -115,6 +115,10 @@ services:
     environment:
       OPERATOR_BASIC_AUTH: "${OPERATOR_BASIC_AUTH:?set in .env — bundle/bootstrap.sh generates one (user:password)}"
       AGENTIC_OS_PRODUCTS: /etc/products/products.yaml
+      # Enforced profile: authority is checked against durable stores on the projects-state volume. A missing profile stops the container at start.
+      AGENTIC_OS_PROFILE: "${AGENTIC_OS_PROFILE:-production}"
+      AGENTIC_OS_AUTHORITY_DB: /state/authority.db
+      AGENTIC_OS_REPLAY_DB: /state/replay.db
       PROJECTS_PROVIDER: registered
       AGENTIC_OS_BIND_HOST: "${AGENTIC_OS_BIND_HOST:-0.0.0.0}"
       AGENTIC_OS_BEHIND_PROXY: "${AGENTIC_OS_BEHIND_PROXY:-0}"
@@ -124,6 +128,8 @@ services:
       EDGE_SENTINEL_SERVICE_TOKEN: "${EDGE_SENTINEL_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
       QA_SERVICE_TOKEN: "${QA_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
       APPROVAL_SECRET: "${APPROVAL_SECRET:?set in .env — bundle/bootstrap.sh generates one}"
+    volumes:
+      - projects-state:/state
     configs:
       - source: products_yaml
         target: /etc/products/products.yaml
@@ -168,6 +174,7 @@ configs:
             approval_secret_env: APPROVAL_SECRET
 
 volumes:
+  projects-state:
   qa-data:
   edge-sentinel-data:
   crowdsec-data:

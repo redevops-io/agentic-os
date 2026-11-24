@@ -376,7 +376,11 @@ class SampleProjectionProvider:
                                         sample_cases=self.today_sample_cases)
 
     def today(self, pid: str, session: str = "") -> dict:
-        return self._today(pid, session).feed(self.priorities(pid), self.attention(pid))
+        feed = self._today(pid, session).feed(self.priorities(pid), self.attention(pid))
+        # What Today can do here, so the UI offers only that. Without a governed case source Today is read-only: capture and the item detail
+        # both answer 501, and a UI that was not told would show a dead Quick Capture box and request both on every load.
+        feed["supports"] = {"capture": bool(self.today_sample_cases), "detail": bool(self.today_sample_cases)}
+        return feed
 
     def today_item(self, pid: str, item_id: str, session: str = "", targets=None, identity_id=None) -> dict:
         from agentic_os.today import TodayError
