@@ -49,13 +49,12 @@ services:
       - "PERMISSIONS_KEY=${PERMISSIONS_KEY:?PERMISSIONS_KEY is required - create it once with make permissions-key (or agentic-os permissions key --env-file permissions.env) then run docker compose --env-file permissions.env up}"
     volumes:
       - permissions_data:/data/permissions
-    # no-new-privileges: always. seccomp/apparmor=unconfined are kept ONLY because of this host's limit: its default AppArmor/seccomp profile
+    # no-new-privileges: always. seccomp=unconfined is kept ONLY (apparmor=unconfined was dropped on 2026-11-24, when the host moved to Docker CE 29.10) because of this host's limit: its default AppArmor/seccomp profile
     # blocks socketpair(), which breaks asyncio's self-pipe (uvicorn will not start). On a host without that limit delete the two
     # unconfined lines and keep no-new-privileges (the container then runs under the engine's default profiles).
     security_opt:
       - no-new-privileges:true
       - seccomp=unconfined
-      - apparmor=unconfined
 
 volumes:
   permissions_data:
