@@ -141,8 +141,8 @@ Categories: `read-only-state` (reads state, writes nothing observable) / `writes
 | `social.vibex_generate` | social-autopilot | write | launches external process or network | apps/social-autopilot/app.py:621 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `social.vibex_trends` | social-autopilot | read | read-only-state | apps/social-autopilot/app.py:613 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `draft_reply` | support | read | read-only-state | apps/support/app.py:15 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `inbox_summary` | support | read | read-only-state | apps/support/app.py:470 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `list_conversations` | support | read | read-only-state | apps/support/app.py:469 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `inbox_summary` | support | read | read-only-state | apps/support/app.py:469 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `list_conversations` | support | read | read-only-state | apps/support/app.py:468 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `support.draft_reply` | support | write | launches external process or network | apps/support/operator.py:31 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `support.escalate` | support | write | launches external process or network | apps/support/operator.py:51 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `support.resolve` | support | write | launches external process or network | apps/support/operator.py:41 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
