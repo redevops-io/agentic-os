@@ -6,9 +6,14 @@
 * ``test``        - injected guards and deterministic clocks; durability is not required.
 
 Selected by ``AGENTIC_OS_PROFILE``. ``AGENTIC_OS_REQUIRE_AUTHORITY=1`` is kept as an alias for ``production``.
-When neither is set the process runs as ``development`` and says so once on the log: an unset profile is never a
-silent grant of authority, but it does not break an existing install that has no envelope database yet. Any other
-value is an error rather than a guess.
+Any other value is an error rather than a guess.
+
+When neither is set, what happens depends on how the code is running:
+
+* A **packaged deployment** (``AGENTIC_OS_PACKAGED=1``, which every shipped container image sets) refuses to start. Whoever deploys it has to
+  choose: ``production`` for anything that acts on real systems, or ``development`` as a stated choice for an evaluation. A missing setting
+  never turns authority enforcement off there.
+* A source checkout (a developer's shell, a test run) runs as ``development`` and says so once on the log.
 """
 from __future__ import annotations
 
@@ -18,6 +23,12 @@ import os
 PRODUCTION, DEVELOPMENT, TEST = "production", "development", "test"
 PROFILES = (PRODUCTION, DEVELOPMENT, TEST)
 ENV_PROFILE = "AGENTIC_OS_PROFILE"
+ENV_PACKAGED = "AGENTIC_OS_PACKAGED"
+
+
+def packaged() -> bool:
+    """A shipped image or bundle, as opposed to a source checkout. Set by the image, not by the person deploying it."""
+    return os.environ.get(ENV_PACKAGED, "").strip().lower() in ("1", "true", "yes", "on")
 _log = logging.getLogger("agentic_os.profile")
 _warned = False
 
@@ -35,6 +46,10 @@ def profile() -> str:
         return raw
     if os.environ.get("AGENTIC_OS_REQUIRE_AUTHORITY", "").strip().lower() in ("1", "true", "yes", "on"):
         return PRODUCTION
+    if packaged():
+        raise ProfileError(f"{ENV_PROFILE} is not set in a packaged deployment. Set {ENV_PROFILE}=production (with AGENTIC_OS_AUTHORITY_DB and "
+                           f"AGENTIC_OS_REPLAY_DB on durable storage) for anything that acts on real systems, or {ENV_PROFILE}=development to "
+                           "state that this is an evaluation where authority is not enforced. It is never assumed.")
     if not _warned:
         _warned = True
         _log.warning("%s is not set: running as 'development' - authority is NOT enforced. "

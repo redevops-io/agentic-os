@@ -28,7 +28,7 @@ EXPECTED = {
     # anonymous today: the module proxy (issue #528)
     ("GET", "/m/{name}"): PROXY, ("GET", "/m/{name}/raw"): PROXY, ("GET", "/m/{name}/api/{path:path}"): PROXY, ("POST", "/m/{name}/api/{path:path}"): PROXY,
     # the mission routers' gate
-    ("GET", "/inbox"): GATE, ("GET", "/missions"): GATE, ("POST", "/missions"): GATE, ("GET", "/missions/{mid}"): GATE, ("POST", "/missions/{mid}/approve"): GATE,
+    ("GET", "/inbox"): GATE, ("GET", "/templates"): GATE, ("GET", "/missions"): GATE, ("POST", "/missions"): GATE, ("GET", "/missions/{mid}"): GATE, ("POST", "/missions/{mid}/approve"): GATE,
     ("POST", "/missions/{mid}/compensation/{action}"): GATE, ("GET", "/missions/{mid}/events"): GATE, ("GET", "/missions/{mid}/explain"): GATE,
     ("GET", "/missions/{mid}/plans"): GATE, ("POST", "/missions/{mid}/reconcile"): GATE, ("POST", "/missions/{mid}/simulate"): GATE,
     ("GET", "/learning"): GATE_ADMIN,

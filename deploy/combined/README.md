@@ -29,6 +29,7 @@ link, which no compose file can express:
 ```sh
 git clone https://github.com/redevops-io/agentic-os.git && cd agentic-os/deploy/combined
 ./bundle-bootstrap.sh      # generates every credential into .env.bundle, pulls the bundle, wires and verifies it
+./bundle-smoke.sh          # checks it end to end, including a QA run approved through Projects
 ```
 
 redevops-qa and Edge Sentinel are the **same published images** as their own standalone installs

@@ -11,5 +11,7 @@ COPY deploy/assets ./deploy/assets
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && AGENTIC_OS_SKIP_UI_FETCH=1 pip install --no-cache-dir . \
  && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+# A shipped image is a packaged deployment: it refuses to start until AGENTIC_OS_PROFILE is set explicitly (agentic_os/mission/profile.py).
+ENV AGENTIC_OS_PACKAGED=1
 EXPOSE 8080
 CMD ["uvicorn", "agentic_os.control_plane:app", "--host", "0.0.0.0", "--port", "8080"]

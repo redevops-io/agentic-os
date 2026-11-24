@@ -15,7 +15,17 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.2; no version set)
+## Unreleased (after v0.4.3; no version set)
+
+## v0.4.3 (cockpit plan-bound approvals; explicit profile for packaged deployments; sidekick federation image)
+
+- **Breaking (shipped images):** `Dockerfile`, `Dockerfile.projects` and `deploy/sidekick-devops/Dockerfile` set `AGENTIC_OS_PACKAGED=1`, and a packaged deployment refuses to start while `AGENTIC_OS_PROFILE` is unset. Choose `production` (with `AGENTIC_OS_AUTHORITY_DB` and `AGENTIC_OS_REPLAY_DB` on durable storage) or state `development`. A source checkout keeps the logged development default. The combined install selects `production` with its stores on a `projects-state` volume.
+- **Mission cockpit:** approving a plan-applying step sends the digest of the plan the page showed, as the existing `plan_digest` approval edit (the inbox item carries it as `binding`). Before, a cockpit approval of `infra.provision` always failed the mission. `GET /templates` (gated) feeds the template menu, which had no deploy entry; the controls have accessible names; a failed mission shows the operator's error code and summary (`VerificationFailed` now records them under `operator`).
+- **Sidekick image (`deploy/sidekick-devops`):** the Dockerfile copies `federation.py`. With `SIDEKICK_MODULES` set the image used to crash at start (`ModuleNotFoundError`), so federating external operators never worked from the built image.
+- **Operators over HTTP:** `HTTPOperatorClient.invoke` raises for an error envelope (`{"detail": ...}` only) instead of returning it as the capability's result; a refused `/invoke` could end a mission as succeeded.
+- **Projects Today:** the feed states `supports: {capture, detail}`; with Projects UI `v0.2.1` a read-only deployment no longer shows Quick Capture or requests endpoints that answer 501.
+- **Combined install:** redevops-qa `0.6.4`; `deploy/combined/bundle-smoke.sh` (including a QA run approved through Projects) and the `bundle-install-e2e` workflow, which installs a published bundle on Linux amd64 and arm64.
+- Also since v0.4.2: `authorization-seam` runs on every pull request; enrichment metering, procurement catalog, synthetic research and Postiz draft capabilities (see the pull requests merged 2026-11-23).
 
 ## v0.4.2 (Projects/Sidekick product integration; edge-sentinel standalone UI and identity)
 

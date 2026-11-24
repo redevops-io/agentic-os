@@ -1289,9 +1289,12 @@ class MissionRuntime:
             self.evidence.record_verification(m.id, node.id, vr)
             self.learning.record_verification(node.capability, vr.decision == VerificationDecision.ACCEPT)
             if vr.decision != VerificationDecision.ACCEPT:
+                # The operator's own refusal (its error code and one-line summary, both short strings) is recorded with the failed verification,
+                # so a reader of the log or the cockpit sees WHY (`plan_digest_mismatch`), not only that the outcome check failed.
+                why = {k: str(result.get(k))[:300] for k in ("error", "summary") if isinstance(result, dict) and result.get(k)}
                 self.store.append("VerificationFailed", m.id,
                                   {"node_id": node.id, "capability": node.capability,
-                                   "decision": vr.decision.value, "checks": vr.checks})
+                                   "decision": vr.decision.value, "checks": vr.checks, **({"operator": why} if why else {})})
                 if vr.decision == VerificationDecision.REJECT:      # malformed / lost permission
                     self.learning.record_capability(node.capability, False)
                     self._observe_routing(node, False)
