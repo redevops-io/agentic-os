@@ -77,6 +77,10 @@ class StudyConfig:
     control_personas_per_cell: int = 4
     control_constructs: Tuple[str, ...] = ("purchase_intent", "trust")
     control_base_id: str = ""                    # defaults to the first variant
+    # Draws per persona x variant x construct, averaged per persona before any comparison. One draw at a sampling temperature above zero is
+    # one sample of a noisy answer: the identical-text control then differs from its own base by chance (measured 2026-11-24: +0.22 and
+    # -0.31 on a five-point scale with one draw each, on a server that ignores `seed`). More draws shrink that noise; they do not add personas.
+    replicates: int = 1
     n_boot: int = 1000
     sweep: bool = True
     model_id: str = ""
@@ -127,6 +131,8 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
             raise ValueError(f"unknown construct {c!r}")
     if not personas or not variants:
         raise ValueError("a study needs personas and variants")
+    if not 1 <= int(config.replicates) <= 10:
+        raise ValueError("replicates must be 1 to 10")
     if len({p.persona_id for p in personas}) != len(personas):
         raise ValueError("duplicate persona ids")
     if len({v.variant_id for v in variants}) != len(variants):
@@ -150,7 +156,8 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
             random.Random(f"{config.seed}|{tag}|{p.persona_id}").shuffle(order)       # order randomisation
             for v in order:
                 for c in constructs:
-                    jobs.append(Job(p, v, c, len(jobs), "elicitation", config.exposure))
+                    for k in range(config.replicates):
+                        jobs.append(Job(p, v, c, len(jobs), "elicitation", config.exposure, replicate=k))
 
     add(personas, variants, config.constructs, "main")
     if controls:
@@ -169,7 +176,7 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
         for p in personas:
             for v in variants:
                 dlr_jobs.append(Job(p, v, c, len(jobs) + len(dlr_jobs), "dlr", config.exposure))
-    n_flr = len(personas) * len(variants) * len(config.arm_constructs)
+    n_flr = len(personas) * len(variants) * len(config.arm_constructs) * config.replicates
 
     # ── budget: refused BEFORE any model call ────────────────────────────────────────────────────────────────
     el = Elicitor(transport, config.model_id, config.params, study_seed=config.seed, concurrency=config.concurrency,
@@ -251,11 +258,15 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
     # ── per-persona values ───────────────────────────────────────────────────────────────────────────────────
     rid_to_resp = {r.response_id: r for r in elic}
     val: Dict[Tuple[str, str, str], Dict[str, float]] = defaultdict(dict)       # (variant, construct, arm) -> persona -> value
+    draws: Dict[Tuple[str, str, str], Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
     for rid, m in primary_mean.items():
         r = rid_to_resp[rid]
         for arm in arm_mean:
             if rid in arm_mean[arm]:
-                val[(r.variant_id, r.construct, arm)][r.persona_id] = arm_mean[arm][rid]
+                draws[(r.variant_id, r.construct, arm)][r.persona_id].append(arm_mean[arm][rid])
+    for key, by_persona in draws.items():                     # a persona's value is the mean of its included draws (one, by default)
+        for pid, xs in by_persona.items():
+            val[key][pid] = stats.mean(xs)
     for r in responses:
         if r.arm in ("dlr", "flr") and r.status == "ok":
             n = parse_rating(r.text)
@@ -386,12 +397,18 @@ def run_study(config: StudyConfig, *, personas: Sequence[PersonaSpec], variants:
     if controls:
         cvals: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(dict)
         unseen_ids = {p.persona_id for p in unseen_personas}
+        cdraws: Dict[Tuple[str, str], Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+        udraws: Dict[str, List[float]] = defaultdict(list)
         for r in inc:
             if r.persona_id not in unseen_ids:
-                cvals[(r.variant_id, r.construct)][r.persona_id] = primary_mean[r.response_id]
+                cdraws[(r.variant_id, r.construct)][r.persona_id].append(primary_mean[r.response_id])
+            elif r.variant_id == base_id:
+                udraws[r.persona_id].append(primary_mean[r.response_id])
+        for key, by_persona in cdraws.items():
+            for pid, xs in by_persona.items():
+                cvals[key][pid] = stats.mean(xs)
         # only personas that actually have control responses count as paired
-        unseen_vals = {r.persona_id: primary_mean[r.response_id] for r in inc
-                       if r.persona_id in {p.persona_id for p in unseen_personas} and r.variant_id == base_id}
+        unseen_vals = {pid: stats.mean(xs) for pid, xs in udraws.items()}
         ctrl_records = evaluate_controls(cvals, base_id=base_id, false_claim_rows=false_rows,
                                          unseen_values=unseen_vals or None, seed=config.seed, n_boot=config.n_boot)
 

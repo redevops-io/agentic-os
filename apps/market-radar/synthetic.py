@@ -26,6 +26,19 @@ from agentic_os.market import synthetic_research as sr
 
 AUDIENCES = {"sme": ("sme_niches", "segment"), "enterprise": ("enterprise_committee", "cell")}
 MAX_VARIANTS, MAX_PER_CELL, MAX_SEGMENTS = 4, 8, 3
+# Draws per respondent, text and question. One draw is one sample of a noisy answer; three is the default because with one the
+# identical-text control failed on purchase intent in both studies run on 2026-11-23/24 (see docs/SYNTHETIC_RESEARCH.md, "Reliability").
+DEFAULT_REPLICATES, MAX_REPLICATES = 3, 5
+
+
+def control_base(variants: List[Any]) -> str:
+    """The variant the controls are compared with: the one with the most text (ties: the earliest).
+
+    Four controls must score LOWER than their base (an empty offer, a vague one, a contradictory one, hype). Against a base that says almost
+    nothing they have no room to: on 2026-11-24 a two-sentence card scored 2.42 against 2.07 for "Lorem ipsum", the vague offer missed by
+    0.02, and the same controls passed by a full point against a base with a real description. The variant comparison itself is unchanged
+    (differences are still reported against the FIRST variant, the caller's current message)."""
+    return max(variants, key=lambda v: len((v.headline or "") + (v.body or ""))).variant_id
 
 
 def _refused(error: str, **extra: Any) -> dict:
@@ -75,6 +88,12 @@ def synthetic_study(body: dict, *, transport: Any = None, embedder: Any = None, 
         return _refused("per_cell and seed must be whole numbers")
     if not 1 <= per_cell <= MAX_PER_CELL:
         return _refused(f"per_cell must be 1 to {MAX_PER_CELL}")
+    try:
+        replicates = int(body.get("replicates", DEFAULT_REPLICATES))
+    except (TypeError, ValueError):
+        return _refused("replicates must be a whole number")
+    if not 1 <= replicates <= MAX_REPLICATES:
+        return _refused(f"replicates must be 1 to {MAX_REPLICATES}")
     variants: List[Any] = []
     for i, v in enumerate(raw):
         if not isinstance(v, dict) or not str(v.get("headline") or v.get("body") or "").strip():
@@ -107,16 +126,20 @@ def synthetic_study(body: dict, *, transport: Any = None, embedder: Any = None, 
         personas = P.sample_personas(frame, per_cell, seed, segments=segments, level=level, **kw)
         config = SV.StudyConfig(study_id=str(body.get("study_id") or f"radar-{seed}"), kind=audience, seed=seed, model_id=model_id or "unnamed",
                                 constructs=("purchase_intent", "trust"), n_boot=400, control_personas_per_cell=max(4, per_cell),
+                                replicates=replicates, control_base_id=control_base(variants),
                                 params=E.GenerationParams(max_tokens=160),
-                                budget=E.StudyBudget(max_personas=MAX_PER_CELL * MAX_SEGMENTS * 8, max_variants=12, max_calls=2500,
-                                                     max_total_tokens=1_500_000, max_wall_seconds=1800.0),
+                                budget=E.StudyBudget(max_personas=MAX_PER_CELL * MAX_SEGMENTS * 8, max_variants=12, max_calls=2500 * replicates,
+                                                     max_total_tokens=1_500_000 * replicates, max_wall_seconds=1800.0 * replicates),
                                 frame_hashes={frame_name: frame.content_hash})
         result = SV.run_study(config, personas=personas, variants=variants, snapshots=[], transport=transport, embedder=embedder)
     except SV.SyntheticResearchDisabled as e:
         return {"status": "disabled", "action": "synthetic_study", "synthetic_study_run": False, "error": str(e)}
     except (ValueError, RuntimeError, OSError) as e:              # budget, transport or embedder refusals, bad configuration,
         return _refused(f"{type(e).__name__}: {e}"[:300])        # or a model/embedding endpoint that did not answer
-    return summarise(result)
+    out = summarise(result)
+    out["study"]["replicates"] = replicates
+    out["study"]["control_base"] = config.control_base_id
+    return out
 
 
 def summarise(result: Any) -> dict:
@@ -160,7 +183,12 @@ def summarise(result: Any) -> dict:
             "withheld_constructs": sorted(set(unusable) | ({c["construct"] for c in comparisons} if too_many_excluded else set())),
             "inconclusive_reasons": reasons,
             "hypotheses": hypotheses, "comparisons": comparisons,
-            "controls": {"run": len(controls), "passed": len(controls) - len(failed), "failed": failed},
+            "controls": {"run": len(controls), "passed": len(controls) - len(failed), "failed": failed,
+                         # every control with what was measured, so a failure can be read without running the study again
+                         "detail": [{"control": c["control"], "construct": c["construct"], "passed": c.get("passed"),
+                                     "expectation": c.get("expectation"),
+                                     **{k: (round(v, 3) if isinstance(v, float) else [round(x, 3) for x in v] if isinstance(v, list) else v)
+                                        for k, v in (c.get("observed") or {}).items()}} for c in controls]},
             "answers": {"calls": ab.get("elicitation_calls"), "included": ab.get("included"), "excluded_by_status": ab.get("excluded_by_status")},
             "study": {"study_id": m.study_id, "personas": m.persona_count, "seed": m.seed, "embedder": f"{m.embedder_name}@{m.embedder_revision}",
                       "models": C.to_plain(m.models), "anchor_pack_ids": dict(m.anchor_pack_ids), "truncated": m.truncated},
