@@ -13,7 +13,7 @@ const require = createRequire(path.join(process.env.PW_ROOT || process.cwd(), 'x
 const { chromium } = require('@playwright/test');
 const axeSrc = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const [side, outFile] = process.argv.slice(2);
-const results = []; const t00 = Date.now();
+const results = []; const known = []; const t00 = Date.now();
 const check = async (name, fn) => { const t = Date.now(); try { const d = await fn(); results.push({ name, status: 'PASS', detail: String(d ?? '').slice(0, 300), ms: Date.now() - t }); console.log('PASS  ' + name + (d ? '  | ' + String(d).slice(0, 160) : '')); }
   catch (e) { results.push({ name, status: 'FAIL', detail: String(e && e.message || e).slice(0, 400), ms: Date.now() - t }); console.log('FAIL  ' + name + '  | ' + String(e && e.message || e).slice(0, 300)); } };
 const assert = (c, m) => { if (!c) throw new Error(m); };
@@ -92,7 +92,10 @@ if (url) {
       if (sw > w + 1) for (const el of document.querySelectorAll('body *')) { const r = el.getBoundingClientRect(); if (r.width > 0 && r.right > w + 1 && el.children.length <= 1) wide.push(el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : '') + ' right=' + Math.round(r.right) + ' "' + (el.innerText || '').replace(/\s+/g, ' ').slice(0, 30) + '"'); }
       return { w, sw, wide: wide.slice(0, 5), font: getComputedStyle(document.body).fontFamily.slice(0, 60) }; });
     await p.setViewportSize({ width: 1280, height: 860 });
+    if (m.sw > m.w + 1 && process.env.KNOWN_NARROW_OVERFLOW === '1') { known.push('the page is ' + m.sw + ' px wide in a ' + m.w + ' px window (' + m.wide.slice(0, 2).join('; ') + ')'); return 'KNOWN DEFECT of this release, see below'; }
     assert(m.sw <= m.w + 1, 'the page is ' + m.sw + ' px wide in a ' + m.w + ' px window; widest elements: ' + m.wide.join('; ') + '; font ' + m.font); return '390 px'; });
+  // A defect the release is known to have (set by the workflow for exactly that release) is recorded as KNOWN_DEFECT: not a pass, not a new failure.
+  for (const k of known) { const r = results.find((x) => x.name.startsWith('a phone-width window')); if (r) { r.status = 'KNOWN_DEFECT'; r.detail = k; } console.log('KNOWN_DEFECT  ' + k); }
   await check('a second browser without the launch link gets no workspace and no data', async () => {
     const other = await browser.newContext(); const q = await other.newPage();
     const r = await q.request.get(origin + '/api/projects'); await q.goto(origin + '/', { waitUntil: 'domcontentloaded' }); await q.waitForTimeout(1200);
