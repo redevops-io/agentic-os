@@ -86,7 +86,9 @@ def main(argv: "List[str] | None" = None) -> int:
         print("DASHBOARDS_SERVICE_TOKEN is not set", file=sys.stderr)
         return 2
     req = urllib.request.Request(a.url.rstrip("/") + "/api/dashboards/qa/results", data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "X-Service-Token": token})
+                                 headers={"Content-Type": "application/json", "X-Service-Token": token,
+                                          # a named client: some edges refuse the interpreter's default identity outright
+                                          "User-Agent": "agentic-os-dashboards-reporter/1"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:      # noqa: S310  (the operator's own Projects URL)
             print(json.dumps({**json.loads(r.read() or b"{}"), "counts": counts}))
