@@ -88,7 +88,11 @@ if (url) {
     assert(seen.length >= 4, 'only ' + seen.join(',') + ' found'); return seen.join(', '); });
   await check('a phone-width window does not scroll sideways', async () => {
     await p.setViewportSize({ width: 390, height: 800 }); await p.waitForTimeout(500);
-    const ok = await p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1); await p.setViewportSize({ width: 1280, height: 860 }); assert(ok, 'the page is wider than the window at 390 px'); return '390 px'; });
+    const m = await p.evaluate(() => { const w = window.innerWidth, sw = document.documentElement.scrollWidth; const wide = [];
+      if (sw > w + 1) for (const el of document.querySelectorAll('body *')) { const r = el.getBoundingClientRect(); if (r.width > 0 && r.right > w + 1 && el.children.length <= 1) wide.push(el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : '') + ' right=' + Math.round(r.right) + ' "' + (el.innerText || '').replace(/\s+/g, ' ').slice(0, 30) + '"'); }
+      return { w, sw, wide: wide.slice(0, 5), font: getComputedStyle(document.body).fontFamily.slice(0, 60) }; });
+    await p.setViewportSize({ width: 1280, height: 860 });
+    assert(m.sw <= m.w + 1, 'the page is ' + m.sw + ' px wide in a ' + m.w + ' px window; widest elements: ' + m.wide.join('; ') + '; font ' + m.font); return '390 px'; });
   await check('a second browser without the launch link gets no workspace and no data', async () => {
     const other = await browser.newContext(); const q = await other.newPage();
     const r = await q.request.get(origin + '/api/projects'); await q.goto(origin + '/', { waitUntil: 'domcontentloaded' }); await q.waitForTimeout(1200);

@@ -25,7 +25,7 @@ umask 077
 [ -f .env.bundle ] || cp .env.bundle.example .env.bundle
 
 BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:$(get BUNDLE_TAG || true)"; BUNDLE_REF="${BUNDLE_REF%:}"
-[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.6"
+[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.7"
 COMPOSE="docker compose -f oci://${BUNDLE_REF} --project-directory . --env-file .env.bundle"
 PPORT="$(get PROJECTS_PORT)"; PPORT="${PPORT:-8787}"
 QPORT="$(get QA_PORT)"; QPORT="${QPORT:-8080}"
