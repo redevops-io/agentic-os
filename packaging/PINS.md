@@ -209,6 +209,8 @@ artifact (same sha256 each); only the image member is gone. `agentic_os/projects
 ## 2026-11-19: Projects UI re-pinned to a published public commit (pins-04, pins-10)
 The local redevops-projects clone that held the `ea9e53e5` source chain (and every ancestor back through `9a1788b1`/`5751e9e5`/`312a811a`/`2f24719e`/`ee958a01`/`2fdef7f5`) was lost in the 2026-11-07 scratchpad wipe; an exhaustive search of this
 machine (every `.git` directory, `git fsck --unreachable --dangling`, every reflog) found no surviving copy, so that work cannot be republished or rebuilt from source. Per the owner's 2026-11-19 decision, the pin now builds instead from
+**Re-pinned 2026-11-24** to `e6032e8ea31ce9f0024c4b77de61722da670be29` (artifact `projects-ui-root-e6032e8e.tgz`, sha256 `af481612d94a5879d6a87abba29c1a9dda61911a47695110723dcef4bd93a7d1`): PRs #28 and #29 on top of the pin described next, built once with the same recipe. The text below describes the 2026-11-19 pin.
+
 `redevops-io/redevops-projects`'s own public `main` tip, commit `2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c` (two commits past the v0.2.0 base this repository had built on): `projects-ui-root-2bbb9811.tgz` (sha256
 `55711fbd9c68dd97988d2fe1f6e557ae2d1abbab917dbc3c7380dbb2f27f86ab`), reproduced byte-identical across three clean builds. `packaging/projects_ui.lock.json`'s `source_commit_published` is now **true**: the pinned source is a real, public
 commit, executing pins-04's already-DECIDED option (a) ("publish the commit") for this component. This resolves the UI-source portion of pins-04 and pins-10 by fact, not by a new decision; D-LIC-12 (which AGPL section 6 option to use for the

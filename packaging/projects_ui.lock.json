@@ -1,13 +1,13 @@
 {
- "_comment": "The pinned Projects UI artifact: url + sha256 + source commit. RE-PINNED 2026-11-19 (owner decision): the previous pin's source commit (ea9e53e56b...24fa, and its whole ancestor chain back through 9a1788b1, 5751e9e5, 312a811a, 2f24719e, ee958a01, 2fdef7f5) was a LOCAL, UNPUBLISHED commit of a local redevops-projects clone; that clone was lost in the 2026-11-07 scratchpad wipe and no longer exists anywhere (checked: no surviving local clone, no dangling git object by that sha in any repository on this machine, no remote branch/tag). Only the already-built, minified dist output of that lost source survives, in the `previous_pin` chain below, as history. This build is therefore pinned instead to the current public tip of github.com/redevops-io/redevops-projects's `main` branch (source_commit, below), which is itself two commits past the v0.2.0 release (base_commit) this repository had previously built on. Because source_commit is a real commit on the public repository's default branch today, source_commit_published is TRUE: decisions pins-04 and pins-10 (packaging/DECISIONS-REQUIRED.md, packaging/PINS.md) are resolved by this fact alone. D-LIC-12 (which AGPL section 6 option to use for the Corresponding Source) stays OPEN and is NOT decided by this re-pin -- that remains the owner's/counsel's choice among options (a)-(d); this re-pin only makes options (a) and (c) actually available, where before only a repository pointer to unpublished work could be offered. Known regression: this re-pin DROPS every feature that only existed in the lost local commits -- the accessibility series (UIA-01..12), the mission drill-down views, the data-source-driven 'Partly sample' chip, and the fixed-wording connect/propose/remove-source flows. None of that is in this build; it ships only what is on the public repository today (the Today-first views of v0.2.0 plus PR #24 routing/restore-last-place, #25 audit-findings fixes, #26 Snooze-on-live-signals). Redoing and this time actually pushing that lost work is tracked separately, not by this lock file. scripts/fetch_projects_ui.py verifies the sha256 before anything is extracted, whichever source it reads. `previous_pin` is the artifact this one replaces (the previous, now-unrecoverable-source local build chain), which stays in the repository: going back is a lock edit.",
+ "_comment": "RE-PINNED 2026-11-24 to redevops-projects main e6032e8e (PRs #28 and #29 on top of 2bbb9811: Today honours a read-only deployment; every flexible grid track can shrink, which fixes the page being wider than a 390 px window on Linux). The pinned Projects UI artifact: url + sha256 + source commit. RE-PINNED 2026-11-19 (owner decision): the previous pin's source commit (ea9e53e56b...24fa, and its whole ancestor chain back through 9a1788b1, 5751e9e5, 312a811a, 2f24719e, ee958a01, 2fdef7f5) was a LOCAL, UNPUBLISHED commit of a local redevops-projects clone; that clone was lost in the 2026-11-07 scratchpad wipe and no longer exists anywhere (checked: no surviving local clone, no dangling git object by that sha in any repository on this machine, no remote branch/tag). Only the already-built, minified dist output of that lost source survives, in the `previous_pin` chain below, as history. This build is therefore pinned instead to the current public tip of github.com/redevops-io/redevops-projects's `main` branch (source_commit, below), which is itself two commits past the v0.2.0 release (base_commit) this repository had previously built on. Because source_commit is a real commit on the public repository's default branch today, source_commit_published is TRUE: decisions pins-04 and pins-10 (packaging/DECISIONS-REQUIRED.md, packaging/PINS.md) are resolved by this fact alone. D-LIC-12 (which AGPL section 6 option to use for the Corresponding Source) stays OPEN and is NOT decided by this re-pin -- that remains the owner's/counsel's choice among options (a)-(d); this re-pin only makes options (a) and (c) actually available, where before only a repository pointer to unpublished work could be offered. Known regression: this re-pin DROPS every feature that only existed in the lost local commits -- the accessibility series (UIA-01..12), the mission drill-down views, the data-source-driven 'Partly sample' chip, and the fixed-wording connect/propose/remove-source flows. None of that is in this build; it ships only what is on the public repository today (the Today-first views of v0.2.0 plus PR #24 routing/restore-last-place, #25 audit-findings fixes, #26 Snooze-on-live-signals). Redoing and this time actually pushing that lost work is tracked separately, not by this lock file. scripts/fetch_projects_ui.py verifies the sha256 before anything is extracted, whichever source it reads. `previous_pin` is the artifact this one replaces (the previous, now-unrecoverable-source local build chain), which stays in the repository: going back is a lock edit.",
  "repo": "redevops-io/redevops-projects",
- "version": "main+2bbb9811",
+ "version": "main+e6032e8e",
  "asset": "projects-ui-root.tgz",
- "sha256": "55711fbd9c68dd97988d2fe1f6e557ae2d1abbab917dbc3c7380dbb2f27f86ab",
+ "sha256": "af481612d94a5879d6a87abba29c1a9dda61911a47695110723dcef4bd93a7d1",
  "url": "",
- "local_path": "packaging/ui-artifacts/projects-ui-root-2bbb9811.tgz",
- "source_commit": "2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c",
- "source_tree": "5667b187be1d5221d63f50942cbf4b9d5addf330",
+ "local_path": "packaging/ui-artifacts/projects-ui-root-e6032e8e.tgz",
+ "source_commit": "e6032e8ea31ce9f0024c4b77de61722da670be29",
+ "source_tree": "974c0c40eb15fbaae8abdb17154b726e8358b7bc",
  "source_commit_published": true,
  "base_commit": "84f17fceddb84d1af909a5919b5efbb2956b2b22",
  "base_commit_public": true,
@@ -17,9 +17,9 @@
   "note": "v0.2.0 is an ancestor of source_commit on the public repository's own main branch (PRs #24, #25, #26 are the commits between them); nothing is merged in from a lost local branch anymore, source_commit IS the public history."
  },
  "bundle_files": {
-  "index.html": "1bfab1341b116f0dad6768cca4f0f6fcafacab7e4fdbd9327331d796ba1f004c",
-  "assets/index-BLDZ6xHu.js": "135ce86d96051caecc3569b939b5095a0b46099d0c5e9a9dae3a70597bea3afc",
-  "assets/index-CQkwzXZc.css": "16f2605d92a4b1716a4a8a89a78be8a4a3b0299a017bd824e9391e478a8e268d"
+  "index.html": "c54b3c5c86aed3482748eb5a8cc076f2b0e844f943d3c12166996ed9f6420409",
+  "assets/index-C1cDSXvA.js": "f8c576104ace9cbd9e976e5c68fcd18ae8b52278d51ad7c2bdf9ea70d9d70a35",
+  "assets/index-CFlj1zr2.css": "99573e01c3a70cf21533ac6b4b92bffba121da659b413fbb1a96f294c06d149d"
  },
  "recipe": {
   "build": [
@@ -126,6 +126,18 @@
      }
     }
    }
+  }
+ },
+ "pin_2bbb9811": {
+  "version": "main+2bbb9811",
+  "sha256": "55711fbd9c68dd97988d2fe1f6e557ae2d1abbab917dbc3c7380dbb2f27f86ab",
+  "local_path": "packaging/ui-artifacts/projects-ui-root-2bbb9811.tgz",
+  "source_commit": "2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c",
+  "source_tree": "5667b187be1d5221d63f50942cbf4b9d5addf330",
+  "bundle_files": {
+   "index.html": "1bfab1341b116f0dad6768cca4f0f6fcafacab7e4fdbd9327331d796ba1f004c",
+   "assets/index-BLDZ6xHu.js": "135ce86d96051caecc3569b939b5095a0b46099d0c5e9a9dae3a70597bea3afc",
+   "assets/index-CQkwzXZc.css": "16f2605d92a4b1716a4a8a89a78be8a4a3b0299a017bd824e9391e478a8e268d"
   }
  }
 }
