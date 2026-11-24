@@ -18,7 +18,7 @@ what a check in this repository shows. Evidence levels: OBSERVED / STATIC / INFE
 | uv | 0.12.16 (the frozen run used 0.12.16) | `toolchain.env`, CI `setup-uv` | CI; recorded in the build manifest |
 | Node | none: no Node step exists (UI is vendored, launcher page is static) | `toolchain.env` | - |
 | GitHub Actions | commit SHAs | `.github/workflows/native-packaging.yml` | `tests/test_packaging_pins.py` |
-| Runner images | `macos-14`, `windows-2022`, `ubuntu-24.04` (by NAME) | workflow | the image VERSION still floats: recorded in `build-manifest.json` (`runner.env.ImageVersion`) |
+| Runner images | `macos-15` (`macos-14` was retired on 2026-11-02), `windows-2022`, `ubuntu-24.04`, `ubuntu-24.04-arm` (by NAME) | workflow | the image VERSION still floats: recorded in `build-manifest.json` (`runner.env.ImageVersion`) |
 
 `verify-pins.py` checks pyproject <-> git-pins <-> requirements.in <-> locks <-> toolchain.env <-> the frozen CI wheel list <-> Cargo.lock.
 `tests/test_packaging_pins.py` (offline) asserts the same and that the scripts and workflow use the pins.

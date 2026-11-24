@@ -5,7 +5,7 @@
 #
 # R0-prime pins (packaging/PINS.md): every build input is an exact version, hash-locked or SHA-pinned:
 #   * actions pinned by commit SHA (the tag they were resolved from is in the comment)
-#   * runner images by NAME (macos-14 / windows-2022 / ubuntu-24.04); the image VERSION still floats and
+#   * runner images by NAME (macos-15 / windows-2022 / ubuntu-24.04 and ubuntu-24.04-arm); the image VERSION still floats and
 #     is recorded in packaging/dist/build-manifest.json (ImageVersion)
 #   * CPython 3.12.10, Rust 1.98.1, tauri-cli 2.11.4, uv 0.12.16 (packaging/toolchain.env)
 #   * Python wheels `--require-hashes` (packaging/locks), Rust crates `--locked` (Cargo.lock)
@@ -30,7 +30,7 @@ jobs:
           - os: ubuntu-24.04     # → .deb + AppImage, x86_64 (amd64)
           - os: ubuntu-24.04-arm # → .deb + AppImage, aarch64 (arm64): the architecture v0.6.1 shipped; both are built from this one recipe
           - os: windows-2022     # → .msi / .nsis      (unsigned until P2; the frozen v0.3.2 run used windows-latest = windows-2025)
-          - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
+          - os: macos-15         # → .dmg (arm64), unsigned here (macos-14 was retired on 2026-11-02, runner-images#13518)
           # macos-13 (Intel/x86_64) dropped — GitHub is retiring the Intel runners and jobs queue
           # indefinitely. Ship arm64 macOS for now; add Intel via a universal2 build later.
     runs-on: ${{ matrix.os }}

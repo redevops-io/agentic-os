@@ -50,7 +50,7 @@ def test_toolchain_versions_are_exact():
     assert env["PYINSTALLER_VERSION"] == "6.22.3"
     assert env["TAURI_CLI_VERSION"] == "2.11.4"
     assert env["RUST_VERSION"] == "1.98.1"
-    assert env["RUNNER_IMAGE_MACOS"] == "macos-14" and env["RUNNER_IMAGE_WINDOWS"] == "windows-2022"
+    assert env["RUNNER_IMAGE_MACOS"] == "macos-15" and env["RUNNER_IMAGE_WINDOWS"] == "windows-2022"
     for k, v in env.items():
         assert not re.search(r"latest|stable|\^|~|\*|>=", v), f"{k}={v} is not an exact pin"
     assert 'channel = "1.98.1"' in (ROOT / "deploy/launcher/rust-toolchain.toml").read_text()
@@ -196,7 +196,7 @@ def test_workflow_is_pinned_and_adds_no_publishing_or_signing():
         m = re.search(r"uses:\s*(\S+)@(\S+)", l)
         if m:
             assert re.fullmatch(r"[0-9a-f]{40}", m.group(2)), f"action not pinned by SHA: {l.strip()}"
-    assert "2.11.4" in body and "1.98.1" in body and "3.12.10" in body and "macos-14" in body and "windows-2022" in body
+    assert "2.11.4" in body and "1.98.1" in body and "3.12.10" in body and "macos-15" in body and "windows-2022" in body
     assert "secrets." not in body                       # nothing signs
     assert re.search(r'tags:\s*\["v\*"\]', body)         # trigger unchanged
     assert "pull_request" not in body
@@ -294,7 +294,8 @@ def test_workflow_parses_and_runs_the_pinned_steps_in_order():
              ("verify-pins.py", "build-wheelhouse.sh", "build-sidecar.sh", "build-notices.sh", "stage-sidecar.sh", "tauri-cli", "build-launcher.sh", "build-sbom.sh")
              if k != "tauri-cli"]
     assert order == sorted(order), names
-    assert wf["jobs"]["bundle"]["strategy"]["matrix"]["include"][2]["os"] == "macos-14"
+    # one recipe, every target: both Linux architectures, Windows, macOS (macos-14 was retired on 2026-11-02)
+    assert [row["os"] for row in wf["jobs"]["bundle"]["strategy"]["matrix"]["include"]] == ["ubuntu-24.04", "ubuntu-24.04-arm", "windows-2022", "macos-15"]
 
 
 def test_compare_builds_reports_a_difference_and_its_class(tmp_path):
