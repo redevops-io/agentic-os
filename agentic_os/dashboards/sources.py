@@ -881,10 +881,11 @@ class SourceCache:
             list(pool.map(self.get, todo))
 
     def invalidate(self) -> None:
-        """Forget what was read, except a rate-limited source that answered: a forced refresh must not spend its quota."""
+        """Forget what was read, except from a rate-limited source: a forced refresh must not spend its quota."""
         now = time.monotonic()
         with self._lock:
-            self._hit = {sid: h for sid, h in self._hit.items() if sid in SOURCE_TTL_S and h[1].status.usable and now - h[0] < SOURCE_TTL_S[sid]}
+            # kept whether it answered or refused: asking a rate-limited API again straight away only extends the refusal
+            self._hit = {sid: h for sid, h in self._hit.items() if sid in SOURCE_TTL_S and now - h[0] < SOURCE_TTL_S[sid]}
 
 
 __all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S"]

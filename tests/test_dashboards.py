@@ -488,7 +488,10 @@ def test_finance_support_procurement_and_marketing_compute_from_application_reco
     svc.cache._hit.clear()
     # one of two sources down: its metrics are unknown, the other's stay
     svc.ctx.clients["listmonk"]["get"] = _http_stub({})
+    calls = []
+    svc.ctx.clients["postiz"]["get"] = lambda *a, **k: (calls.append(1), newer(*a, **k))[1]
     half = c.get("/api/dashboards/marketing", params={"fresh": "true"}).json()
+    assert calls == [], "a forced refresh must not spend a rate-limited source's quota"
     assert _metric(half, "emails")["value"] is None and _metric(half, "published")["value"] == 1
     assert {s["id"]: s["state"] for s in half["sources"]} == {"postiz": "ok", "listmonk": "unavailable"}
 
