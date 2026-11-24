@@ -56,7 +56,9 @@ DASHBOARDS_SERVICE_TOKEN=… python -m agentic_os.dashboards.report_junit result
 ```
 
 The token is a service identity in `AGENTIC_OS_SERVICE_TOKENS` holding `dashboards.ingest_qa`; a token that does not
-verify is refused and never falls back to another identity. `--only` / `--exclude` (regular expressions on the test id)
+verify is refused and never falls back to another identity. When the deployment is behind the sign-in gate
+(`PROJECTS_OPERATOR_GATE=1`), also set `DASHBOARDS_AUTHORIZATION` to a credential the gate accepts (`Bearer …` of a
+tenant, or the operator's `Basic …`): the gate lets the request in, the service token still decides whether it may report. `--only` / `--exclude` (regular expressions on the test id)
 report one file once per platform, for a parametrised browser matrix. A skipped test is `unsupported` when its message
 says it cannot run or does not apply there, otherwise `blocked`.
 

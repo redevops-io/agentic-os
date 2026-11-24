@@ -85,10 +85,16 @@ def main(argv: "List[str] | None" = None) -> int:
     if not token:
         print("DASHBOARDS_SERVICE_TOKEN is not set", file=sys.stderr)
         return 2
-    req = urllib.request.Request(a.url.rstrip("/") + "/api/dashboards/qa/results", data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "X-Service-Token": token,
-                                          # a named client: some edges refuse the interpreter's default identity outright
-                                          "User-Agent": "agentic-os-dashboards-reporter/1"})
+    headers = {"Content-Type": "application/json", "X-Service-Token": token,
+               # a named client: some edges refuse the interpreter's default identity outright
+               "User-Agent": "agentic-os-dashboards-reporter/1"}
+    # A deployment behind the sign-in gate (PROJECTS_OPERATOR_GATE) answers 401 to anything without an Authorization it knows, before
+    # the service token is even looked at. DASHBOARDS_AUTHORIZATION is that header's whole value ("Bearer ..." or "Basic ..."); the
+    # service token still decides whether the run may be reported.
+    gate = os.environ.get("DASHBOARDS_AUTHORIZATION", "").strip()
+    if gate:
+        headers["Authorization"] = gate
+    req = urllib.request.Request(a.url.rstrip("/") + "/api/dashboards/qa/results", data=json.dumps(body).encode(), method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:      # noqa: S310  (the operator's own Projects URL)
             print(json.dumps({**json.loads(r.read() or b"{}"), "counts": counts}))
