@@ -1,0 +1,54 @@
+# Installs the PUBLISHED single-pull bundle (ghcr.io/redevops-io/redevops-ts:<tag>) on clean Linux hosts of both architectures with the
+# documented script, then checks it end to end: bundle-bootstrap.sh, then bundle-smoke.sh (products wired into Projects, a QA run that needs
+# approval approved through Projects, wrong and replayed approvals refused, Sentinel's boundary closed to forged tokens).
+# Manual: run it for a bundle tag after publishing it with oci-redevops-ts. Nothing is built here; this is the artifact a user pulls.
+name: bundle-install-e2e
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_tag:
+        description: "Published bundle tag to install, for example 0.1.4"
+        required: true
+permissions:
+  contents: read
+jobs:
+  install:
+    name: install (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: linux-amd64, runner: ubuntu-24.04, compose: x86_64}
+          - {arch: linux-arm64, runner: ubuntu-24.04-arm, compose: aarch64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      BUNDLE_TAG: ${{ inputs.bundle_tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Compose CLI plugin v5.7.0 (the version the bundle was published with)
+        run: |
+          mkdir -p ~/.docker/cli-plugins
+          curl -fsSL -o ~/.docker/cli-plugins/docker-compose "https://github.com/docker/compose/releases/download/v5.7.0/docker-compose-linux-${{ matrix.compose }}"
+          chmod +x ~/.docker/cli-plugins/docker-compose
+          docker compose version
+          uname -m
+      - name: Install the bundle with the documented script
+        working-directory: deploy/combined
+        run: |
+          case "$BUNDLE_TAG" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "bundle_tag must look like 0.1.4"; exit 1;; esac
+          cp .env.bundle.example .env.bundle && chmod 600 .env.bundle
+          sed -i "s/^BUNDLE_TAG=.*/BUNDLE_TAG=${BUNDLE_TAG}/; s/^PROJECTS_IMAGE_TAG=.*/PROJECTS_IMAGE_TAG=bundle-${BUNDLE_TAG}/" .env.bundle
+          ./bundle-bootstrap.sh
+      - name: End-to-end smoke
+        working-directory: deploy/combined
+        run: ./bundle-smoke.sh
+      - name: On failure, keep the evidence (no secret values)
+        if: failure()
+        working-directory: deploy/combined
+        run: |
+          C="docker compose -f oci://ghcr.io/redevops-io/redevops-ts:${BUNDLE_TAG} --project-directory . --env-file .env.bundle"
+          $C ps -a || true
+          for s in projects redevops-qa edge-sentinel crowdsec; do echo "== $s"; $C logs --tail 60 "$s" 2>&1 | sed -E 's/[0-9a-f]{40,}/<redacted>/g' || true; done
