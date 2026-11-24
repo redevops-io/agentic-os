@@ -17,7 +17,10 @@ RUN pip install --no-cache-dir "fastapi==0.115.6" "uvicorn==0.32.1" "pydantic>=2
 COPY agentic_os /app/agentic_os
 COPY apps/infra /app/apps/infra
 COPY apps/sky /app/apps/sky
-COPY deploy/sidekick-devops/sidekick_server.py deploy/sidekick-devops/mcp_reads.py deploy/sidekick-devops/monitor.py deploy/sidekick-devops/notify.py /app/
+# Every module sidekick_server.py imports from this directory has to be copied (tests/test_sidekick_image_modules.py checks it): federation.py was
+# missing, so the server crashed at start whenever SIDEKICK_MODULES was set.
+COPY deploy/sidekick-devops/sidekick_server.py deploy/sidekick-devops/mcp_reads.py deploy/sidekick-devops/monitor.py deploy/sidekick-devops/notify.py \
+     deploy/sidekick-devops/federation.py /app/
 COPY deploy/sidekick-devops/skills /app/skills
 
 # Optional: install SkyPilot so the `sky` operator drives the real CLI (multi-cloud placement +
