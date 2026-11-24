@@ -487,6 +487,7 @@ def test_finance_support_procurement_and_marketing_compute_from_application_reco
     svc.ctx.clients["postiz"]["get"] = newer
     svc.cache._hit.clear()
     # one of two sources down: its metrics are unknown, the other's stay
+    assert _metric(c.get("/api/dashboards/marketing").json(), "published")["value"] == 1       # Postiz has been read once
     svc.ctx.clients["listmonk"]["get"] = _http_stub({})
     calls = []
     svc.ctx.clients["postiz"]["get"] = lambda *a, **k: (calls.append(1), newer(*a, **k))[1]
