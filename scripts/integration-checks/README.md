@@ -1,8 +1,11 @@
 # Integration checks against real cores
 
 Three scripts that run an app's own code against a **real** instance of the product it works with. The app tests in this repository use
-stand-ins for those products; these scripts are the evidence that the integration works against the real thing. They are run by hand
-against throwaway instances, not in CI.
+stand-ins for those products; these scripts are the evidence that the integration works against the real thing.
+
+`run_with_throwaway_core.sh chatwoot|lago|twenty` starts a throwaway instance in Docker, runs the matching script and removes everything
+again. The `integration-checks` workflow runs it for all three when one of the apps or the checks change, and it is run on `main` before a
+release ([docs/RELEASING.md](../../docs/RELEASING.md)).
 
 | Script | App | Product | Last run |
 |---|---|---|---|
@@ -48,6 +51,8 @@ Each prints `PASS` / `FAIL` lines and a JSON summary, and exits non-zero if any 
 
 ## Limits
 
-* They are not run in CI: each needs a running product with its database. A workflow that starts throwaway instances is the next step.
+* The workflow is not a required check: it pulls large third-party images. It runs one version of each product, the one named in
+  `run_with_throwaway_core.sh`.
+* The throwaway Twenty is seeded with Twenty's own development workspace, because a fresh instance has no workspace to create a key in.
 * The Billing script's refund checks branch on what the Lago edition does with a credit note; the licensed branch has not been run.
 * Update paths in Twenty (changing an existing record) are not exercised.
