@@ -55,7 +55,7 @@ services:
     # QA 0.6.3 publishes linux/amd64 lanes only and refuses aarch64 hosts with ARCHITECTURE_UNSUPPORTED —
     # even one emulated by Docker. Pinning the platform is what makes the lanes available on Apple Silicon
     # Docker Desktop (Rosetta/QEMU). This is emulated x86_64: slower, and NOT native-ARM64 evidence.
-    platform: linux/amd64
+    platform: "${QA_PLATFORM:-linux/amd64}"   # the QA test lanes exist for linux/amd64 only. Apple Silicon and arm64 Linux with QEMU run it emulated; an arm64 host without emulation sets QA_PLATFORM=linux/arm64 (the service starts, its lanes say ARCHITECTURE_UNSUPPORTED)
     restart: unless-stopped
     ports:
       - "${QA_BIND:-127.0.0.1}:${QA_PORT:-8080}:8080"

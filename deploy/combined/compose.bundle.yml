@@ -74,7 +74,7 @@ services:
 
   redevops-qa:
     image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.4}"
-    platform: linux/amd64   # QA publishes linux/amd64 lanes only; Apple Silicon runs this under Rosetta/QEMU
+    platform: "${QA_PLATFORM:-linux/amd64}"   # the QA test lanes exist for linux/amd64 only. Apple Silicon and arm64 Linux with QEMU run it emulated; an arm64 host without emulation sets QA_PLATFORM=linux/arm64 (the service starts, its lanes say ARCHITECTURE_UNSUPPORTED)
     restart: unless-stopped
     ports:
       - target: 8080

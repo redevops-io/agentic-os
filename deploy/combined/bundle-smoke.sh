@@ -41,7 +41,13 @@ ok "both products ready inside Projects with capabilities and the approval secre
 
 # 4. a QA run that needs approval, approved THROUGH PROJECTS
 profile="$(qa "$QBASE/v1/info" | json 'next((p["id"] for p in d["profiles"] if p.get("available") and p["id"].startswith("fixture-")), "")')"
-[ -n "$profile" ] || bad "QA advertises no available fixture profile on this host (/v1/info says why)"
+UNSUPPORTED=0
+if [ -z "$profile" ]; then
+  why="$(qa "$QBASE/v1/info" | json '",".join(sorted({(v.get("unavailable") or {}).get("code","?") for v in d["plans"].values()}))')"
+  [ "$why" = ARCHITECTURE_UNSUPPORTED ] || bad "QA advertises no available fixture profile on this host: $why"
+  echo "UNSUPPORTED  redevops-qa test lanes on this architecture ($why): the approval round trip through Projects was NOT run here"
+  UNSUPPORTED=1
+else
 tid="$(qadmin -X POST -d '{"name":"smoke-approval-'"$$"'","run_approval":"required"}' "$QBASE/v1/targets" | json 'd["id"]')"
 qadmin -X POST -d '{"external_actor":"projects:'"$OPUSER"'"}' "$QBASE/v1/actor-links" >/dev/null
 est="$(qa -X POST -d '{"target_id":"'"$tid"'","profile":"'"$profile"'"}' "$QBASE/v1/estimates" | json 'd["digest"]')"
@@ -62,6 +68,7 @@ ok "approved through Projects -> run VERIFIED, with the Projects actor on the re
 [ "$(code -u "$PB" -H 'content-type: application/json' -X POST -d '{"approved":true,"estimate_digest":"'"$est"'"}' "$PBASE/api/products/redevops-qa/runs/$rid/approval")" != 200 ] \
   && ok "the same approval cannot be used twice" || bad "a replayed approval was accepted"
 [ "$(code -H "Authorization: Bearer $QT" "$QBASE/v1/runs/$rid/verify")" = 200 ] && ok "the run's evidence re-verifies" || bad "verify"
+fi
 
 # 5. Edge Sentinel through Projects: read path works, decision paths refuse what is not a signed one-click approval
 pj "$PBASE/api/products" | json '1 if any(p["id"]=="edge-sentinel" and p.get("version") for p in d["products"]) else 0' | grep -q ^1$ && ok "Projects reads Edge Sentinel's version and features" || bad "sentinel info through Projects"
@@ -70,4 +77,4 @@ pj "$PBASE/api/products" | json '1 if any(p["id"]=="edge-sentinel" and p.get("ve
 [ "$(curl -sS --max-time 30 -H "Authorization: Bearer $ST" "$SBASE/api/v1/actor-links" | json '1 if "projects:'"$OPUSER"'" in json.dumps(d) else 0' 2>/dev/null || echo 0)" = 1 ] && ok "Sentinel knows who the Projects operator is (actor link)" || echo "NOTE  could not read Sentinel's actor links with the service token"
 
 echo
-echo "BUNDLE SMOKE OK"
+[ "$UNSUPPORTED" = 0 ] && echo "BUNDLE SMOKE OK" || echo "BUNDLE SMOKE OK for what this platform supports; $UNSUPPORTED section UNSUPPORTED (not a pass)"

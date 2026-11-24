@@ -25,7 +25,7 @@ umask 077
 [ -f .env.bundle ] || cp .env.bundle.example .env.bundle
 
 BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:$(get BUNDLE_TAG || true)"; BUNDLE_REF="${BUNDLE_REF%:}"
-[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.4"
+[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.5"
 COMPOSE="docker compose -f oci://${BUNDLE_REF} --project-directory . --env-file .env.bundle"
 PPORT="$(get PROJECTS_PORT)"; PPORT="${PPORT:-8787}"
 QPORT="$(get QA_PORT)"; QPORT="${QPORT:-8080}"
@@ -43,6 +43,22 @@ NAMED="$(get SENTINEL_NAMED_USER)"; NAMED="${NAMED:-alex}"
 [ -n "$(get QA_BOOTSTRAP_ADMIN_PASSWORD)" ] || set_in_env QA_BOOTSTRAP_ADMIN_PASSWORD "$(gen)"
 [ -n "$(get APPROVAL_SECRET)" ] || set_in_env APPROVAL_SECRET "$(gen)"   # shared by Projects, QA and Sentinel
 ok "credentials present in .env.bundle"
+
+# 1b. redevops-qa's test lanes exist for linux/amd64 only. Where this host cannot execute amd64 images (arm64 Linux without QEMU user
+#     emulation) the pinned amd64 image dies with "exec format error", so run the native image there and say what that costs. Docker Desktop
+#     on Apple Silicon and an arm64 host with binfmt/QEMU emulate amd64 and keep the lanes.
+if [ -z "$(get QA_PLATFORM)" ]; then
+  case "$(uname -m)" in
+    x86_64|amd64) : ;;
+    *) if docker run --rm --platform linux/amd64 busybox:1.37 true >/dev/null 2>&1; then
+         ok "this $(uname -m) host can run linux/amd64 images (emulation): redevops-qa keeps its test lanes"
+       else
+         set_in_env QA_PLATFORM "linux/$(uname -m | sed 's/aarch64/arm64/')"
+         echo "NOTE  this host cannot run linux/amd64 images: redevops-qa runs natively ($(get QA_PLATFORM)) and its test lanes are UNAVAILABLE here"
+         echo "      (ARCHITECTURE_UNSUPPORTED). To get them: docker run --privileged --rm tonistiigi/binfmt --install amd64, remove QA_PLATFORM from .env.bundle, re-run."
+       fi ;;
+  esac
+fi
 
 # 2. pull the bundle and bring every service up. -y: an oci:// stack's `up` otherwise prompts to confirm every
 #    interpolated ${VAR} before proceeding, which hangs forever (reads EOF, "operation cancelled by user") with
