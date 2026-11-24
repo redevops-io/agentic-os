@@ -71,3 +71,28 @@ def test_the_gate_fails_closed_without_any_credential_and_holds_under_a_base_pat
     assert m.get("/projects/api/projects", headers=basic()).status_code == 200
     two = [("Authorization", basic()["Authorization"]), ("Authorization", basic()["Authorization"])]
     assert m.get("/projects/api/projects", headers=two).status_code == 401              # a repeated header is refused
+
+
+def test_the_junit_reporter_can_pass_the_gate_without_weakening_the_service_identity(monkeypatch, tmp_path):
+    """Behind the gate a reporter needs an Authorization the gate accepts; the service token is still what authorises the report."""
+    import io
+    import json as _json
+
+    from agentic_os.dashboards import report_junit
+
+    f = tmp_path / "r.xml"
+    f.write_text('<testsuite><testcase classname="a" name="t"/></testsuite>')
+    seen = []
+
+    def fake(req, timeout=0):
+        seen.append({k.lower(): v for k, v in req.header_items()})
+        return io.BytesIO(_json.dumps({"ok": True}).encode())
+
+    monkeypatch.setattr(report_junit.urllib.request, "urlopen", fake)
+    monkeypatch.setenv("DASHBOARDS_SERVICE_TOKEN", "svc-token")
+    argv = [str(f), "--url", "http://x", "--project", "p", "--suite", "s", "--run-id", "1"]
+    monkeypatch.delenv("DASHBOARDS_AUTHORIZATION", raising=False)
+    assert report_junit.main(argv) == 0 and "authorization" not in seen[-1] and seen[-1]["x-service-token"] == "svc-token"
+    monkeypatch.setenv("DASHBOARDS_AUTHORIZATION", "Bearer gate-credential")
+    assert report_junit.main(argv) == 0
+    assert seen[-1]["authorization"] == "Bearer gate-credential" and seen[-1]["x-service-token"] == "svc-token"
