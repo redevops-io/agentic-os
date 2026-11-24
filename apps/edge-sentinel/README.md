@@ -122,6 +122,7 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 
 | `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | _(empty)_ | Comma-separated addresses/CIDRs that are never banned (in addition to this host, its gateway, the LAPI host and the requesting operator). |
 | `SENTINEL_BLOCK_ALLOW_NETWORKS` | _(empty)_ | CIDRs inside which private/reserved space may be banned. Loopback, link-local, multicast and unspecified space is never bannable. |
+| `SENTINEL_ENFORCEMENT_PROBE` | off | Adds `GET /enforcement/<address>`: one word, whether a documentation address (RFC 5737, RFC 3849) has an active ban. It reads only, needs no sign-in, answers 404 for any other address and is never on with `EDGE_SENTINEL_DEMO`. `/health` reports it as `enforcement_probe`. It lets a quality check re-test an edge block. |
 | `SENTINEL_BLOCK_ALLOW_WIDE_CIDR` | _(off)_ | Allow ranges wider than /24 (IPv4) or /64 (IPv6). |
 | `SENTINEL_BLOCK_MAX_HOURS` | `168` | Cap for a ban duration. |
 | `SENTINEL_STATE_DIR` | _(unset)_ | Directory for the durable approval state (atomic, private file). Unset keeps state in memory only; an unreadable file makes decisions and executions fail closed. |

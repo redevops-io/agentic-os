@@ -26,7 +26,8 @@ umask 077
 
 BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:$(get BUNDLE_TAG || true)"; BUNDLE_REF="${BUNDLE_REF%:}"
 [ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.7"
-COMPOSE="docker compose -f oci://${BUNDLE_REF} --project-directory . --env-file .env.bundle"
+# BUNDLE_COMPOSE replaces the compose command, e.g. to try a local compose.bundle.yml before it is published.
+COMPOSE="${BUNDLE_COMPOSE:-docker compose -f oci://${BUNDLE_REF} --project-directory . --env-file .env.bundle}"
 PPORT="$(get PROJECTS_PORT)"; PPORT="${PPORT:-8787}"
 QPORT="$(get QA_PORT)"; QPORT="${QPORT:-8080}"
 SPORT="$(get EDGE_SENTINEL_PORT)"; SPORT="${SPORT:-8203}"

@@ -91,6 +91,7 @@ contract the product already has.
 | Step | Route in Projects | What happens in the product |
 |---|---|---|
 | Escalate | `POST /api/products/{qa}/runs/{run_id}/escalation` `{severity?}` | The run is reported to Edge Sentinel as an agent event (`qa.finding`). Sentinel opens an `INVESTIGATING` case whose evidence names the run and the digest of its evidence manifest. The case proposes no action. Escalating the same run again returns the same case. |
+| Remedy (edge block) | `POST /api/products/{sentinel}/cases/{case_id}/remedy` `{type: "edge_block", finding_run_id, ip, duration_hours?}` | Only where the fix is a block at the edge. Projects checks that the case is open and was opened from that run, then stages Edge Sentinel's own block for one address (`POST /api/v1/cases`). Nothing is banned: the action waits for the two existing steps, `…/actions/{id}/decision` and `…/actions/{id}/execute`, each a person's. Sentinel validates the address with its own rules and reads the edge back after the write. |
 | Re-test | `POST /api/products/{qa}/runs/{run_id}/retest` | A new run of the same target and profile, never with a seeded defect, bound to a fresh estimate. It needs its own approval (`…/runs/{id}/approval`). |
 | Resolve | `POST /api/products/{sentinel}/cases/{case_id}/resolution` `{finding_run_id, retest_run_id}` | Projects reads the re-test again and requires a pass of the same target and profile whose evidence verifies. It then sends Sentinel a single-use approval bound to the case and that record. Sentinel checks the record against the case, keeps it as evidence and sets the case `RESOLVED`. |
 
@@ -101,4 +102,19 @@ credential alone; closing a case that was not opened from a quality finding.
 The fix itself happens where the defect is. Projects does not apply it and does not claim to. Where the remedy is an edge block, it is Edge
 Sentinel's own action with its own decision and execution steps.
 
-`deploy/combined/bundle-loop.sh` runs the whole chain on a running bundle.
+`deploy/combined/bundle-loop.sh` runs the chain on a running bundle with redevops-qa's own fixture application: the finding is a seeded
+defect of that application, and the re-test runs it without the defect. It proves the routes and every refusal.
+
+`deploy/combined/bundle-remediation.sh` (bundle 0.1.8 and later) runs it with a real remediation and no fixture. redevops-qa's
+`edge-sentinel-enforcement` profile reads Edge Sentinel's enforcement page for the documentation address `203.0.113.7` and fails because
+the address is not blocked. The block is proposed, approved and executed through Projects; Edge Sentinel writes a CrowdSec decision and
+reads it back; the script asks CrowdSec itself (`cscli decisions list`) as well. The same plan, with the same digest, then passes against
+the same instance, and the case is closed on that run. Two things make this possible and both are off by default:
+
+* `SENTINEL_ENFORCEMENT_PROBE=1` on Edge Sentinel: `GET /enforcement/<address>` says whether a documentation address (RFC 5737, RFC 3849)
+  has an active ban. It reads only, answers 404 for any other address, and is never on in fixture mode.
+* the `remediation` Compose profile: a forwarder inside the QA container's network namespace, because redevops-qa accepts an external
+  target on its own loopback and nowhere else.
+
+The script also sets `SENTINEL_BLOCK_ENABLED=1` and `SENTINEL_BLOCK_ALLOW_NETWORKS=203.0.113.0/24` in `.env.bundle` and says so. A run
+against an external target is capped at `CORROBORATED`: the page is what Edge Sentinel reports, which is why the script asks CrowdSec too.

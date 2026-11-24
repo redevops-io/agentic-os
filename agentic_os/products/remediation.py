@@ -7,7 +7,8 @@ The chain, every step on a contract the products already have:
    content-addressed evidence. The event names the run (``subject = qa-run:<run id>``) and carries the digest of the run's evidence
    manifest, recomputed by QA's own verifier at this moment. A finding proposes no action.
 2. **Remediate.** The fix happens where the defect is. Projects does not pretend to apply it. Where the remedy is an edge block, it is
-   Sentinel's own governed action (propose, decide, execute; ``approvals.py``).
+   Sentinel's own governed action: ``propose_edge_block`` stages it against the finding case (a proposal, which does nothing), and a
+   person approves and executes it with the two existing steps (``approvals.py``). Sentinel reads the edge back after the write.
 3. **Re-test.** A new QA run of the SAME target and profile. It needs a person's approval like any run (``approvals.qa_approval``).
 4. **Resolve.** A person closes the case. Projects reads the re-test run fresh, requires a passing outcome, the same target and profile as
    the finding run and an evidence bundle that QA's verifier accepts, and only then mints a single-use approval bound to the case and to
@@ -128,6 +129,30 @@ def escalate_finding(hub: ProductHub, qa_id: str, run_id: str, *, severity: str 
             "failing_assertions": ev["failing"], "manifest_digest": ev["manifest"], "severity": severity}
 
 
+def propose_edge_block(hub: ProductHub, sentinel_id: str, case_id: str, *, finding_run_id: str, ip: str, duration_hours: Optional[int] = None,
+                       principal: str) -> Dict[str, Any]:
+    """Stage an edge block as the remedy of an open finding case. Only a proposal: Sentinel validates the address with its own rules and
+    the action then waits for a person's approval and a separate execution (the two existing routes). Refused unless the case is under
+    investigation and was opened from this run."""
+    _require_ready(hub, sentinel_id)
+    who = f"projects:{principal}"
+    ad = hub.sentinel(sentinel_id)
+    case = ad.case(case_id, actor=who)                              # fresh read
+    status = str((case.get("summary") or {}).get("status") or "")
+    if status != "INVESTIGATING":
+        raise ProductError("conflict", f"the case is {status or 'unknown'}, not under investigation; a remedy is proposed for an open finding", status=409)
+    if f"qa-run:{finding_run_id}" not in json.dumps(case, sort_keys=True):
+        raise ProductError("conflict", "this case was not opened from that run", status=409)
+    out = ad.propose(capability=sentinel.CAP_BAN, ip=ip, reason=f"remedy for {case_id} (qa-run:{finding_run_id})"[:200],
+                     duration_hours=duration_hours, actor=who, source="projects")
+    request_id = str(out.get("request_id") or "")
+    if not request_id:
+        raise ProductError("upstream", "the security product did not stage the action", status=502)
+    hub.invalidate(sentinel_id)
+    return {"case_id": case_id, "finding_run_id": finding_run_id, "remedy_case_id": str(out.get("case_id") or ""), "request_id": request_id,
+            "state": out.get("state"), "digest": out.get("digest"), "capability": sentinel.CAP_BAN, "ip": ip}
+
+
 def start_retest(hub: ProductHub, qa_id: str, run_id: str, *, principal: str) -> Dict[str, Any]:
     """A new run of the finding run's target and profile, with NO seeded defect. It waits for approval like any run that needs one."""
     _require_ready(hub, qa_id)
@@ -188,5 +213,5 @@ def resolve_case(hub: ProductHub, sentinel_id: str, case_id: str, *, finding_run
     return {"case_id": case_id, "case_status": out.get("status"), "evidence_id": out.get("evidence_id"), "retest": record}
 
 
-__all__ = ["escalate_finding", "start_retest", "retest_record", "resolve_case", "resolution_digest", "canonical", "KIND_FINDING", "KIND_RETEST",
+__all__ = ["escalate_finding", "propose_edge_block", "start_retest", "retest_record", "resolve_case", "resolution_digest", "canonical", "KIND_FINDING", "KIND_RETEST",
            "CAP_RESOLVE", "SEVERITIES"]

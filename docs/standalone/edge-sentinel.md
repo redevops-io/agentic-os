@@ -167,6 +167,7 @@ Set these in `.env` (Compose) or the Deployment environment (Kubernetes). A name
 | `CROWDSEC_MACHINE_ID`, `CROWDSEC_MACHINE_PASSWORD` (`_FILE`) | none | Watcher login: reads alerts and writes and lifts bans over the LAPI. Without it alerts need `cscli` through Docker, which this image lacks. |
 | `CROWDSEC_FRONT_URL` | `http://localhost:8086` | Target of the dashboard's "Open CrowdSec metrics" button. |
 | `SENTINEL_BLOCK_ENABLED` | unset | `1` makes an approved execution real. |
+| `SENTINEL_ENFORCEMENT_PROBE` | unset | `1` adds `GET /enforcement/<address>`: one word, whether a documentation address (RFC 5737, RFC 3849) has an active ban. No sign-in, reads only, 404 for any other address, never on with `EDGE_SENTINEL_DEMO`. `/health` reports it as `enforcement_probe`. It exists so that a quality check can re-test an edge block. |
 | `SENTINEL_BLOCK_ALLOW_NETWORKS`, `SENTINEL_BLOCK_ALLOW_WIDE_CIDR`, `SENTINEL_BLOCK_MAX_HOURS`, `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | unset, off, 168 | Ban guard. |
 | `SENTINEL_STATE_DIR` | `/data/state` | Durable case-decision state. |
 | `SENTINEL_REQUIRE_TWO_PERSON` | unset | The approver of an action may not execute it. |

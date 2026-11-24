@@ -7,6 +7,7 @@ before the handler runs. Each route needs an identifiable principal (``principal
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Any, Dict, Optional
 
@@ -36,6 +37,9 @@ PRODUCT_ROUTE_POLICIES = {
     "POST /api/products/{product_id}/runs/{run_id}/escalation": P(
         "products.escalate_finding", "human_only",
         rationale="a person decides that a run which did not pass is a finding worth a security case; the case proposes no action"),
+    "POST /api/products/{product_id}/cases/{case_id}/remedy": P(
+        "products.propose_remedy", "human_only",
+        rationale="a person proposes the remedy of a finding; it is only staged, and still needs an approval and a separate execution"),
     "POST /api/products/{product_id}/runs/{run_id}/retest": P(
         "products.start_retest", "human_only",
         rationale="a person asks for the re-test of a finding; the run itself still needs its own approval"),
@@ -177,6 +181,27 @@ def make_router(hub: ProductHub) -> APIRouter:
             raise _http(e)
         return {"product": spec.id, "run_id": run_id, "result": out,
                 "source_refs": [f"{spec.id}:{run_id}", f"{out['security_product']}:{out['case_id']}"]}
+
+    @r.post("/api/products/{product_id}/cases/{case_id}/remedy")
+    def _remedy(product_id: str, case_id: str, body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+        spec = _spec(hub, product_id, "security")
+        if not re.match(CASE_ID, case_id):
+            raise HTTPException(404, {"error": "not_found", "detail": "unknown case"})
+        kind, run, ip, hours = body.get("type"), body.get("finding_run_id"), body.get("ip"), body.get("duration_hours")
+        try:
+            ip = str(ipaddress.ip_address(ip)) if isinstance(ip, str) else None
+        except ValueError:
+            ip = None
+        if set(body) - {"type", "finding_run_id", "ip", "duration_hours"} or kind != "edge_block" or not isinstance(run, str) or not re.match(RUN_ID, run) \
+                or ip is None or not (hours is None or (isinstance(hours, int) and not isinstance(hours, bool) and 1 <= hours <= 8760)):
+            raise HTTPException(422, {"error": "invalid", "detail": "body must be {type: \"edge_block\", finding_run_id, ip: <one address>, duration_hours?: 1..8760}"})
+        principal = _require_principal(hub)
+        try:
+            out = remediation.propose_edge_block(hub, product_id, case_id, finding_run_id=run, ip=ip, duration_hours=hours, principal=principal)
+        except ProductError as e:
+            raise _http(e)
+        return {"product": spec.id, "case_id": case_id, "result": out,
+                "source_refs": [f"{spec.id}:{case_id}", f"{spec.id}:{out['request_id']}"]}
 
     @r.post("/api/products/{product_id}/runs/{run_id}/retest")
     def _retest(product_id: str, run_id: str, body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
