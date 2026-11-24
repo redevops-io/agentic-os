@@ -1,0 +1,159 @@
+# Acceptance of desktop installers BEFORE they are signed and published: the installers a native-packaging run built are installed on the
+# operating system they are for, over the previous published version where one exists (an upgrade, not a clean install), and then checked
+# at three levels: the state the previous version left is still there, the process and API checks (native_check.py), and the UI workflows
+# with accessibility in a real browser (ui_workflow.mjs). Candidates are unsigned: the platform signature is reported, not required. The
+# signed, published artifacts are tested by published-artifacts-acceptance.yml.
+name: desktop-candidate-acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "native-packaging run whose installers are tested"
+        required: true
+      upgrade_from:
+        description: "Published release to upgrade from (its installer is installed first where one exists for the platform)"
+        required: false
+        default: v0.6.1
+permissions:
+  contents: read
+  actions: read
+jobs:
+  candidate:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: macos-arm64 (dmg), runner: macos-15, artifact: redevops-macos-15, find: "*.dmg", previous: "*_aarch64.dmg"}
+          - {name: windows-x64 (msi), runner: windows-2022, artifact: redevops-windows-2022, find: "*.msi", previous: "*_x64_en-US.msi"}
+          - {name: windows-x64 (nsis exe), runner: windows-2022, artifact: redevops-windows-2022, find: "*-setup.exe", previous: "*_x64-setup.exe"}
+          - {name: linux-amd64 (deb), runner: ubuntu-24.04, artifact: redevops-ubuntu-24.04, find: "*.deb", previous: ""}
+          - {name: linux-amd64 (AppImage), runner: ubuntu-24.04, artifact: redevops-ubuntu-24.04, find: "*.AppImage", previous: ""}
+          - {name: linux-arm64 (deb), runner: ubuntu-24.04-arm, artifact: redevops-ubuntu-24.04-arm, find: "*.deb", previous: "*_arm64.deb"}
+          - {name: linux-arm64 (AppImage), runner: ubuntu-24.04-arm, artifact: redevops-ubuntu-24.04-arm, find: "*.AppImage", previous: ""}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      FROM: ${{ inputs.upgrade_from }}
+      FIND: ${{ matrix.find }}
+      PREVIOUS: ${{ matrix.previous }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Download the candidate installer (and the previous published one, where there is one)
+        shell: bash
+        run: |
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n "${{ matrix.artifact }}" -D cand
+          NEW="$(find cand -name "$FIND" -type f | head -1)"; [ -n "$NEW" ] || { echo "no $FIND in the candidate artifact"; find cand -type f | head -40; exit 1; }
+          cp "$NEW" "./candidate-$(basename "$NEW" | tr ' ' '.')"; NEW="candidate-$(basename "$NEW" | tr ' ' '.')"
+          echo "NEW=$NEW" >> "$GITHUB_ENV"; (sha256sum "$NEW" 2>/dev/null || shasum -a 256 "$NEW")
+          OLD=""
+          if [ -n "$PREVIOUS" ] && [ -n "$FROM" ]; then mkdir -p prev && gh release download "$FROM" -R "$GITHUB_REPOSITORY" -p "$PREVIOUS" -D prev && OLD="$(ls prev/* | head -1)"; fi
+          echo "OLD=$OLD" >> "$GITHUB_ENV"; echo "previous installer: ${OLD:-none published for this platform (clean install only)}"
+
+      # ── previous version: install and let it leave its state ──────────────────────────────────────────────
+      - name: macOS - install the previous version
+        if: runner.os == 'macOS' && env.OLD != ''
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/aa-old "$OLD"; mkdir -p "$HOME/aa-install"; cp -R /tmp/aa-old/*.app "$HOME/aa-install/"; hdiutil detach /tmp/aa-old
+          echo "SIDECAR=$(ls -d "$HOME"/aa-install/*.app | head -1)/Contents/MacOS/redevops-sidecar" >> "$GITHUB_ENV"
+      - name: Windows - install the previous version
+        if: runner.os == 'Windows' && env.OLD != ''
+        shell: pwsh
+        run: |
+          if ($env:OLD -like '*.msi') { $p = Start-Process msiexec -ArgumentList '/i', (Resolve-Path $env:OLD), '/qn', '/norestart' -Wait -PassThru } else { $p = Start-Process (Resolve-Path $env:OLD) -ArgumentList '/S' -Wait -PassThru }
+          if ($p.ExitCode -ne 0) { throw "previous installer exit code $($p.ExitCode)" }
+          $side = Get-ChildItem -Path "$env:ProgramFiles", "$env:LOCALAPPDATA" -Recurse -Filter 'redevops-sidecar.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          "SIDECAR=$($side.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Linux - install the previous .deb
+        if: runner.os == 'Linux' && env.OLD != ''
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y "./$OLD"
+          echo "SIDECAR=/usr/bin/redevops-sidecar" >> "$GITHUB_ENV"
+      - name: The previous version runs once and leaves its state
+        if: env.OLD != ''
+        shell: bash
+        run: python packaging/acceptance/state_probe.py "$SIDECAR" "$RUNNER_TEMP/aa-state" state_before.json
+
+      # ── the candidate, installed over it ──────────────────────────────────────────────────────────────────
+      - name: macOS - install the candidate (over the previous version when there is one)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/aa "$NEW"; APP="$(ls -d /tmp/aa/*.app | head -1)"
+          codesign --verify --deep --strict "$APP" && echo "signature: valid" || echo "signature: none or invalid (a candidate is unsigned)"
+          mkdir -p "$HOME/aa-install"; rm -rf "$HOME/aa-install/$(basename "$APP")"; cp -R "$APP" "$HOME/aa-install/"; hdiutil detach /tmp/aa
+          [ "$(ls -d "$HOME"/aa-install/*.app | wc -l | tr -d ' ')" = 1 ] || { echo "more than one application after the upgrade"; ls "$HOME/aa-install"; exit 1; }
+          echo "SIDECAR=$HOME/aa-install/$(basename "$APP")/Contents/MacOS/redevops-sidecar" >> "$GITHUB_ENV"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$HOME/aa-install/$(basename "$APP")/Contents/Info.plist"
+      - name: Windows - install the candidate (over the previous version when there is one)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "signature: $((Get-AuthenticodeSignature $env:NEW).Status) (a candidate is unsigned)"
+          if ($env:NEW -like '*.msi') { $p = Start-Process msiexec -ArgumentList '/i', (Resolve-Path $env:NEW), '/qn', '/norestart' -Wait -PassThru } else { $p = Start-Process (Resolve-Path $env:NEW) -ArgumentList '/S' -Wait -PassThru }
+          if ($p.ExitCode -ne 0) { throw "candidate installer exit code $($p.ExitCode)" }
+          $sides = @(Get-ChildItem -Path "$env:ProgramFiles", "$env:LOCALAPPDATA" -Recurse -Filter 'redevops-sidecar.exe' -ErrorAction SilentlyContinue)
+          if ($sides.Count -ne 1) { throw "expected one installed sidecar after the upgrade, found $($sides.Count): $($sides.FullName -join ', ')" }
+          "SIDECAR=$($sides[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Agentic Apps*' } | ForEach-Object { "installed: $($_.DisplayName) $($_.DisplayVersion)" }
+      - name: Linux - install the candidate .deb (an upgrade when the previous one is installed)
+        if: runner.os == 'Linux' && endsWith(env.NEW, '.deb')
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y "./$NEW"
+          dpkg -l | awk '/agentic|redevops/ {print "installed:", $2, $3}'
+          echo "SIDECAR=/usr/bin/redevops-sidecar" >> "$GITHUB_ENV"
+      - name: Linux - unpack the candidate AppImage
+        if: runner.os == 'Linux' && endsWith(env.NEW, '.AppImage')
+        run: |
+          chmod +x "$NEW" && "./$NEW" --appimage-extract >/dev/null
+          echo "SIDECAR=$(find "$PWD/squashfs-root" -name redevops-sidecar -type f | head -1)" >> "$GITHUB_ENV"
+
+      - name: After the upgrade - the previous state is still there, and the new build adds its durable stores
+        if: env.OLD != ''
+        shell: bash
+        run: python packaging/acceptance/state_probe.py "$SIDECAR" "$RUNNER_TEMP/aa-state" state_after.json --expect-kept state_before.json
+      - name: Native checks of the installed candidate (process and API level)
+        shell: bash
+        run: python packaging/acceptance/native_check.py "$SIDECAR" native_result.json
+      - name: Browser for the UI workflows
+        shell: bash
+        run: |
+          mkdir -p uiroot && cd uiroot && npm init -y >/dev/null && npm i --silent @playwright/test@1.56.1 axe-core@4.10.3
+          if [ "$RUNNER_OS" = Linux ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
+      - name: UI workflows, keyboard and accessibility in a real browser, on this operating system
+        shell: bash
+        env:
+          PW_ROOT: ${{ github.workspace }}/uiroot
+        run: node packaging/acceptance/ui_workflow.mjs "$SIDECAR" ui_result.json
+
+      - name: Windows - uninstall leaves nothing behind
+        if: runner.os == 'Windows' && endsWith(env.NEW, '.msi')
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/x', (Resolve-Path $env:NEW), '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exit code $($p.ExitCode)" }
+          if (Test-Path $env:SIDECAR) { throw 'the sidecar is still on disk after uninstall' }
+      - name: Linux - uninstall the .deb
+        if: runner.os == 'Linux' && endsWith(env.NEW, '.deb')
+        run: |
+          sudo apt-get remove -y "$(dpkg-deb -f "$NEW" Package)"
+          test ! -e /usr/bin/redevops-sidecar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: candidate-${{ strategy.job-index }}
+          path: |
+            native_result.json
+            ui_result.json
+            state_before.json
+            state_after.json
+          if-no-files-found: warn

@@ -14,6 +14,7 @@ on:
     paths:
       - .github/workflows/published-artifacts-acceptance.yml
       - packaging/acceptance/native_check.py
+      - packaging/acceptance/ui_workflow.mjs
 permissions:
   contents: read
 jobs:
@@ -93,6 +94,17 @@ jobs:
       - name: Native checks of the installed app
         shell: bash
         run: python packaging/acceptance/native_check.py "$SIDECAR" native_result.json
+      # The same build, in a real browser on this operating system: first workflows, keyboard, accessibility, the session boundary.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: UI workflows, keyboard and accessibility in a real browser
+        shell: bash
+        run: |
+          mkdir -p uiroot && (cd uiroot && npm init -y >/dev/null && npm i --silent @playwright/test@1.56.1 axe-core@4.10.3 && if [ "$RUNNER_OS" = Linux ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi)
+          # v0.6.1 predates the explicit profile (launcher 0.1.2): recorded as a known defect of that release, not as a pass.
+          if [ "$TAG" = v0.6.1 ]; then export KNOWN_NO_PROFILE=1; fi
+          PW_ROOT="$PWD/uiroot" node packaging/acceptance/ui_workflow.mjs "$SIDECAR" ui_result.json
       - name: Windows - uninstall leaves nothing running
         if: runner.os == 'Windows' && endsWith(env.ASSET, '.msi')
         shell: pwsh
@@ -109,5 +121,7 @@ jobs:
         if: always()
         with:
           name: native-${{ strategy.job-index }}
-          path: native_result.json
+          path: |
+            native_result.json
+            ui_result.json
           if-no-files-found: warn
