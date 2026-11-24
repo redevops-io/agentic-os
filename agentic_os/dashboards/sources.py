@@ -25,6 +25,8 @@ from .contracts import GATED, NOT_CONNECTED, OK, STALE, UNAVAILABLE, Record, Sou
 from .store import DAY, DashboardStore
 
 CACHE_TTL_S = 20.0
+#: sources whose application rate-limits its API are read less often
+SOURCE_TTL_S = {"postiz": 300.0}
 EVIDENCE_TTL_S = 3600.0          # a finished run's evidence does not change
 MAX_QA_RUNS = 40
 
@@ -721,7 +723,7 @@ def postiz(ctx: Context) -> SourceResult:
         if code in (301, 302, 307, 308, 404):
             # an older Postiz serves the public API under /api and pages it by calendar month instead of a date range
             seen: Dict[str, Mapping[str, Any]] = {}
-            for back in (0, 1, 2, -1):
+            for back in (0, 1):                     # this API is rate-limited: the current and the previous month, no more
                 t = time.gmtime(now - back * 30 * DAY)
                 code, data = get(f"{url}/api/public/v1/posts", headers={"Authorization": key},
                                  params={"display": "month", "year": t.tm_year, "month": t.tm_mon, "week": max(1, min(52, int(time.strftime("%V", t)))), "day": 0})
@@ -800,9 +802,12 @@ def metabase(ctx: Context) -> SourceResult:
     public = str(opts.get("public_url") or getattr(w, "base_url", "")).rstrip("/")
     try:
         with w._client() as c:
-            who = w._req(c, "GET", "/api/user/current")       # a source with no card configured must still prove it can sign in
-            if who.status_code >= 400:
-                return SourceResult(_status("metabase", UNAVAILABLE, detail=f"Metabase did not accept the sign-in ({who.status_code})",
+            try:
+                who_code = w._req(c, "GET", "/api/user/current").status_code      # a source with no card configured must still prove it can sign in
+            except Exception:  # noqa: BLE001  (an expired session with no password to sign in again)
+                who_code = 401
+            if who_code >= 400:
+                return SourceResult(_status("metabase", UNAVAILABLE, detail=f"Metabase did not accept the sign-in ({who_code})",
                                             remedy="renew METABASE_SESSION, or set METABASE_ADMIN_EMAIL and METABASE_ADMIN_PASSWORD"))
             for series, card_id in cards.items():
                 if isinstance(card_id, bool) or not isinstance(card_id, int):
@@ -853,7 +858,7 @@ class SourceCache:
         now = time.monotonic()
         with self._lock:
             hit = self._hit.get(sid)
-            if hit and not fresh and now - hit[0] < self.ttl:
+            if hit and not fresh and now - hit[0] < max(self.ttl, SOURCE_TTL_S.get(sid, 0.0)):
                 return hit[1]
         try:
             res = COLLECTORS[sid](self.ctx)
@@ -864,8 +869,10 @@ class SourceCache:
         return res
 
     def invalidate(self) -> None:
+        """Forget what was read, except a rate-limited source that answered: a forced refresh must not spend its quota."""
+        now = time.monotonic()
         with self._lock:
-            self._hit.clear()
+            self._hit = {sid: h for sid, h in self._hit.items() if sid in SOURCE_TTL_S and h[1].status.usable and now - h[0] < SOURCE_TTL_S[sid]}
 
 
 __all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S"]
