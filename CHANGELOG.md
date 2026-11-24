@@ -15,7 +15,16 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.3; no version set)
+## Unreleased (after v0.4.4; no version set)
+
+## v0.4.4 (a quality finding as a security case; synthetic study reliability)
+
+- **Finding loop (Projects, Edge Sentinel 0.6.5).** Three human-only routes in Projects follow a QA run that did not pass to closure: `…/runs/{run}/escalation` reports it to Edge Sentinel as a `qa.finding` agent event (an `INVESTIGATING` case whose evidence names the run and the digest of its evidence manifest; no action proposed), `…/runs/{run}/retest` starts a new run of the same target and profile bound to a fresh estimate, and `…/cases/{case}/resolution` closes the case only after Projects has re-read the re-test and found a verified pass of the same target and profile. Edge Sentinel gains `POST /api/v1/cases/{case_id}/resolution` (a person's decision, single-use approval bound to the case and the record; the record is kept as evidence; a resolved case stays resolved across restarts). `deploy/combined/bundle-loop.sh` runs the chain on a running bundle. See `docs/products/README.md`.
+- **Edge Sentinel standalone image builds from `main` again.** The standalone lock pins `agent-harness` at the commit the pinned `context-runtime` requires (`pip check` failed without it).
+- **`bundle-smoke.sh`** sends Edge Sentinel's service credential as `X-Control-Token` (it was sent as a Bearer token, which Sentinel does not read, so two checks ran unauthenticated).
+- **Synthetic study (`radar.synthetic_study`).** Replicate draws (`replicates`, default 3 in the capability; `StudyConfig.replicates`, default 1) averaged per respondent; controls are compared with the variant that has the most text; the result lists every control with its difference, interval and n. The false-claim trust control is unchanged and still withholds the trust ranking when the score rises on a false claim.
+- Bundle defaults: Edge Sentinel 0.6.5, bundle 0.1.6.
+
 
 ## v0.4.3 (cockpit plan-bound approvals; explicit profile for packaged deployments; sidekick federation image)
 
