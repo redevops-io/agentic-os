@@ -146,3 +146,30 @@ def test_an_in_process_embedder_needs_no_embedding_endpoint(on, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     _, embedder, model = synthetic.collaborators_from_env()
     assert embedder.name == "sentence-transformers:BAAI/bge-small-en-v1.5" and model == "m"
+
+
+def test_three_draws_by_default_and_the_request_can_change_it(on):
+    t = FakeRespondent()
+    res = synthetic.synthetic_study({"variants": VARIANTS}, transport=t, embedder=HashEmbedder(), model_id="fake")
+    assert res["study"]["replicates"] == 3 and len(t.calls) == 4 * (2 + 6) * 2 * 3
+    t1 = FakeRespondent()
+    one = synthetic.synthetic_study({"variants": VARIANTS, "replicates": 1}, transport=t1, embedder=HashEmbedder(), model_id="fake")
+    assert one["study"]["replicates"] == 1 and len(t1.calls) == 4 * (2 + 6) * 2
+    for bad in (0, 6, "many"):
+        assert synthetic.synthetic_study({"variants": VARIANTS, "replicates": bad}, transport=Exploding(), embedder=Exploding())["status"] == "refused"
+
+
+def test_controls_are_compared_with_the_variant_that_says_the_most(on):
+    terse_first = [{"id": "A", "headline": "Invoices that stall", "body": "Chasing them is manual.", "cta": "See the fix"}, VARIANTS[0] | {"id": "B"}]
+    res = synthetic.synthetic_study({"variants": terse_first, "replicates": 1}, transport=FakeRespondent(), embedder=HashEmbedder(), model_id="fake")
+    assert res["study"]["control_base"] == "B"                  # not the terse first variant
+    cmp_ = next(c for c in res["comparisons"] if c["construct"] == "purchase_intent")
+    assert [v["variant_id"] for v in cmp_["variants"]] == ["A", "B"] and cmp_["variants"][0]["diff_vs_first"] == 0   # variants still compare with the first
+
+
+def test_every_control_reports_what_was_measured(on):
+    res = run(replicates=1)
+    detail = res["controls"]["detail"]
+    assert len(detail) == res["controls"]["run"] and {d["control"] for d in detail} >= {"empty_offer", "weak_value", "identical_relabelled", "false_claim"}
+    paired = [d for d in detail if "diff" in d]
+    assert paired and all({"passed", "expectation", "diff", "diff_ci95", "n_paired", "base_mean", "control_mean"} <= set(d) for d in paired)

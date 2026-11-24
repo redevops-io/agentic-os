@@ -369,6 +369,7 @@ class Job:
     order_index: int
     arm: str = "elicitation"                 # elicitation | dlr
     exposure: ExposureConfig = ExposureConfig()
+    replicate: int = 0                       # 0-based draw number: the same persona, text and question asked again (study.replicates)
 
 
 class Elicitor:
@@ -406,7 +407,11 @@ class Elicitor:
         msgs, _flags = self.messages_for(job)
         ph = prompt_hash(msgs)
         rid = f"{job.arm}:{job.persona.persona_id}:{job.variant.variant_id}:{job.construct}"
-        seed = derive_seed(self.study_seed, job.arm, job.persona.persona_id, job.variant.content_hash, job.construct)
+        seed_parts: Tuple[Any, ...] = (self.study_seed, job.arm, job.persona.persona_id, job.variant.content_hash, job.construct)
+        if job.replicate:                        # draw 0 keeps the id and seed a single-draw study always had
+            rid += f"#r{job.replicate}"
+            seed_parts += ("replicate", job.replicate)
+        seed = derive_seed(*seed_parts)
         params = {"temperature": self.params.temperature, "top_p": self.params.top_p,
                   "max_tokens": self.params.max_tokens, "enable_thinking": self.params.enable_thinking}
         base = dict(response_id=rid, persona_id=job.persona.persona_id, variant_id=job.variant.variant_id,
