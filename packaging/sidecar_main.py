@@ -110,6 +110,11 @@ def main(argv=None) -> int:
         sys.stderr.write(USAGE)
         sys.stderr.flush()
         return 2
+    # The profile is decided HERE, explicitly, before any part of the control plane is imported: a packaged build never takes its security
+    # posture from a missing setting (agentic_os/desktop_profile.py). With nothing set this selects `production` with durable authority and
+    # replay stores in the per-user state directory.
+    from agentic_os.desktop_profile import apply as _explicit_profile
+    _explicit_profile()
     if action == "bootstrap":
         sys.argv = ["agentic_os.mission.bootstrap"]
         runpy.run_module("agentic_os.mission.bootstrap", run_name="__main__")

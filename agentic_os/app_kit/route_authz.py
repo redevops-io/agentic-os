@@ -315,6 +315,25 @@ def authenticate(headers: "dict[str, str]", *, app_name: str, policy: RoutePolic
     return AuthzContext()
 
 
+#: Set on the ASGI scope by the desktop's local capability gate (``agentic_os.local_capability``), and only by it: the gate removes any copy
+#: that arrives from an outer layer and sets the key after it has checked Host, Origin, Fetch-Site, the session and (on a write) the CSRF
+#: header. A network client cannot put a key on the scope. The literal is repeated here so this module does not import the desktop gate
+#: (``products/principal.py`` does the same; tests/test_route_authz_local_owner.py pins that the three are equal).
+LOCAL_SESSION_SCOPE_KEY = "agentic_os.local_session"
+LOCAL_OWNER = "local-owner"
+
+
+def local_owner(scope: dict, ctx: AuthzContext) -> AuthzContext:
+    """The person at the desktop, when the request carries no other credential.
+
+    The desktop app has one user and no operator token: the local session IS the authentication. Without this the production profile, which
+    enforces every route policy, would refuse the owner's own captures and decisions as anonymous. A request that presents any other
+    credential keeps that credential's verdict: an execution authorization stays an agent, a rejected credential stays rejected."""
+    if ctx.kind != "anonymous" or ctx.credential_rejected or (scope or {}).get(LOCAL_SESSION_SCOPE_KEY) is None:
+        return ctx
+    return AuthzContext(kind="human", subject=LOCAL_OWNER, permissions=("*",), approval_marker={"approved": True, "by": LOCAL_OWNER})
+
+
 def decide(policy: RoutePolicy, ctx: AuthzContext, body: Any, *, app_name: str) -> "tuple[bool, int, str, dict | None]":
     """(allowed, http status if refused, reason, approval marker for the handler). Pure."""
     action = str((body or {}).get("action", "")) if isinstance(body, dict) else ""
@@ -417,6 +436,7 @@ class RouteAuthzMiddleware:
         headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
         ctx = authenticate(headers, app_name=self.app_name, policy=policy, body=body, path_params=path_params,
                            replay_guard=self.replay_guard)
+        ctx = local_owner(scope, ctx)
         allowed, status, reason, marker = decide(policy, ctx, body, app_name=self.app_name)
         scope.setdefault("state", {})["authz"] = ctx
         if not allowed and enforces(scope):

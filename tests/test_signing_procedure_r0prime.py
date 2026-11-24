@@ -504,7 +504,7 @@ def test_macos_names_derive_from_identity_json_and_equal_identity_py(mac):
     ident["r0prime"]["product_name"] = "Zed Test Product"
     (tree / "identity.json").write_text(json.dumps(ident))
     r2 = run(["/bin/bash", tree / "signing" / MAC.name, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.work / "o2"], mac.env())
-    assert r2.returncode == 0 and "Zed Test Product.app" in r2.stdout and "Zed Test Product_0.1.1_aarch64.dmg" in r2.stdout
+    assert r2.returncode == 0 and "Zed Test Product.app" in r2.stdout and f"Zed Test Product_{IDENT['r0prime']['version']}_aarch64.dmg" in r2.stdout
 
 
 def test_dry_run_is_the_default_and_touches_nothing(mac):
