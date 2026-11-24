@@ -260,12 +260,14 @@ def recommend(inp: dict) -> dict:
 
 def approve_plan(inp: dict) -> dict:
     recs = _fact(inp, "recommendations")
-    if not isinstance(recs, dict) or not isinstance(recs.get("items"), list):          # an EMPTY list is a valid finding: nothing to change
-        return {"status": "error", "action": "approve_plan", "error": "recommendations are required"}
+    usable = isinstance(recs, dict) and isinstance(recs.get("items"), list)            # an EMPTY list is a valid finding: nothing to change
     approval = inp.get("_approval")
-    if not approval:
-        return pending_approval("radar.approve_plan", change_plan_approved=False, plan_digest=recs["digest"],
-                                summary=f"{len(recs['items'])} recommendation(s) for {recs.get('site')} wait for a decision")
+    if not approval:                                                                   # without a genuine approval nothing is decided, whatever was sent
+        return pending_approval("radar.approve_plan", change_plan_approved=False, plan_digest=recs["digest"] if usable else "",
+                                summary=(f"{len(recs['items'])} recommendation(s) for {recs.get('site')} wait for a decision" if usable
+                                         else "no recommendations were given; nothing is approved"))
+    if not usable:
+        return {"status": "error", "action": "approve_plan", "error": "recommendations are required"}
     if approval.get("plan_digest") != plan_digest(recs["items"]):
         return {"status": "error", "action": "approve_plan", "error": "plan_digest_mismatch" if approval.get("plan_digest") else "plan_digest_required",
                 "summary": "the approval does not carry the digest of this list of recommendations"}
