@@ -94,8 +94,9 @@ Categories: `read-only-state` (reads state, writes nothing observable) / `writes
 | `assistant.playbook` | growth-assistant | write | writes-local-or-persistent-artifacts | apps/growth-assistant/operator.py:61 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `assistant.push_assets` | growth-assistant | write | launches external process or network | apps/growth-assistant/operator.py:106 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `assistant.subreddit_plan` | growth-assistant | write | writes-local-or-persistent-artifacts | apps/growth-assistant/operator.py:70 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `growth.analyze` | growth-engine | read | read-only-state | apps/growth-engine/operator.py:26 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `growth.reallocate_budget` | growth-engine | write | launches external process or network | apps/growth-engine/operator.py:34 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `growth.analyze` | growth-engine | read | read-only-state | apps/growth-engine/operator.py:27 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `growth.reallocate_budget` | growth-engine | write | launches external process or network | apps/growth-engine/operator.py:44 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `growth.remeasure` | growth-engine | read | read-only-state | apps/growth-engine/operator.py:36 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `top_pages` | growth-engine | read | read-only-state | apps/growth-engine/app.py:452 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `top_referrers` | growth-engine | read | read-only-state | apps/growth-engine/app.py:453 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `traffic_summary` | growth-engine | read | read-only-state | apps/growth-engine/app.py:451 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
@@ -117,8 +118,13 @@ Categories: `read-only-state` (reads state, writes nothing observable) / `writes
 | `add_watch` | market-radar | write | launches external process or network | apps/market-radar/app.py:17 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `list_watches` | market-radar | read | read-only-state | apps/market-radar/app.py:453 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `radar.add_watch` | market-radar | write | launches external process or network | apps/market-radar/operator.py:29 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.approve_plan` | market-radar | write | writes-local-or-persistent-artifacts | apps/market-radar/operator.py:66 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `radar.brief` | market-radar | read | read-only-state | apps/market-radar/operator.py:41 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.reassess` | market-radar | read | launches external process or network | apps/market-radar/operator.py:72 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.recommend` | market-radar | read | read-only-state | apps/market-radar/operator.py:63 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.site_audit` | market-radar | read | launches external process or network | apps/market-radar/operator.py:59 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `radar.synthetic_study` | market-radar | write | launches external process or network | apps/market-radar/operator.py:49 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `radar.verify_change` | market-radar | read | launches external process or network | apps/market-radar/operator.py:69 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `recent_changes` | market-radar | read | read-only-state | apps/market-radar/app.py:452 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `watch_summary` | market-radar | read | read-only-state | apps/market-radar/app.py:451 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `web_search` | market-radar | read | read-only-state | apps/market-radar/app.py:481 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |

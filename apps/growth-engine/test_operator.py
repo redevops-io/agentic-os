@@ -95,7 +95,7 @@ def client():
 def test_capabilities_manifest(client):
     m = client.get("/capabilities").json()
     caps = {c["name"]: c for c in m["capabilities"]}
-    assert set(caps) == {"growth.analyze", "growth.reallocate_budget"}
+    assert set(caps) == {"growth.analyze", "growth.reallocate_budget", "growth.remeasure"}
     # the budget-moving capability is gated (matches modules.yaml's [budget_change] gate);
     # attribution/analyze reads are not.
     assert caps["growth.reallocate_budget"]["approval_required"] is True
