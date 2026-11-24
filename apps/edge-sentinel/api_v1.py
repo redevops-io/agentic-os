@@ -138,11 +138,11 @@ def _replay_guard():
     return _REPLAY
 
 
-def human(request: Request, capability: str, inputs: dict) -> Principal:
+def human(request: Request, capability: str, inputs: dict, gate: str = "ban_ip") -> Principal:
     """A person: a session/Basic user with the operator role, or the service credential + a verified approval token for a LINKED user.
     A body field never names the actor."""
     p = current(request)
-    _gate("ban_ip")
+    _gate(gate)
     if p.kind == "user":
         if not p.at_least("operator"):
             raise _err(403, "role_required", "deciding and executing need the operator role", role="operator")
@@ -345,6 +345,26 @@ async def open_case(request: Request, p: Principal = Depends(operator), _rl=Depe
         raise _err(422, "refused", str(e)) from None
     except live.ExecutionError as e:
         raise _err(409, e.code, str(e)) from None
+
+
+@router.post("/cases/{case_id}/resolution")
+async def resolve_case(case_id: str, request: Request, _rl=Depends(ratelimit.rate_limit)):
+    """Close a case that was opened from a quality finding (`qa.finding`), on the record of a re-test that passed. A person's decision,
+    bound to the case and the exact record: a service credential alone cannot do it."""
+    current(request)                                   # authenticate before looking at the body
+    body = _body(await _json(request))
+    if set(body) - {"evidence", "digest"}:
+        raise _err(422, "invalid_body", "body must be {evidence: {...}, digest: <64 hex>}")
+    try:
+        ev = live.clean_resolution(body.get("evidence"))
+    except ValueError as e:
+        raise _err(422, "invalid_evidence", str(e)) from None
+    digest = body.get("digest")
+    if not isinstance(digest, str) or digest != live.resolution_digest(case_id, ev):
+        raise _err(422, "digest_required", "digest is required and must be the digest of this case and this re-test record")
+    p = human(request, "sentinel.resolve_case", {"case_id": case_id, "digest": digest}, gate="threat_summary")
+    _ensure_active(case_id)
+    return _live_errors(lambda: live.resolve_finding_case(case_id, ev, actor=p.actor, via=p.via))
 
 
 # ── actions: queue, decision, execution, verification ────────────────────────────────────────────────────────

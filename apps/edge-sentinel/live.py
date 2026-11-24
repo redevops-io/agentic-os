@@ -110,6 +110,18 @@ def _rehydrate_manual(st: CaseStore) -> None:
             manual_cases.ingest(st, json.loads(row["content"]))
         for row in hs.rows("SELECT content FROM evidence WHERE kind = 'agent_event'"):
             _agent_events.ingest_agent_event(st, json.loads(row["content"]), min_severity="info")
+        # A finding case that a person closed on a passed re-test stays closed: the resolution record is evidence too, and it is applied
+        # again on top of the rebuilt case (without it a restart would put the case back under investigation).
+        from .evidence import CaseStatus, EvidenceArtifact
+        for row in hs.rows("SELECT content FROM evidence WHERE kind = 'case_resolution'"):
+            doc = json.loads(row["content"])
+            case = st.cases.get(str(doc.get("case_id", "")))
+            if case is None:
+                continue
+            ev = st.put_evidence(EvidenceArtifact.of_raw("case_resolution", "redevops-qa", row["content"]), row["content"])
+            if ev.artifact_id not in case.evidence_refs:
+                case.evidence_refs = tuple(case.evidence_refs) + (ev.artifact_id,)
+            case.status = CaseStatus.RESOLVED
     except (history_store.StoreUnavailable, ValueError, KeyError):
         pass
 
@@ -148,6 +160,99 @@ def ingest_agent_event(event: dict, *, actor: str, via: str, min_severity: str =
         except history_store.StoreUnavailable as e:
             raise ExecutionError(f"event not recorded: the history store could not be written ({e})") from None
         return {"case_id": case.case_id, "status": case.status.value, "severity": case.severity.value, "title": case.title}
+
+
+# ── closing a quality-finding case on a verified re-test ─────────────────────────────────────────────────────────────────────────────
+#: A case opened from a `qa.finding` event is a signal with no action. It is closed by ONE thing: a person's decision that carries the record
+#: of a re-test which passed. The record is kept as content-addressed evidence on the case.
+QA_FINDING_KIND = "qa.finding"
+RESOLUTION_FIELDS = {"kind": 40, "run_id": 80, "outcome": 40, "manifest_digest": 80, "finding_run_id": 80, "profile": 80, "target_id": 80, "note": 300}
+RESOLUTION_REQUIRED = ("kind", "run_id", "outcome", "manifest_digest", "finding_run_id")
+RETEST_PASSED = ("VERIFIED", "CORROBORATED")
+
+
+class NotResolvable(ExecutionError):
+    """The case cannot be closed this way, or the re-test record does not show a pass."""
+    code = "not_resolvable"
+
+
+def clean_resolution(evidence) -> dict:
+    """Known string fields only, bounded. Raises ValueError with what is wrong."""
+    if not isinstance(evidence, dict):
+        raise ValueError("evidence must be an object")
+    clean: dict = {}
+    for k, v in evidence.items():
+        if k not in RESOLUTION_FIELDS:
+            raise ValueError(f"unknown field '{k}'")
+        if not isinstance(v, str) or not v.strip() or len(v) > RESOLUTION_FIELDS[k]:
+            raise ValueError(f"{k} must be a non-empty string of at most {RESOLUTION_FIELDS[k]} characters")
+        clean[k] = v
+    missing = [k for k in RESOLUTION_REQUIRED if k not in clean]
+    if missing:
+        raise ValueError("missing: " + ", ".join(missing))
+    if clean["kind"] != "qa.retest":
+        raise ValueError("kind must be qa.retest")
+    return clean
+
+
+def resolution_digest(case_id: str, evidence: dict) -> str:
+    """What a resolution approval is bound to: the case and the exact re-test record."""
+    from .evidence import canonical_json, sha256_hex
+    return sha256_hex(canonical_json({"case_id": case_id, "evidence": evidence}))
+
+
+def finding_run_of(case_id: str, st: CaseStore | None = None) -> str:
+    """The QA run a `qa.finding` case was opened for ("" when the case is not one): the event's subject is `qa-run:<run id>`."""
+    st = st or store()
+    case = st.cases.get(case_id)
+    if case is None:
+        raise KeyError(case_id)
+    for oid in case.observation_refs:
+        o = st.observations.get(oid)
+        f = getattr(o, "normalized_fields", None) or {}
+        if f.get("kind") == QA_FINDING_KIND and str(f.get("subject", "")).startswith("qa-run:"):
+            return str(f["subject"])[len("qa-run:"):]
+    return ""
+
+
+def resolve_finding_case(case_id: str, evidence: dict, *, actor: str, via: str, st: CaseStore | None = None) -> dict:
+    """Close a `qa.finding` case on a passed re-test. The re-test record becomes evidence on the case and the status becomes RESOLVED.
+    Refused (nothing recorded) when the case is not an open quality finding, when the record names another finding run, when the re-test
+    is the finding run itself, or when its outcome is not a pass."""
+    from .evidence import CaseStatus, CaseType, EvidenceArtifact, canonical_json
+    st = st or store()
+    clean = clean_resolution(evidence)
+    with _LOCK:
+        _check_state_ok()
+        case = st.cases.get(case_id)
+        if case is None:
+            raise KeyError(case_id)
+        origin = finding_run_of(case_id, st)
+        if case.case_type is not CaseType.AI_SECURITY or not origin:
+            raise NotResolvable("this case was not opened from a quality finding; it cannot be closed with a re-test")
+        if case.status is not CaseStatus.INVESTIGATING:
+            raise NotResolvable(f"the case is {case.status.value}, not under investigation")
+        if clean["finding_run_id"] != origin:
+            raise NotResolvable("the re-test record names a different finding run than the one this case was opened for")
+        if clean["run_id"] == origin:
+            raise NotResolvable("the re-test must be a new run, not the run that produced the finding")
+        if clean["outcome"] not in RETEST_PASSED:
+            raise NotResolvable(f"the re-test ended {clean['outcome']}; a case is closed only on a re-test that passed")
+        raw = canonical_json({"case_id": case_id, "evidence": clean, "resolved_by": actor, "via": via})
+        ev = st.put_evidence(EvidenceArtifact.of_raw("case_resolution", "redevops-qa", raw), raw)
+        before_refs, before_status = case.evidence_refs, case.status
+        case.evidence_refs = tuple(case.evidence_refs) + (ev.artifact_id,)
+        case.status = CaseStatus.RESOLVED
+        try:
+            hs = history_store.get()
+            with hs.transaction():
+                hs.sync_store(st, attempts=_ATTEMPTS)
+                hs.append("case.resolved", case_id=case_id, actor_user=actor, via=via,
+                          detail={"retest_run": clean["run_id"], "outcome": clean["outcome"], "evidence": ev.artifact_id})
+        except history_store.StoreUnavailable as e:
+            case.evidence_refs, case.status = before_refs, before_status
+            raise ExecutionError(f"resolution not recorded: the history store could not be written ({e})") from None
+        return {"case_id": case_id, "status": case.status.value, "evidence_id": ev.artifact_id, "retest_run": clean["run_id"]}
 
 
 def stage_manual(kind: str, ip: str, *, reason: str, duration: str, actor: str, via: str, st: CaseStore | None = None) -> dict:

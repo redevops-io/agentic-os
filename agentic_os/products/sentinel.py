@@ -69,6 +69,15 @@ class SentinelAdapter:
             body["duration"] = f"{int(duration_hours)}h"
         return self.client.post(f"{self.p}/cases", body, actor=actor, source=source)
 
+    def report_event(self, event: Mapping[str, Any], actor: str = "", source: str = "projects") -> Dict[str, Any]:
+        """Report a signal (``POST /api/v1/agent-events``): Sentinel opens an INVESTIGATING case with the event as evidence. No action."""
+        return self.client.post(f"{self.p}/agent-events", dict(event), actor=actor, source=source)
+
+    def resolve_case(self, case_id: str, *, evidence: Mapping[str, Any], digest: str, approval_token: str, actor: str) -> Dict[str, Any]:
+        """Close a quality-finding case on a passed re-test (``remediation.py``): a person's decision, bound to the case and the record."""
+        return self.client.post(f"{self.p}/cases/{case_id}/resolution", {"evidence": dict(evidence), "digest": digest}, auth="decision",
+                                actor=actor, source="projects", headers={"X-Approval-Token": approval_token})
+
     # ── human decisions (decision token + signed approval token; see approvals.py) ───────────────────
     def decide(self, case_id: str, request_id: str, *, approved: bool, digest: str, rationale: str,
                approval_token: str, actor: str) -> Dict[str, Any]:
