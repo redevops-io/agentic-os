@@ -73,7 +73,7 @@ services:
     networks: [ts]
 
   redevops-qa:
-    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.3}"
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.4}"
     platform: linux/amd64   # QA publishes linux/amd64 lanes only; Apple Silicon runs this under Rosetta/QEMU
     restart: unless-stopped
     ports:
