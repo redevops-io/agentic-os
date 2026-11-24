@@ -35,6 +35,8 @@ Config (env; seed.py writes agents/edge-sentinel/.env automatically):
                       SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1 — see security.py.
   SENTINEL_BASIC_AUTH_USER / _PASS  operator credentials for execution (Basic auth; fail-closed 503 unset)
   SENTINEL_BLOCK_ENABLED            default OFF: an authenticated execution is a dry run without it
+  SENTINEL_ENFORCEMENT_PROBE        default OFF: GET /enforcement/<address> says whether a DOCUMENTATION address is banned
+                                    (read-only, no sign-in; never on with EDGE_SENTINEL_DEMO) — see enforcement_probe.py
   WAZUH_TLS_VERIFY    default on; `off` skips certificate verification, `/<path>` uses a private CA bundle
   REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model; if set (and actually in-boundary) `triage` adds an LLM
                       blurb via the governed router. The endpoint works fully without it.
@@ -84,6 +86,7 @@ from . import deploy_scan  # noqa: E402 — runtime-DAST proxy to the deploy-sca
 from . import permissions_ui  # noqa: E402 — live vuln-DB permissions demo
 from . import security as _security  # noqa: E402 — secure defaults: loopback bind, TLS verify, headers (P9)
 from . import fixture_mode  # noqa: E402 — opt-in fixture core for demos and UI acceptance (P4)
+from . import enforcement_probe  # noqa: E402 — opt-in read-only "is this documentation address banned" page
 from .core import (  # noqa: E402
     TENANT, SUBTITLE, fetch_activity, _severity,
 )
@@ -150,6 +153,7 @@ async def _require_operator_everywhere(request: Request, call_next):
     auth.align_kernel_operator_credential()
     path = request.url.path
     if (auth.require_auth_everywhere() and path not in auth.PUBLIC_PATHS and path not in auth.SELF_AUTHENTICATED_PATHS
+            and not (path.startswith(enforcement_probe.PATH_PREFIX) and enforcement_probe.enabled())   # opt-in, documentation addresses only
             and not path.startswith("/api/v1/") and not (path == "/ui" or path.startswith("/ui/"))
             and not (path == "/" and _ui_routes.ui_enabled())):          # the front page only redirects to the console
         from . import api_v1
@@ -1489,7 +1493,19 @@ def health() -> dict:
     # be reporting a connection that does not exist.
     return _with_authorization(_GATE_APP, {"status": "ok" if sh["ok"] else "degraded", "core": "crowdsec",
             "connected": core.crowdsec_connected(), "demo": fixture_mode.status(),
-            "state": sh})
+            "enforcement_probe": enforcement_probe.status(), "state": sh})
+
+
+@app.get("/enforcement/{address}", response_class=HTMLResponse, dependencies=[Depends(ratelimit.rate_limit)])
+def enforcement(address: str) -> HTMLResponse:
+    """Whether the edge holds a ban for one documentation address (see enforcement_probe.py). 404 unless SENTINEL_ENFORCEMENT_PROBE=1 and
+    the address is a documentation address; 503 with the word `unknown` when the edge could not be read. Reads only."""
+    ip = enforcement_probe.documentation_address(address) if enforcement_probe.enabled() else None
+    if ip is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    st = enforcement_probe.state(ip)
+    return HTMLResponse(enforcement_probe.page(ip, st), status_code=503 if st == enforcement_probe.UNKNOWN else 200,
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/readyz")

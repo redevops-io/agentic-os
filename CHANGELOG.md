@@ -17,6 +17,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.4; no version set)
 
+- **A real remediation in the finding loop (Projects, Edge Sentinel 0.6.6, bundle 0.1.8).** `POST /api/products/{sentinel}/cases/{case_id}/remedy` (human only) stages Edge Sentinel's own edge block as the remedy of an open finding case; it is approved and executed with the two existing steps. Edge Sentinel gains an opt-in, read-only page, `GET /enforcement/<address>` (`SENTINEL_ENFORCEMENT_PROBE=1`, documentation addresses only, never in fixture mode; `/health` reports `enforcement_probe`), so that redevops-qa 0.6.5 can re-test the block against the live instance. `deploy/combined/bundle-remediation.sh` runs the whole chain: the same QA plan fails before the block and passes after it, and CrowdSec is asked directly as well. The bundle has a `remediation` Compose profile (a loopback forwarder for redevops-qa) that is not started by default. `bundle-bootstrap.sh` accepts `BUNDLE_COMPOSE` to try a local compose file.
+- Bundle defaults: Edge Sentinel 0.6.6, redevops-qa 0.6.5, bundle 0.1.8.
+
 - **Bundle 0.1.7 supersedes 0.1.6.** 0.1.6 was published with Edge Sentinel 0.6.3: the publish workflow set the image tags in its own environment and they had not followed the compose default (0.6.5). The finding loop fails on 0.1.6 at its last step (0.6.3 has no resolution endpoint); everything else in 0.1.6 works. The workflow pin is corrected and `tests/test_bundle_publish_pins.py` keeps the workflow, the compose default and the example environment together.
 
 ## v0.4.4 (a quality finding as a security case; synthetic study reliability)

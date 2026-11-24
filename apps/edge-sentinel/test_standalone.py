@@ -325,7 +325,7 @@ REFERENCE_ENV = {
 
 #: The routes added after the reference contract was frozen. Adding a route means adding it HERE, deliberately, in the same change.
 ADDED_ROUTES = {
-    ("GET", "/readyz"),
+    ("GET", "/readyz"), ("GET", "/enforcement/{address}"),
     ("GET", "/api/v1/info"), ("GET", "/api/v1/posture"), ("GET", "/api/v1/events"), ("GET", "/api/v1/decisions"), ("GET", "/api/v1/cases"),
     ("POST", "/api/v1/cases"), ("GET", "/api/v1/cases/{case_id}"), ("GET", "/api/v1/cases/{case_id}/evidence/{artifact_id}"),
     ("GET", "/api/v1/actions"), ("GET", "/api/v1/actions/{request_id}"), ("GET", "/api/v1/actions/{request_id}/verification"),
