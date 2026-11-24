@@ -1,9 +1,10 @@
 # Fully pinned runtime dependencies of the standalone image (Dockerfile.standalone).
 # Generated with: uv pip compile requirements.standalone.in --python-version 3.12 --python-platform linux --no-header --no-annotate
 # Pure-Python and manylinux wheels only, so the same lock serves linux/amd64 and linux/arm64.
-# The four git/archive requirements are pinned by COMMIT SHA (a tag can be moved; a sha cannot). They are the commits the
+# The five git/archive requirements are pinned by COMMIT SHA (a tag can be moved; a sha cannot). They are the commits the
 # kernel's own pins resolve to: runtime-contracts v0.3.14, discovery-runtime v0.1.19, knowledge-frontier v0.2.0, and the
-# context-runtime commit this app has always pinned. Refresh with the command above, then run the app tests.
+# context-runtime commit this app has always pinned, plus the agent-harness commit that context-runtime commit requires. Refresh with the command above, then run the app tests.
+agent-harness @ git+https://github.com/redevops-io/agent-harness.git@1259d1b338e80414b32b863bcc97a0db93db8cd2
 annotated-doc==0.0.6
 annotated-types==0.8.0
 anyio==4.16.0

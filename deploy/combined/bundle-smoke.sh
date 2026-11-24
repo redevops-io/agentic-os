@@ -73,8 +73,8 @@ fi
 # 5. Edge Sentinel through Projects: read path works, decision paths refuse what is not a signed one-click approval
 pj "$PBASE/api/products" | json '1 if any(p["id"]=="edge-sentinel" and p.get("version") for p in d["products"]) else 0' | grep -q ^1$ && ok "Projects reads Edge Sentinel's version and features" || bad "sentinel info through Projects"
 [ "$(code -u "$PB" -X POST -H 'content-type: application/json' -d '{"digest":"00"}' "$PBASE/api/products/edge-sentinel/actions/nonexistent0/execute")" != 200 ] && ok "an execute without a valid approval is not accepted" || bad "unsigned execute accepted"
-[ "$(code -H "Authorization: Bearer $ST" -X POST -H 'content-type: application/json' -d '{"_approval_token":"forged"}' "$SBASE/api/v1/cases/nonexistent0/actions/nonexistent0/execute")" != 200 ] && ok "Sentinel rejects a forged approval token at its own boundary" || bad "sentinel accepted a forged token"
-[ "$(curl -sS --max-time 30 -H "Authorization: Bearer $ST" "$SBASE/api/v1/actor-links" | json '1 if "projects:'"$OPUSER"'" in json.dumps(d) else 0' 2>/dev/null || echo 0)" = 1 ] && ok "Sentinel knows who the Projects operator is (actor link)" || echo "NOTE  could not read Sentinel's actor links with the service token"
+[ "$(code -H "X-Control-Token: $ST" -X POST -H 'content-type: application/json' -d '{"_approval_token":"forged"}' "$SBASE/api/v1/cases/nonexistent0/actions/nonexistent0/execute")" != 200 ] && ok "Sentinel rejects a forged approval token at its own boundary" || bad "sentinel accepted a forged token"
+[ "$(curl -sS --max-time 30 -H "X-Control-Token: $ST" "$SBASE/api/v1/actor-links" | json '1 if "projects:'"$OPUSER"'" in json.dumps(d) else 0' 2>/dev/null || echo 0)" = 1 ] && ok "Sentinel knows who the Projects operator is (actor link)" || echo "NOTE  could not read Sentinel's actor links with the service token"
 
 echo
 [ "$UNSUPPORTED" = 0 ] && echo "BUNDLE SMOKE OK" || echo "BUNDLE SMOKE OK for what this platform supports; $UNSUPPORTED section UNSUPPORTED (not a pass)"

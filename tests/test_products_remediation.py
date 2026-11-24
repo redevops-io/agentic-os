@@ -44,6 +44,9 @@ class Qa:
     def evidence(self, rid, actor="", source=""):
         return {"assertions": [{"assertion_id": "A-NOTIF-ON", "native_status": "NATIVE_FAIL"}, {"assertion_id": "A-OK", "native_status": "NATIVE_PASS"}]}
 
+    def estimate(self, target_id, profile, actor="", source=""):
+        return {"digest": "sha256:" + "e" * 64, "target_id": target_id, "profile": profile}
+
     def start_run(self, body, actor="", source=""):
         self.started.append(dict(body))
         return {"id": T, "state": "awaiting_approval", "estimate_digest": "sha256:" + "e" * 64, **body}
@@ -137,7 +140,7 @@ def test_escalation_needs_both_products_and_a_known_severity():
 def test_the_retest_repeats_the_target_and_profile_and_never_a_seeded_defect():
     h = hub({F: run(F, defect="settings")})
     out = R.start_retest(h, "redevops-qa", F, principal="operator")
-    assert h.q.started == [{"target_id": "tgt-376713304fea", "profile": "fixture-browser"}]
+    assert h.q.started == [{"target_id": "tgt-376713304fea", "profile": "fixture-browser", "estimate_digest": "sha256:" + "e" * 64}]
     assert out["retest_run_id"] == T and out["state"] == "awaiting_approval" and out["approval"]
 
 

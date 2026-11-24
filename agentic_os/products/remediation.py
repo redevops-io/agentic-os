@@ -136,7 +136,13 @@ def start_retest(hub: ProductHub, qa_id: str, run_id: str, *, principal: str) ->
     r = ad.run(run_id, actor=who)
     if str(r.get("state") or "") not in qa.TERMINAL:
         raise ProductError("conflict", "the finding run has not ended", status=409)
-    new = ad.start_run({"target_id": str(r.get("target_id") or ""), "profile": str(r.get("profile") or "")}, actor=who, source="projects")
+    target, profile = str(r.get("target_id") or ""), str(r.get("profile") or "")
+    # A target that requires approval takes a run only with the digest of a current estimate: the thing the approver will be shown.
+    est = ad.estimate(target, profile, actor=who, source="projects")
+    body = {"target_id": target, "profile": profile}
+    if est.get("digest"):
+        body["estimate_digest"] = str(est["digest"])
+    new = ad.start_run(body, actor=who, source="projects")
     hub.invalidate(qa_id)
     return {"finding_run_id": run_id, "retest_run_id": str(new.get("id") or new.get("run_id") or ""), "state": new.get("state"),
             "estimate_digest": new.get("estimate_digest"), "approval": qa.approval_card(hub.spec(qa_id), new)
