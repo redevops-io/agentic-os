@@ -20,6 +20,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -326,12 +327,24 @@ def _pilot_amount(row: dict) -> int:
 
 
 def twenty_sync(row: dict) -> bool:
+    """Whether the pilot was created in Twenty. See :func:`twenty_sync_result` for why not."""
+    return bool(twenty_sync_result(row)["synced"])
+
+
+def twenty_sync_result(row: dict) -> dict:
     """Create a REAL, followable pilot in Twenty for an approved lead: a Company (the org + its
     site/repo), a Person (the repo's top maintainer, with their GitHub profile as the contact),
-    and a populated Opportunity (amount · 30-day close · stage · linked to both). Needs TWENTY_API_KEY."""
-    if not TWENTY_API_KEY or not isinstance(row, dict):
-        return False
+    and a populated Opportunity (amount · 30-day close · stage · linked to both). Needs TWENTY_API_KEY.
+
+    Returns ``{"synced", "reason", "step", "http"}``. ``reason`` says why nothing (or not everything) was written: no key, a key or a
+    record Twenty refused (with its status), or Twenty not answering. A refusal is never reported as a sync, and a sync is reported
+    only when Twenty returned the id of the opportunity it created."""
+    if not TWENTY_API_KEY:
+        return {"synced": False, "reason": "no_api_key", "step": None, "http": None}
+    if not isinstance(row, dict):
+        return {"synced": False, "reason": "unknown_account", "step": None, "http": None}
     acct = row.get("account", "")
+    step = "company"
     try:
         full = row.get("full_name") or ""
         owner = _gh_profile(acct) if row.get("source") == "github" else {}
@@ -353,17 +366,27 @@ def twenty_sync(row: dict) -> bool:
             }
             if poc.get("email"):
                 person_payload["emails"] = {"primaryEmail": poc["email"]}
+            step = "person"
             pid = _tw_post("/rest/people", person_payload).get("id")
         from datetime import datetime, timedelta, timezone
         close = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        _tw_post("/rest/opportunities", {
+        step = "opportunity"
+        opp = _tw_post("/rest/opportunities", {
             "name": f"Pilot — {owner.get('name') or acct}",
             "amount": {"amountMicros": int(row.get("amount") or _pilot_amount(row)) * 1_000_000, "currencyCode": "USD"},
             "closeDate": close, "stage": "NEW", "companyId": cid, "pointOfContactId": pid,
         })
-        return True
-    except Exception:
-        return False
+        if not opp.get("id"):
+            return {"synced": False, "reason": "twenty_returned_no_record", "step": step, "http": None}
+        return {"synced": True, "reason": "", "step": step, "http": None, "opportunity_id": opp["id"]}
+    except urllib.error.HTTPError as e:
+        # 400 on the company is what Twenty answers to a second company with the same address: the lead is already there
+        why = "twenty_refused_credentials" if e.code in (401, 403) else "twenty_refused_record"
+        return {"synced": False, "reason": why, "step": step, "http": e.code}
+    except (urllib.error.URLError, OSError):
+        return {"synced": False, "reason": "twenty_unreachable", "step": step, "http": None}
+    except Exception:  # noqa: BLE001 - an answer that could not be read is not a sync
+        return {"synced": False, "reason": "twenty_answer_unreadable", "step": step, "http": None}
 
 
 def _domain_of(owner: dict) -> str:
@@ -473,8 +496,11 @@ def approve(body: dict | None = None) -> dict:
     acct = body.get("account", "")
     _STATE["approved"].add(acct)
     row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
-    synced = twenty_sync(row) if row else False
-    return {"ok": True, "action": "approve", "account": acct, "twenty_synced": synced}
+    res = twenty_sync_result(row) if row else {"synced": False, "reason": "unknown_account", "step": None, "http": None}
+    out = {"ok": True, "action": "approve", "account": acct, "twenty_synced": bool(res["synced"])}
+    if not res["synced"]:
+        out["twenty_sync"] = {k: res[k] for k in ("reason", "step", "http")}
+    return out
 
 
 def _sender():

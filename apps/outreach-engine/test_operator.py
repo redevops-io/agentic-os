@@ -271,3 +271,61 @@ def test_opener_depends_on_icp():
 def test_pipeline_rows_label_play_as_fixed_policy():
     rows = core.build_pipeline(live=False)
     assert rows and all(r["play_policy"] == "fixed policy (not learned)" for r in rows)
+
+
+# ── when the pilot is NOT written to Twenty, the answer says why (found by running against a real Twenty) ──────────────────
+def _row():
+    return {"account": "northwind-check", "source": "manual", "stars": 0, "url": "https://northwind-check.example.com"}
+
+
+def _http_error(code):
+    import urllib.error
+    return urllib.error.HTTPError("http://twenty/rest/companies", code, "refused", None, None)
+
+
+def test_a_sync_is_reported_only_with_the_id_twenty_returned(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+    monkeypatch.setattr(core.urllib.request, "urlopen", _fake_urlopen)
+    out = core.twenty_sync_result(_row())
+    assert out["synced"] is True and out["opportunity_id"] == "op-1" and out["reason"] == "" and core.twenty_sync(_row()) is True
+
+
+@pytest.mark.parametrize("failure, reason, http", [
+    (lambda: _http_error(400), "twenty_refused_record", 400),          # what a real Twenty answers to a second company with the same address
+    (lambda: _http_error(401), "twenty_refused_credentials", 401),
+    (lambda: _http_error(403), "twenty_refused_credentials", 403),
+    (lambda: OSError("connection refused"), "twenty_unreachable", None),
+])
+def test_a_refusal_or_an_outage_is_named_and_is_never_a_sync(monkeypatch, failure, reason, http):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+
+    def refuse(req, timeout=None):
+        raise failure()
+    monkeypatch.setattr(core.urllib.request, "urlopen", refuse)
+    out = core.twenty_sync_result(_row())
+    assert out == {"synced": False, "reason": reason, "step": "company", "http": http} and core.twenty_sync(_row()) is False
+
+
+def test_an_answer_without_a_record_is_not_a_sync(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+    monkeypatch.setattr(core.urllib.request, "urlopen", lambda req, timeout=None: _Resp({"data": {}}))
+    out = core.twenty_sync_result(_row())
+    assert out["synced"] is False and out["reason"] == "twenty_returned_no_record" and out["step"] == "opportunity"
+
+
+def test_without_a_key_nothing_is_attempted(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "")
+    monkeypatch.setattr(core.urllib.request, "urlopen", lambda *a, **k: pytest.fail("no request is made without a key"))
+    assert core.twenty_sync_result(_row()) == {"synced": False, "reason": "no_api_key", "step": None, "http": None}
+
+
+def test_an_approved_lead_that_twenty_refused_says_so_in_the_result(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+
+    def refuse(req, timeout=None):
+        raise _http_error(400)
+    monkeypatch.setattr(core.urllib.request, "urlopen", refuse)
+    core._STATE["accounts"] = [_row()]
+    out = core.approve({"account": "northwind-check", "_approval": {"approved": True}})
+    assert out["twenty_synced"] is False and out["twenty_sync"] == {"reason": "twenty_refused_record", "step": "company", "http": 400}
+    assert core.approve({"account": "northwind-check"})["status"] == "pending_approval", "the gate is where it was"
