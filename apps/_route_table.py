@@ -97,6 +97,8 @@ PUBLIC["agentic-privacy"].update({
     ("GET", "/verify"): "the confirm page for the emailed single-use link (does not consume the token)", ("POST", "/verify"): "redeems the single-use emailed token",
     ("GET", "/export"): "single-use short-TTL export protected by request id + token issued after /verify"})
 PUBLIC["edge-sentinel"][("GET", "/readyz")] = "readiness probe: {ready, per-check booleans, profile name, a connectivity boolean}; no case or activity data"
+PUBLIC["edge-sentinel"][("GET", "/enforcement/{address}")] = ("opt-in (SENTINEL_ENFORCEMENT_PROBE=1; 404 otherwise, and never with the fixture core): one word, whether a "
+                                                              "DOCUMENTATION address (RFC 5737, RFC 3849) has an active ban; no real address can be asked about; reads only")
 PUBLIC["document-editor"][("GET", "/content/{token}")] = "short-lived signed, document-scoped token fetch (the external editor cannot send a bearer); authenticated by the token alone"
 # the Operator SDK's own routes (authenticated by the operator boundary; the capabilities themselves are gated by Operator._execute) and the framework's
 OPERATOR_ROUTES = {("POST", "/invoke"), ("GET", "/capabilities")}

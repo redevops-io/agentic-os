@@ -7,6 +7,7 @@ on the wire.
 
 Capabilities (syscalls):
   growth.analyze            — read-only lead-source attribution + a shift recommendation
+  growth.remeasure          — the same read again, as a second outcome (after a change)
   growth.reallocate_budget  — stage an ad-budget change      [approval gate: budget_change]
 
 The budget-moving capability carries approval_required=True (matches modules.yaml's
@@ -27,6 +28,15 @@ def build_growth_operator() -> Operator:
             lambda inp: core.analyze(),
             provides=["growth_attribution"],
             outputs={"growth_attribution": "lead-source attribution + shift recommendation from the live Umami core"},
+            estimated_value="medium", deterministic=False, latency_ms=400,
+            concurrency_mode="read_only",
+        ),
+        # The same read, as its own outcome: a loop that measures before and after a change needs two distinct facts.
+        capability(
+            "growth.remeasure",
+            lambda inp: {**core.analyze(), "growth_remeasured": True},
+            provides=["growth_remeasured"],
+            outputs={"growth_remeasured": "the attribution reading taken again, after a change"},
             estimated_value="medium", deterministic=False, latency_ms=400,
             concurrency_mode="read_only",
         ),

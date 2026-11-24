@@ -120,6 +120,9 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8207:8207 \
 | `CHATWOOT_API_URL` | `http://localhost:3003` | Chatwoot REST base. |
 | `CHATWOOT_API_TOKEN` | _(from .env)_ | Agent access token — sent as the `api_access_token` header. |
 | `CHATWOOT_ACCOUNT_ID` | `1` | The account id (Meridian Wealth Management). |
+| `SUPPORT_TENANT` | `Meridian Wealth Management` (the demo tenant of the seed data) | The name the app speaks for. It is written into the welcome message a customer reads and into the drafts an agent reviews: set it when you connect your own Chatwoot. |
+| `SUPPORT_TENANT_DESCRIPTION` | the demo firm's description for the demo tenant, empty otherwise | One clause for the model, for example `a bicycle repair shop`. Nothing is invented when it is empty. |
+| `SUPPORT_TOPICS` | the demo firm's topics for the demo tenant, `your account` otherwise | What the welcome message offers help with. |
 | `CHATWOOT_FRONT_URL` | `http://localhost:3003` | Chatwoot UI link for the "Open in Chatwoot ↗" button (the hybrid / human-operable path). |
 | `PORT` | `8207` | uvicorn bind port. |
 | `REDEVOPS_LLM_BASE_URL` | _(optional)_ | In-boundary model endpoint used (via the governed router, as CUSTOMER_CONFIDENTIAL) for `draft_reply`; unset or refused => a deterministic template. Either way the draft is posted as a private note. |

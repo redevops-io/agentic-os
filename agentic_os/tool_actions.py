@@ -164,8 +164,10 @@ _OPERATOR_CAPABILITIES: dict[str, dict[str, str]] = {
               "books.reverse_entry": "write"},
     "compliance": {"compliance.explain": "read", "compliance.scan": "write", "compliance.remediate": "write", "compliance.file_consent": "write"},
     "edge-sentinel": {"sentinel.triage": "read", "sentinel.block_ip": "write", "sentinel.unblock_ip": "write"},
-    "growth-engine": {"growth.analyze": "read", "growth.reallocate_budget": "write"},
-    "market-radar": {"radar.brief": "read", "radar.add_watch": "write", "radar.synthetic_study": "write"},   # writes nothing, but spends model calls: held to the stricter action
+    "growth-engine": {"growth.analyze": "read", "growth.remeasure": "read", "growth.reallocate_budget": "write"},
+    # the loop on the company's own site reads public pages and writes nothing; the approval is a person's decision and is held to "write"
+    "market-radar": {"radar.brief": "read", "radar.add_watch": "write", "radar.synthetic_study": "write", "radar.site_audit": "read",
+                     "radar.recommend": "read", "radar.approve_plan": "write", "radar.verify_change": "read", "radar.reassess": "read"},   # writes nothing, but spends model calls: held to the stricter action
 }
 for _app, _caps in _OPERATOR_CAPABILITIES.items():
     TOOL_ACTIONS[_app].update(_caps)

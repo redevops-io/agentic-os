@@ -57,6 +57,12 @@ jobs:
         if: ${{ !startsWith(env.BUNDLE_TAG, '0.1.0') && !startsWith(env.BUNDLE_TAG, '0.1.1') && !startsWith(env.BUNDLE_TAG, '0.1.2') && !startsWith(env.BUNDLE_TAG, '0.1.3') && !startsWith(env.BUNDLE_TAG, '0.1.4') && !startsWith(env.BUNDLE_TAG, '0.1.5') && !startsWith(env.BUNDLE_TAG, '0.1.6') }}
         working-directory: deploy/combined
         run: ./bundle-loop.sh
+      # A REAL remediation, not a change of fixture: the same QA plan fails against the live Edge Sentinel, the edge block is proposed, approved and
+      # executed through Projects (a real CrowdSec decision, read back), and the same plan then passes. From bundle 0.1.8 (Edge Sentinel 0.6.6, redevops-qa 0.6.5).
+      - name: Real remediation (QA finding, approved edge block, the same plan re-tested against the live edge)
+        if: ${{ !startsWith(env.BUNDLE_TAG, '0.1.0') && !startsWith(env.BUNDLE_TAG, '0.1.1') && !startsWith(env.BUNDLE_TAG, '0.1.2') && !startsWith(env.BUNDLE_TAG, '0.1.3') && !startsWith(env.BUNDLE_TAG, '0.1.4') && !startsWith(env.BUNDLE_TAG, '0.1.5') && !startsWith(env.BUNDLE_TAG, '0.1.6') && !startsWith(env.BUNDLE_TAG, '0.1.7') }}
+        working-directory: deploy/combined
+        run: ./bundle-remediation.sh
       - name: On failure, keep the evidence (no secret values)
         if: failure()
         working-directory: deploy/combined

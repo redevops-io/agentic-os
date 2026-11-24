@@ -54,11 +54,19 @@ class Qa:
 
 class Sentinel:
     def __init__(self):
-        self.events, self.resolutions = [], []
+        self.events, self.resolutions, self.proposals = [], [], []
+        self.case_ = {"summary": {"status": "INVESTIGATING"}, "title": f"qa.finding qa-run:{F}", "actions_detail": []}
 
     def report_event(self, event, actor="", source=""):
         self.events.append((dict(event), actor))
         return {"case_id": CASE, "status": "INVESTIGATING"}
+
+    def case(self, case_id, actor="", source=""):
+        return dict(self.case_)
+
+    def propose(self, *, capability, ip, reason, duration_hours=None, actor="", source=""):
+        self.proposals.append({"capability": capability, "ip": ip, "reason": reason, "duration_hours": duration_hours, "actor": actor, "source": source})
+        return {"case_id": "case-fedcba9876543210", "request_id": "act-00000001", "state": "AWAITING_APPROVAL", "digest": "d" * 64}
 
     def resolve_case(self, case_id, *, evidence, digest, approval_token, actor):
         self.resolutions.append({"case_id": case_id, "evidence": dict(evidence), "digest": digest, "token": approval_token, "actor": actor})
@@ -197,8 +205,48 @@ def test_the_digest_is_the_one_edge_sentinel_recomputes():
     assert set(ev) <= set(live.RESOLUTION_FIELDS)                 # Projects sends nothing Sentinel would refuse as unknown
 
 
-def test_the_three_routes_are_human_only():
+def test_a_remedy_is_only_staged_at_the_security_product_and_names_the_case_and_the_run():
+    h = hub()
+    out = R.propose_edge_block(h, "edge-sentinel", CASE, finding_run_id=F, ip="203.0.113.7", duration_hours=1, principal="alice")
+    (p,) = h.s.proposals
+    assert p == {"capability": "sentinel.block_ip", "ip": "203.0.113.7", "reason": f"remedy for {CASE} (qa-run:{F})", "duration_hours": 1,
+                 "actor": "projects:alice", "source": "projects"}
+    assert out["request_id"] == "act-00000001" and out["state"] == "AWAITING_APPROVAL" and out["digest"] == "d" * 64 and out["case_id"] == CASE
+    assert h.s.resolutions == [] and h.q.started == [], "proposing a remedy decides nothing, executes nothing and starts no run"
+
+
+@pytest.mark.parametrize("case, run_id, why", [
+    ({"summary": {"status": "RESOLVED"}, "title": f"qa-run:{F}"}, F, "not under investigation"),
+    ({"summary": {"status": "INVESTIGATING"}, "title": "crowdsecurity/ssh-bf from 9.9.9.9"}, F, "not opened from that run"),
+    ({"summary": {"status": "INVESTIGATING"}, "title": f"qa-run:{F}"}, T, "not opened from that run"),
+])
+def test_no_remedy_is_staged_for_a_case_that_is_closed_or_belongs_to_another_run(case, run_id, why):
+    h = hub()
+    h.s.case_ = case
+    with pytest.raises(ProductError) as e:
+        R.propose_edge_block(h, "edge-sentinel", CASE, finding_run_id=run_id, ip="203.0.113.7", principal="alice")
+    assert e.value.status == 409 and why in str(e.value) and h.s.proposals == []
+
+
+def test_the_remedy_route_takes_one_address_and_nothing_else():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from agentic_os.products import routes
+    h = hub()
+    app = FastAPI()
+    app.include_router(routes.make_router(h))
+    c = TestClient(app)
+    url = f"/api/products/edge-sentinel/cases/{CASE}/remedy"
+    ok = {"type": "edge_block", "finding_run_id": F, "ip": "203.0.113.7"}
+    for bad in ({}, {**ok, "type": "restart"}, {**ok, "ip": "203.0.113.0/24"}, {**ok, "ip": "not-an-address"}, {**ok, "ip": 7}, {**ok, "duration_hours": 0},
+                {**ok, "duration_hours": True}, {**ok, "finding_run_id": "x"}, {**ok, "approved": True}):
+        assert c.post(url, json=bad).status_code == 422, bad
+    assert c.post("/api/products/edge-sentinel/cases/not-a-case/remedy", json=ok).status_code == 404
+    assert h.s.proposals == []
+
+
+def test_the_four_routes_are_human_only():
     from agentic_os.products.routes import PRODUCT_ROUTE_POLICIES as P
     for route in ("POST /api/products/{product_id}/runs/{run_id}/escalation", "POST /api/products/{product_id}/runs/{run_id}/retest",
-                  "POST /api/products/{product_id}/cases/{case_id}/resolution"):
+                  "POST /api/products/{product_id}/cases/{case_id}/remedy", "POST /api/products/{product_id}/cases/{case_id}/resolution"):
         assert P[route].access == "human_only"

@@ -36,6 +36,7 @@ EXTERNAL = {
     "crm.score_lead", "crm.research", "crm.draft_outreach", "crm.qualify", "lifecycle.compose_campaign", "support.draft_reply", "support.resolve", "support.escalate",
     "support.send_onboarding", "document.publish", "document.apply_patch", "document.set_label", "growth.reallocate_budget", "radar.add_watch", "add_watch", "privacy.intake",
     "privacy.access", "privacy.delete", "social.draft", "social.draft_visual", "radar.synthetic_study",
+    "radar.site_audit", "radar.verify_change", "radar.reassess",          # read the audited site over the network (public pages only)
 }
 # the behaviour is chosen by the caller's input (a mode flag, a playbook/target/vars argument, a free-form query): classified at the strictest action it can perform
 DYNAMIC = {"infra.plan", "infra.drift", "infra.configure", "infra.rollback_release", "infra.provision", "infra.destroy_delta", "compliance.scan", "scan_app", "scan_apps",

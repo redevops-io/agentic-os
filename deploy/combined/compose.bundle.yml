@@ -64,6 +64,9 @@ services:
       SENTINEL_PROTECTED_IPS: "${SENTINEL_PROTECTED_IPS:-}"
       SENTINEL_BLOCK_ALLOW_NETWORKS: "${SENTINEL_BLOCK_ALLOW_NETWORKS:-}"
       EDGE_SENTINEL_DEMO: "${EDGE_SENTINEL_DEMO:-}"
+      # off by default. bundle-remediation.sh sets it: a read-only page that says whether a DOCUMENTATION address is banned, so that
+      # redevops-qa can re-test an edge block against this real instance (apps/edge-sentinel/enforcement_probe.py).
+      SENTINEL_ENFORCEMENT_PROBE: "${SENTINEL_ENFORCEMENT_PROBE:-}"
     volumes:
       - edge-sentinel-data:/data
     read_only: true
@@ -103,6 +106,47 @@ services:
     mem_limit: 2g
     cpus: 2
     networks: [ts]
+
+  # Only with `--profile remediation` (bundle-remediation.sh). redevops-qa accepts an external target on ITS OWN loopback and nowhere
+  # else, so this joins the QA container's network namespace and forwards 127.0.0.1:8203 there to Edge Sentinel. It is the QA image
+  # (no extra image to pull) running a 15-line TCP forwarder; it holds no credential and publishes no port.
+  qa-sentinel-loopback:
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.4}"
+    platform: "${QA_PLATFORM:-linux/amd64}"
+    profiles: ["remediation"]
+    restart: unless-stopped
+    network_mode: "service:redevops-qa"
+    depends_on:
+      redevops-qa:
+        condition: service_healthy
+    entrypoint:
+      - /opt/redevops-qa/venv/bin/python
+      - -I
+      - -c
+      - |
+        import asyncio
+        async def pipe(r, w):
+            try:
+                while (d := await r.read(65536)):
+                    w.write(d); await w.drain()
+            except OSError:
+                pass
+            finally:
+                w.close()
+        async def conn(r, w):
+            try:
+                ur, uw = await asyncio.open_connection("edge-sentinel", 8203)
+            except OSError:
+                w.close(); return
+            await asyncio.gather(pipe(r, uw), pipe(ur, w), return_exceptions=True)
+        async def main():
+            await (await asyncio.start_server(conn, "127.0.0.1", 8203)).serve_forever()
+        asyncio.run(main())
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 128m
 
   projects:
     image: "${PROJECTS_IMAGE:-ghcr.io/redevops-io/redevops-projects}:${PROJECTS_IMAGE_TAG:?set PROJECTS_IMAGE_TAG in .env}"

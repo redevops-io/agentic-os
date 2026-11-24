@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from agentic_os.mission.operator_sdk import Operator, capability
 
-from . import core, synthetic
+from . import core, loop, synthetic
 
 
 def build_market_radar_operator() -> Operator:
@@ -54,4 +54,22 @@ def build_market_radar_operator() -> Operator:
             estimated_value="low", deterministic=False, latency_ms=120000,
             permissions=["market-radar:write"], concurrency_mode="read_only",   # no data is written; it spends model calls, so it needs the stricter permission
         ),
+        # ── the loop on the company's own site (loop.py): audit, recommend, approve, verify, reassess. All read-only except the approval,
+        #    which is a person's decision and writes nothing either. The site itself is changed elsewhere; verify refuses until it is.
+        capability("radar.site_audit", lambda inp: loop.site_audit(inp), provides=["site_audit"],
+                   inputs={"site": "the site to audit, https://..."},
+                   outputs={"site_audit": "findings on discoverability and funnel instrumentation, each with a machine check"},
+                   estimated_value="high", deterministic=False, latency_ms=20000, concurrency_mode="read_only"),
+        capability("radar.recommend", lambda inp: loop.recommend(inp), provides=["recommendations"],
+                   outputs={"recommendations": "a ranked list with evidence, checks and a digest"},
+                   estimated_value="high", latency_ms=50, concurrency_mode="read_only"),
+        capability("radar.approve_plan", loop.approve_plan, provides=["change_plan_approved"],
+                   outputs={"change_plan_approved": "the recommendations a person approved, bound to their digest"},
+                   approval_required=True, estimated_value="high", latency_ms=50, permissions=["market-radar:write"]),
+        capability("radar.verify_change", lambda inp: loop.verify_change(inp), provides=["change_verified"],
+                   outputs={"change_verified": "every approved item's checks pass on the live site"},
+                   estimated_value="high", deterministic=False, latency_ms=20000, concurrency_mode="read_only"),
+        capability("radar.reassess", lambda inp: loop.reassess(inp), provides=["reassessment"],
+                   outputs={"reassessment": "resolved, remaining and new findings after the change: the next round's input"},
+                   estimated_value="medium", deterministic=False, latency_ms=20000, concurrency_mode="read_only"),
     ])

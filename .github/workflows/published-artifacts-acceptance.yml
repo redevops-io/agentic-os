@@ -27,13 +27,15 @@ jobs:
           - {name: macos-arm64 (dmg), runner: macos-15, pattern: "*_aarch64.dmg"}
           - {name: windows-x64 (msi), runner: windows-2022, pattern: "*_x64_en-US.msi"}
           - {name: windows-x64 (nsis exe), runner: windows-2022, pattern: "*_x64-setup.exe"}
+          - {name: linux-amd64 (deb), runner: ubuntu-24.04, pattern: "*_amd64.deb"}
+          - {name: linux-amd64 (AppImage), runner: ubuntu-24.04, pattern: "*_amd64.AppImage"}
           - {name: linux-arm64 (deb), runner: ubuntu-24.04-arm, pattern: "*_arm64.deb"}
           - {name: linux-arm64 (AppImage), runner: ubuntu-24.04-arm, pattern: "*_aarch64.AppImage"}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ inputs.release_tag || 'v0.6.1' }}
+      TAG: ${{ inputs.release_tag || 'r0prime-v0.1.3' }}
       PATTERN: ${{ matrix.pattern }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -45,13 +47,17 @@ jobs:
       - name: Download the published asset and check it against the release manifest
         shell: bash
         run: |
-          mkdir -p dl && gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$PATTERN" -p release-manifest.json -D dl
+          # A release carries either the signed manifest (v0.6.1) or checksum lists from the signing runs (the r0prime prereleases).
+          mkdir -p dl ref && gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$PATTERN" -D dl
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p release-manifest.json -p "SHA256SUMS*" -D ref
           python - <<'PY'
-          import glob, hashlib, json, os
-          asset = [f for f in glob.glob("dl/*") if not f.endswith("release-manifest.json")][0]
+          import glob, hashlib, os
+          asset = glob.glob("dl/*")[0]
           h = hashlib.sha256(open(asset, "rb").read()).hexdigest()
-          ok = h in json.dumps(json.load(open("dl/release-manifest.json")))
-          print(asset, h, "listed in the manifest:", ok)
+          refs = {f: open(f, encoding="utf-8", errors="replace").read() for f in glob.glob("ref/*")}
+          where = [os.path.basename(f) for f, t in refs.items() if h in t]
+          ok = bool(where)
+          print(asset, h, "listed in:", where or "NOTHING the release publishes")
           open(os.environ["GITHUB_ENV"], "a").write(f"ASSET={asset}\nASSET_SHA256={h}\n")
           raise SystemExit(0 if ok else 1)
           PY
@@ -104,6 +110,9 @@ jobs:
           mkdir -p uiroot && (cd uiroot && npm init -y >/dev/null && npm i --silent @playwright/test@1.56.1 axe-core@4.10.3 && if [ "$RUNNER_OS" = Linux ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi)
           # v0.6.1 predates the explicit profile (launcher 0.1.2): recorded as a known defect of that release, not as a pass.
           if [ "$TAG" = v0.6.1 ]; then export KNOWN_NO_PROFILE=1; fi
+          # r0prime-v0.1.3 (application 0.1.2) on Linux: the workspace is 14 px wider than a 390 px window where scrollbars are not overlaid.
+          # Recorded as a known defect of that release until the Projects UI is fixed; any other release must pass the check.
+          if [ "$TAG" = r0prime-v0.1.3 ] && [ "$RUNNER_OS" = Linux ]; then export KNOWN_NARROW_OVERFLOW=1; fi
           PW_ROOT="$PWD/uiroot" node packaging/acceptance/ui_workflow.mjs "$SIDECAR" ui_result.json
       - name: Windows - uninstall leaves nothing running
         if: runner.os == 'Windows' && endsWith(env.ASSET, '.msi')
