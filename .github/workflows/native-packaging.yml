@@ -60,7 +60,7 @@ jobs:
         run: |
           echo "UV_PYTHON_PREFERENCE=only-managed" >> "$GITHUB_ENV"
           echo "UV_PYTHON_DOWNLOADS=manual" >> "$GITHUB_ENV"
-          UV_PYTHON_PREFERENCE=only-managed uv python install 3.12.10
+          UV_PYTHON_PREFERENCE=only-managed UV_PYTHON_DOWNLOADS=manual uv python install 3.12.10
 
       - name: Rust toolchain 1.98.1 (Tauri; packaging/toolchain.env RUST_VERSION)
         uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7  # branch 1.98.1
