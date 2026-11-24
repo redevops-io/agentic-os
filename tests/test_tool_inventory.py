@@ -53,7 +53,10 @@ def test_a_tool_whose_behaviour_is_chosen_by_the_caller_is_never_classified_read
 
 
 def test_a_tool_that_launches_a_process_or_calls_out_is_never_classified_read_except_the_reviewed_reads():
-    reviewed_reads = {"sentinel.triage", "outreach.refresh", "bi.ask", "bi.refresh", "bi.summary", "growth.analyze", "infra.verify", "document.connect_check", "document.inspect",
+    # radar.site_audit / verify_change / reassess (reviewed 2026-11-24): GET requests to PUBLIC pages of one site that passed the public-host
+    # check, no redirects followed, nothing written anywhere; growth.remeasure is growth.analyze under a second outcome name.
+    reviewed_reads = {"radar.site_audit", "radar.verify_change", "radar.reassess", "growth.remeasure",
+                      "sentinel.triage", "outreach.refresh", "bi.ask", "bi.refresh", "bi.summary", "growth.analyze", "infra.verify", "document.connect_check", "document.inspect",
                       "document.open_session", "document.propose_patch"}
     for tool, app, action, cat, *_ in rows():
         if cat == "launches external process or network":

@@ -1283,6 +1283,22 @@ class MissionRuntime:
             self._fail(m, plan, reason=f"{node.capability}: staged_not_executed")
             return False
         self._lease_settle(m, node.id, result)   # it executed: counters now hold the confirmed consumption
+        # A READ that reports its own failure is not a success. Verification below covers consequential nodes only, so without this a
+        # read-only step answering {"status": "error", ...} was recorded as NodeSucceeded, its error dict became the world fact of its
+        # outcome, and every later step ran on it (found 2026-11-24: a recommendation step "succeeded" with no audit to read). The same
+        # shared classifier decides; the operator's own short error and summary are kept with the failure.
+        if not needs_verification(node):
+            failed, why = result_failed(result, side_effecting=False, declares_outputs=True)
+            if failed:
+                detail = {k: str(result.get(k))[:300] for k in ("error", "summary") if isinstance(result, dict) and result.get(k)}
+                self.store.append("NodeFailed", m.id, {"node_id": node.id, "capability": node.capability, "reason": "operator_reported_failure",
+                                                       "error": why, **({"operator": detail} if detail else {})})
+                self._meter(m, node, "error")
+                self.learning.record_capability(node.capability, False)
+                self._observe_routing(node, False)
+                self._saga(m, plan, world)
+                self._fail(m, plan, reason=f"{node.capability}: {detail.get('error') or why}")
+                return False
         # P7B: verify a consequential result BEFORE it becomes authoritative world state.
         if needs_verification(node) and node.id not in self._verify_ok(m.id):
             vr = self.verifier.verify(node, result, world, m)
