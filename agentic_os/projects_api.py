@@ -1153,6 +1153,12 @@ def sidekick_reply(ctx: Dict[str, Any], text: str,
     # Standalone products: a product-related message becomes a typed tool call (read, or a proposal that awaits a
     # person), or a question for the missing input. None => unchanged behaviour (no products, or not about one).
     if provider is not None:
+        # A question asked from a dashboard is answered from the evidence behind that number (never from a script).
+        from agentic_os.dashboards import sidekick_hook as _dashboard_hook
+        reply = _dashboard_hook(provider, ctx, text)
+        if reply is not None:
+            return reply
+    if provider is not None:
         from agentic_os.products import sidekick_hook as _product_hook
         reply = _product_hook(provider, ctx, text)
         if reply is not None:
@@ -1527,6 +1533,13 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # registry. It layers real product rows over the provider and adds the product routes (before the UI mount below).
     from agentic_os.products import mount_products as _mount_products
     prov, _product_policies = _mount_products(app, prov)
+    # Dashboards: native analytical projections over what is connected (agentic_os/dashboards). Read routes plus the
+    # caller's own saved views; they need the acting principal, so the principal middleware is mounted when products did not.
+    from agentic_os.dashboards import mount_dashboards as _mount_dashboards
+    if getattr(prov, "products_hub", None) is None:
+        from agentic_os.products.principal import PrincipalMiddleware as _PrincipalMiddleware
+        app.add_middleware(_PrincipalMiddleware)
+    _dash, _dashboard_policies = _mount_dashboards(app, prov)
     # Same-origin only by default (the bundled UI is served from this app, so it needs no CORS). Cross-origin
     # access is opt-in: `allow_origins=` or $PROJECTS_CORS_ORIGINS (comma-separated origins).
     origins = allow_origins or [o.strip() for o in _os_env.environ.get("PROJECTS_CORS_ORIGINS", "").split(",")
@@ -1933,7 +1946,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
     from agentic_os.app_kit import route_authz as _route_authz
     from agentic_os.projects_route_policy import APP as _APP, PROJECTS_ROUTE_POLICIES
-    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **_product_policies})
+    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **_product_policies, **_dashboard_policies})
 
     return app
 
