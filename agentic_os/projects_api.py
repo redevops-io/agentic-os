@@ -1549,6 +1549,10 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             CORSMiddleware, allow_origins=origins,
             allow_methods=["*"], allow_headers=["*"])
 
+    @app.get("/healthz")
+    def _healthz() -> dict:
+        return {"status": "ok"}
+
     @app.get("/api/projects")
     def _projects() -> List[dict]:
         return prov.projects()
@@ -1947,6 +1951,12 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     from agentic_os.app_kit import route_authz as _route_authz
     from agentic_os.projects_route_policy import APP as _APP, PROJECTS_ROUTE_POLICIES
     _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **_product_policies, **_dashboard_policies})
+
+    # An optional sign-in in front of everything (PROJECTS_OPERATOR_GATE=1): added last, so it is the outermost layer and a
+    # refused request reaches no route, no static file and no other middleware. See agentic_os/projects/operator_gate.py.
+    from agentic_os.projects.operator_gate import OperatorGateMiddleware as _OperatorGate, gate_enabled as _gate_enabled
+    if _gate_enabled():
+        app.add_middleware(_OperatorGate)
 
     return app
 

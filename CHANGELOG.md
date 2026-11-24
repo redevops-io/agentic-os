@@ -15,7 +15,12 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.5; no version set)
+## Unreleased (after v0.4.6; no version set)
+
+## v0.4.6 (a sign-in in front of Projects)
+
+- **`PROJECTS_OPERATOR_GATE=1` puts a sign-in in front of the whole Projects app** (UI, API, static files): every request needs the operator's HTTP Basic credential or a control-plane bearer, the browser is asked once, and the person is then the same principal for reads and writes. With the gate on and no credential configured every request is answered 503; only `GET /healthz` (new, liveness only) is exempt. Off by default: an evaluation deployment is unchanged. For a deployment whose dashboards read a company's real applications.
+- Dashboards: an older Postiz API shape; a Metabase source must prove its sign-in even with no card configured; the connected applications are read concurrently; a forced refresh never re-asks a rate-limited source; the test-run reporter sends a named client identity.
 
 ## v0.4.5 (dashboards in Projects)
 
