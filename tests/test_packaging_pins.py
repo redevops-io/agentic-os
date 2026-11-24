@@ -215,7 +215,7 @@ def test_cargo_lock_pins_frozen_ci_versions():
     assert ("redevops-launcher", "0.1.0") in recovered
     third_party = {r for r in recovered if r[0] != "redevops-launcher"}
     assert third_party <= rows, sorted(third_party - rows)[:5]
-    assert ("redevops-launcher", "0.1.1") in rows
+    assert ("redevops-launcher", "0.1.2") in rows
     assert len(recovered) >= 340
 
 

@@ -8,9 +8,14 @@
 * ``test``        - injected guards and deterministic clocks; durability is not required.
 
 Selected by ``AGENTIC_OS_PROFILE``. ``AGENTIC_OS_REQUIRE_AUTHORITY=1`` is kept as an alias for ``production``.
-When neither is set the process runs as ``development`` and says so once on the log: an unset profile is never a
-silent grant of authority, but it does not break an existing install that has no envelope database yet. Any other
-value is an error rather than a guess.
+Any other value is an error rather than a guess.
+
+When neither is set, what happens depends on how the code is running:
+
+* A **packaged build** (``AGENTIC_OS_PACKAGED=1``: the frozen desktop sidecar and every shipped image set it) refuses to start. The desktop
+  sidecar never gets that far: ``agentic_os.desktop_profile`` selects ``production`` with durable stores in the per-user state directory
+  before anything else runs, so a missing setting never leaves the production requirements off.
+* A source checkout (a developer's shell, a test run) runs as ``development`` and says so once on the log.
 """
 from __future__ import annotations
 
@@ -20,6 +25,14 @@ import os
 PRODUCTION, DEVELOPMENT, TEST = "production", "development", "test"
 PROFILES = (PRODUCTION, DEVELOPMENT, TEST)
 ENV_PROFILE = "AGENTIC_OS_PROFILE"
+ENV_PACKAGED = "AGENTIC_OS_PACKAGED"
+
+
+def packaged() -> bool:
+    """A shipped build (frozen sidecar, container image), as opposed to a source checkout. Set by the build, not by the person running it."""
+    return os.environ.get(ENV_PACKAGED, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 _log = logging.getLogger("agentic_os.profile")
 _warned = False
 
@@ -37,6 +50,10 @@ def profile() -> str:
         return raw
     if os.environ.get("AGENTIC_OS_REQUIRE_AUTHORITY", "").strip().lower() in ("1", "true", "yes", "on"):
         return PRODUCTION
+    if packaged():
+        raise ProfileError(f"{ENV_PROFILE} is not set in a packaged build. Set {ENV_PROFILE}=production (with AGENTIC_OS_AUTHORITY_DB and "
+                           f"AGENTIC_OS_REPLAY_DB on durable storage) for anything that acts on real systems, or {ENV_PROFILE}=development to "
+                           "state that this is an evaluation without the production requirements. It is never assumed.")
     if not _warned:
         _warned = True
         _log.warning("%s is not set: running as 'development' - the production requirements (durable authority store, operator "

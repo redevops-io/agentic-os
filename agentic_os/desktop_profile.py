@@ -1,0 +1,65 @@
+"""The execution profile of the packaged desktop sidecar: chosen explicitly, before anything else runs.
+
+The frozen sidecar used to start with no ``AGENTIC_OS_PROFILE`` at all, so it ran as ``development`` by default. A packaged build must not get
+its security posture from a missing setting (``mission/profile.py`` refuses that). The desktop app has no deployer who could set one, so the
+sidecar entry point calls :func:`apply` first:
+
+* it marks the process as a packaged build (``AGENTIC_OS_PACKAGED=1``);
+* when no profile was chosen it selects ``production`` and points ``AGENTIC_OS_AUTHORITY_DB`` and ``AGENTIC_OS_REPLAY_DB`` at private files in
+  the per-user state directory (next to the registration audit), creating that directory 0700;
+* a profile somebody did set is kept as it is. ``production`` without stores gets the same per-user stores; ``development`` and ``test`` are
+  left alone, as a stated choice.
+
+Pure with respect to its ``env`` argument except for creating the state directory.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from typing import MutableMapping, Optional
+
+from .desktop_sources import default_audit_path
+from .mission.profile import ENV_PACKAGED, ENV_PROFILE, PRODUCTION
+
+ENV_AUTHORITY_DB = "AGENTIC_OS_AUTHORITY_DB"
+ENV_REPLAY_DB = "AGENTIC_OS_REPLAY_DB"
+STATE_SUBDIR = "authority"
+_TRUE = ("1", "true", "yes", "on")
+
+
+def state_dir(env=None, home: Optional[str] = None, platform: Optional[str] = None) -> str:
+    """``<per-user application state>/<app id>/authority``: the sibling of the directory that holds the registration audit."""
+    platform = sys.platform if platform is None else platform
+    audit = default_audit_path({k: v for k, v in (env or os.environ).items() if k != "AGENTIC_OS_SOURCES_AUDIT_PATH"}, home, platform)
+    import ntpath
+    import posixpath
+    path = ntpath if platform.startswith("win") else posixpath
+    return path.join(path.dirname(path.dirname(audit)), STATE_SUBDIR)
+
+
+def apply(env: Optional[MutableMapping[str, str]] = None, home: Optional[str] = None, platform: Optional[str] = None) -> dict:
+    """Make the profile explicit in ``env``. Returns what was decided: ``{"profile", "chosen_here", "authority_db", "replay_db"}``."""
+    env = os.environ if env is None else env
+    env[ENV_PACKAGED] = "1"
+    raw = (env.get(ENV_PROFILE) or "").strip().lower()
+    alias = (env.get("AGENTIC_OS_REQUIRE_AUTHORITY") or "").strip().lower() in _TRUE
+    chosen_here = not raw and not alias
+    if chosen_here:
+        env[ENV_PROFILE] = PRODUCTION
+    effective = (env.get(ENV_PROFILE) or "").strip().lower() or (PRODUCTION if alias else "")
+    if effective == PRODUCTION:
+        d = state_dir(env, home, platform)
+        missing = [k for k in (ENV_AUTHORITY_DB, ENV_REPLAY_DB) if not (env.get(k) or "").strip()]
+        if missing:
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(d, 0o700)
+            except OSError:
+                pass        # Windows: the per-user profile's ACL is the protection there
+            sep = "\\" if (sys.platform if platform is None else platform).startswith("win") else "/"
+            if ENV_AUTHORITY_DB in missing:
+                env[ENV_AUTHORITY_DB] = d + sep + "authority.db"
+            if ENV_REPLAY_DB in missing:
+                env[ENV_REPLAY_DB] = d + sep + "replay.db"
+    return {"profile": effective, "chosen_here": chosen_here,
+            "authority_db": (env.get(ENV_AUTHORITY_DB) or ""), "replay_db": (env.get(ENV_REPLAY_DB) or "")}
