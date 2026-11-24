@@ -46,10 +46,12 @@ from selenium.webdriver.support.ui import WebDriverWait  # noqa: E402
 home = tempfile.mkdtemp(prefix="aa-gui-")
 stub = os.path.join(home, "bin"); os.makedirs(stub)
 opened = os.path.join(home, "opened.txt")
-env = dict(os.environ, HOME=home, USERPROFILE=home, LOCALAPPDATA=os.path.join(home, "Local"), APPDATA=os.path.join(home, "AppData"),
-           XDG_STATE_HOME=os.path.join(home, "state"), XDG_DATA_HOME=os.path.join(home, "share"), XDG_CONFIG_HOME=os.path.join(home, "config"))
-for k in ("LOCALAPPDATA", "APPDATA", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
-    os.makedirs(env[k], exist_ok=True)
+env = dict(os.environ)
+if sys.platform.startswith("linux"):                     # a throwaway profile. On Windows the launcher resolves its folders through the
+    env.update(HOME=home, XDG_STATE_HOME=os.path.join(home, "state"), XDG_DATA_HOME=os.path.join(home, "share"),   # system, which refuses a
+               XDG_CONFIG_HOME=os.path.join(home, "config"))                                                        # redirected profile
+    for k in ("XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
+        os.makedirs(env[k], exist_ok=True)
 if sys.platform.startswith("linux"):                     # the hand-off to the browser is recorded, not performed: there is no browser to watch here
     with open(os.path.join(stub, "xdg-open"), "w") as f:
         f.write(f'#!/bin/sh\necho "$1" >> "{opened}"\n')
@@ -112,8 +114,12 @@ state = {}
 def t_check():
     driver.find_element(By.ID, "check").click()
     WebDriverWait(driver, 120).until(lambda d: text("out") and "Working" not in text("out"))
-    t = text("out"); assert len(t) > 40 and not t.startswith("Error"), t[:300].replace("\n", " / ")
-    return t.replace("\n", " ")[:120]
+    t = text("out")
+    # The report ends with a verdict. "blocked" is a verdict, not a failure of the button (Windows has no containment layer, and the report
+    # says so); the window shows it under "Error:" because the command exits 1. What must hold: the report itself is shown.
+    assert "device readiness" in t and re.search(r"device\s*:\s*(verified|blocked|degraded)", t), t[:300].replace("\n", " / ")
+    verdict = re.search(r"device\s*:\s*(\w+)", t).group(1)
+    return f"verdict {verdict}" + (" (shown under 'Error:' because the report exits 1)" if t.startswith("Error") else "")
 
 
 def t_start():
