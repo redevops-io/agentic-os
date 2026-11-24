@@ -135,6 +135,30 @@ jobs:
           PW_ROOT: ${{ github.workspace }}/uiroot
         run: node packaging/acceptance/ui_workflow.mjs "$SIDECAR" ui_result.json
 
+      # ── the launcher window itself (WebDriver through tauri-driver; macOS has no driver for its web view) ─────────────
+      - name: Linux - the launcher window (Start, Stop, About, close) under a virtual display
+        if: runner.os == 'Linux' && endsWith(env.NEW, '.deb')
+        run: |
+          sudo apt-get install -y webkit2gtk-driver xvfb >/dev/null
+          cargo install tauri-driver --locked --quiet
+          pip install --quiet selenium
+          xvfb-run -a python packaging/acceptance/launcher_gui.py "$(command -v agentic-r0prime)" launcher_gui.json
+      - name: Windows - the launcher window (Start, Stop, About, close)
+        if: runner.os == 'Windows' && endsWith(env.NEW, '.msi')
+        shell: pwsh
+        run: |
+          cargo install tauri-driver --locked --quiet
+          pip install --quiet selenium
+          $app = Join-Path (Split-Path $env:SIDECAR) 'agentic-r0prime.exe'
+          if (-not (Test-Path $app)) { throw "launcher not found next to the sidecar: $app" }
+          # the WebDriver must match the WebView2 runtime that renders the window, not the Edge browser
+          $wv = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue).pv
+          "WebView2 runtime $wv"
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$wv/edgedriver_win64.zip" -OutFile edgedriver.zip
+          Expand-Archive edgedriver.zip -DestinationPath edgedriver -Force
+          $env:NATIVE_DRIVER = (Resolve-Path edgedriver\msedgedriver.exe).Path
+          python packaging/acceptance/launcher_gui.py $app launcher_gui.json
+
       - name: Windows - uninstall leaves nothing behind
         if: runner.os == 'Windows' && endsWith(env.NEW, '.msi')
         shell: pwsh
@@ -154,6 +178,7 @@ jobs:
           path: |
             native_result.json
             ui_result.json
+            launcher_gui.json
             state_before.json
             state_after.json
           if-no-files-found: warn
