@@ -63,7 +63,7 @@ def build_market_radar_operator() -> Operator:
         capability("radar.recommend", lambda inp: loop.recommend(inp), provides=["recommendations"],
                    outputs={"recommendations": "a ranked list with evidence, checks and a digest"},
                    estimated_value="high", latency_ms=50, concurrency_mode="read_only"),
-        capability("radar.approve_plan", lambda inp: loop.approve_plan(inp), provides=["change_plan_approved"],
+        capability("radar.approve_plan", loop.approve_plan, provides=["change_plan_approved"],
                    outputs={"change_plan_approved": "the recommendations a person approved, bound to their digest"},
                    approval_required=True, estimated_value="high", latency_ms=50, permissions=["market-radar:write"]),
         capability("radar.verify_change", lambda inp: loop.verify_change(inp), provides=["change_verified"],
