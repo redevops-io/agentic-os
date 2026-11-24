@@ -16,8 +16,8 @@ results = []; T0 = time.time()
 
 
 def record(name, status, detail=""):
-    results.append({"name": name, "status": status, "detail": str(detail)[:400]})
-    print(f"{status:<12}{name}" + (f"  | {str(detail)[:200]}" if detail else ""), flush=True)
+    results.append({"name": name, "status": status, "detail": str(detail)[:600]})
+    print(f"{status:<12}{name}" + (f"  | {str(detail)[:400]}" if detail else "").replace("\n", " / "), flush=True)
 
 
 def check(name, fn):
@@ -48,6 +48,8 @@ stub = os.path.join(home, "bin"); os.makedirs(stub)
 opened = os.path.join(home, "opened.txt")
 env = dict(os.environ, HOME=home, USERPROFILE=home, LOCALAPPDATA=os.path.join(home, "Local"), APPDATA=os.path.join(home, "AppData"),
            XDG_STATE_HOME=os.path.join(home, "state"), XDG_DATA_HOME=os.path.join(home, "share"), XDG_CONFIG_HOME=os.path.join(home, "config"))
+for k in ("LOCALAPPDATA", "APPDATA", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
+    os.makedirs(env[k], exist_ok=True)
 if sys.platform.startswith("linux"):                     # the hand-off to the browser is recorded, not performed: there is no browser to watch here
     with open(os.path.join(stub, "xdg-open"), "w") as f:
         f.write(f'#!/bin/sh\necho "$1" >> "{opened}"\n')
@@ -110,7 +112,7 @@ state = {}
 def t_check():
     driver.find_element(By.ID, "check").click()
     WebDriverWait(driver, 120).until(lambda d: text("out") and "Working" not in text("out"))
-    t = text("out"); assert len(t) > 40 and not t.startswith("Error"), t[:200]
+    t = text("out"); assert len(t) > 40 and not t.startswith("Error"), t[:300].replace("\n", " / ")
     return t.replace("\n", " ")[:120]
 
 
@@ -118,7 +120,7 @@ def t_start():
     assert not sidecars(), "a sidecar was already running before Start"
     driver.find_element(By.ID, "start").click()
     WebDriverWait(driver, 180).until(lambda d: "Running at" in text("out") or text("out").startswith("Error"))
-    t = text("out"); assert "Running at" in t, t[:300]
+    t = text("out"); assert "Running at" in t, t[:300].replace("\n", " / ")
     m = re.search(r"Running at (http://127\.0\.0\.1:(\d+))", t); assert m, t[:200]
     state["origin"], state["port"] = m.group(1), int(m.group(2))
     assert listening(state["port"]), "nothing listens on the port the window names"

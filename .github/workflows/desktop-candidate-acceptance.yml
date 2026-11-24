@@ -137,14 +137,14 @@ jobs:
 
       # ── the launcher window itself (WebDriver through tauri-driver; macOS has no driver for its web view) ─────────────
       - name: Linux - the launcher window (Start, Stop, About, close) under a virtual display
-        if: runner.os == 'Linux' && endsWith(env.NEW, '.deb')
+        if: always() && runner.os == 'Linux' && endsWith(env.NEW, '.deb')
         run: |
           sudo apt-get install -y webkit2gtk-driver xvfb >/dev/null
           cargo install tauri-driver --locked --quiet
           pip install --quiet selenium
           xvfb-run -a python packaging/acceptance/launcher_gui.py "$(command -v agentic-r0prime)" launcher_gui.json
       - name: Windows - the launcher window (Start, Stop, About, close)
-        if: runner.os == 'Windows' && endsWith(env.NEW, '.msi')
+        if: always() && runner.os == 'Windows' && endsWith(env.NEW, '.msi')
         shell: pwsh
         run: |
           cargo install tauri-driver --locked --quiet
