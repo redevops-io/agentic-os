@@ -96,6 +96,11 @@ caller may read, and a caller scoped to some projects is told the totals are par
 Write routes (`PUT`/`DELETE /api/dashboards/views`, `POST /api/dashboards/{id}/track`, `POST /api/dashboards/qa/results`)
 carry policies in `agentic_os/projects_route_policy.py`. Saved views belong to the signed-in person.
 
+A deployment that enables business sources should not be reachable anonymously at all. `PROJECTS_OPERATOR_GATE=1`
+(`agentic_os/projects/operator_gate.py`) puts a sign-in in front of the whole app: the operator's Basic credential or a
+control-plane bearer on every request, 503 when none is configured. A public evaluation deployment keeps the gate off and
+enables no business source.
+
 ## From a finding to an action
 
 A drill-down returns actions. None executes anything by itself: *Ask Sidekick* answers from the evidence behind the
