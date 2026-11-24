@@ -23,6 +23,9 @@ gh release list --repo redevops-io/agentic-os --limit 5
 ## Checklist
 
 1. Start from an up-to-date `main` with a green `tests` workflow.
+   Run the `integration-checks` workflow on `main` as well (`gh workflow run integration-checks.yml --ref main`) and wait for it:
+   it runs the Support, Billing and Outreach apps against real, throwaway Chatwoot, Lago and Twenty instances. A failure there is a
+   release blocker for the app it names; the unit tests use stand-ins and cannot show it.
 2. Pick the next version `X.Y.Z` (the tag will be `vX.Y.Z`; it must be greater than the latest existing tag).
 3. In a release PR, set `version = "X.Y.Z"` in `pyproject.toml` so it equals the tag you are about to create.
    In the same PR set `ARG KERNEL_REF=vX.Y.Z` in every `apps/*/Dockerfile` and the pin in
