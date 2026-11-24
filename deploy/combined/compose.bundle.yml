@@ -76,8 +76,8 @@ services:
     networks: [ts]
 
   redevops-qa:
-    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.5}"
-    platform: "${QA_PLATFORM:-linux/amd64}"   # the QA test lanes exist for linux/amd64 only. Apple Silicon and arm64 Linux with QEMU run it emulated; an arm64 host without emulation sets QA_PLATFORM=linux/arm64 (the service starts, its lanes say ARCHITECTURE_UNSUPPORTED)
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.6}"
+    platform: "${QA_PLATFORM:-}"   # empty = the host's own architecture. From redevops-qa 0.6.6 the test lanes run natively on linux/amd64 and linux/arm64 (Apple Silicon included); nothing is emulated
     restart: unless-stopped
     ports:
       - target: 8080
@@ -111,8 +111,8 @@ services:
   # else, so this joins the QA container's network namespace and forwards 127.0.0.1:8203 there to Edge Sentinel. It is the QA image
   # (no extra image to pull) running a 15-line TCP forwarder; it holds no credential and publishes no port.
   qa-sentinel-loopback:
-    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.5}"
-    platform: "${QA_PLATFORM:-linux/amd64}"
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.6}"
+    platform: "${QA_PLATFORM:-}"
     profiles: ["remediation"]
     restart: unless-stopped
     network_mode: "service:redevops-qa"

@@ -25,7 +25,7 @@ umask 077
 [ -f .env.bundle ] || cp .env.bundle.example .env.bundle
 
 BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:$(get BUNDLE_TAG || true)"; BUNDLE_REF="${BUNDLE_REF%:}"
-[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.8"
+[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.9"
 # BUNDLE_COMPOSE replaces the compose command, e.g. to try a local compose.bundle.yml before it is published.
 COMPOSE="${BUNDLE_COMPOSE:-docker compose -f oci://${BUNDLE_REF} --project-directory . --env-file .env.bundle}"
 PPORT="$(get PROJECTS_PORT)"; PPORT="${PPORT:-8787}"
@@ -45,10 +45,12 @@ NAMED="$(get SENTINEL_NAMED_USER)"; NAMED="${NAMED:-alex}"
 [ -n "$(get APPROVAL_SECRET)" ] || set_in_env APPROVAL_SECRET "$(gen)"   # shared by Projects, QA and Sentinel
 ok "credentials present in .env.bundle"
 
-# 1b. redevops-qa's test lanes exist for linux/amd64 only. Where this host cannot execute amd64 images (arm64 Linux without QEMU user
-#     emulation) the pinned amd64 image dies with "exec format error", so run the native image there and say what that costs. Docker Desktop
-#     on Apple Silicon and an arm64 host with binfmt/QEMU emulate amd64 and keep the lanes.
-if [ -z "$(get QA_PLATFORM)" ]; then
+# 1b. From bundle 0.1.9 (redevops-qa 0.6.6) the QA image runs its test lanes natively on linux/amd64 and linux/arm64, and the bundle asks for
+#     the host's own architecture: nothing to decide here. Bundles up to 0.1.8 pin the amd64 QA image, whose lanes were amd64 only: where
+#     this host cannot execute amd64 images (arm64 Linux without QEMU user emulation) that image dies with "exec format error", so for those
+#     bundles the native image is used instead, and its lanes are unavailable.
+older_bundle() { [ "$(printf '%s\n' "${BUNDLE_REF##*:}" 0.1.9 | sort -V | head -1)" != 0.1.9 ]; }
+if older_bundle && [ -z "$(get QA_PLATFORM)" ]; then
   case "$(uname -m)" in
     x86_64|amd64) : ;;
     *) if docker run --rm --platform linux/amd64 busybox:1.37 true >/dev/null 2>&1; then
@@ -65,7 +67,12 @@ fi
 #    interpolated ${VAR} before proceeding, which hangs forever (reads EOF, "operation cancelled by user") with
 #    no stdin attached — observed 2026-11-15 publishing ghcr.io/redevops-io/redevops-ts:0.1.0.
 echo "== pulling and starting ${BUNDLE_REF}"
-$COMPOSE up -d -y --wait --wait-timeout 60 crowdsec >/dev/null || bad "crowdsec did not become healthy ($COMPOSE logs crowdsec)"
+# Compose's own message is kept: "crowdsec did not become healthy" was also what a Compose too old to read an OCI bundle, or a Docker with no
+# free address pool for the bundle's network, used to be reported as.
+if ! up_err="$($COMPOSE up -d -y --wait --wait-timeout 60 crowdsec 2>&1 >/dev/null)"; then
+  printf '%s\n' "$up_err" >&2
+  bad "crowdsec could not be started: $(printf '%s\n' "$up_err" | tail -1) (Compose $(docker compose version --short 2>/dev/null || echo unknown); logs: $COMPOSE logs crowdsec)"
+fi
 
 # 3. register CrowdSec's bouncer key and watcher login — same two commands and the same stdin-closing fix as
 #    deploy/standalone/edge-sentinel/bootstrap.sh (an open stdin here hangs forever: observed 2026-11-14).
