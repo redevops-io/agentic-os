@@ -25,7 +25,7 @@ umask 077
 [ -f .env.bundle ] || cp .env.bundle.example .env.bundle
 
 BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:$(get BUNDLE_TAG || true)"; BUNDLE_REF="${BUNDLE_REF%:}"
-[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.7"
+[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.8"
 # BUNDLE_COMPOSE replaces the compose command, e.g. to try a local compose.bundle.yml before it is published.
 COMPOSE="${BUNDLE_COMPOSE:-docker compose -f oci://${BUNDLE_REF} --project-directory . --env-file .env.bundle}"
 PPORT="$(get PROJECTS_PORT)"; PPORT="${PPORT:-8787}"
