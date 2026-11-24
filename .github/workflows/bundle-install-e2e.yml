@@ -1,4 +1,4 @@
-# Installs the PUBLISHED single-pull bundle (ghcr.io/redevops-io/redevops-ts:<tag>) on clean Linux hosts of both architectures with the
+# Installs the PUBLISHED single-pull bundle (ghcr.io/redevops-io/redevops-ts:<tag>) on clean Linux hosts of both architectures (natively) with the
 # documented script, then checks it end to end: bundle-bootstrap.sh, then bundle-smoke.sh (products wired into Projects, a QA run that needs
 # approval approved through Projects, wrong and replayed approvals refused, Sentinel's boundary closed to forged tokens).
 # Manual: run it for a bundle tag after publishing it with oci-redevops-ts. Nothing is built here; this is the artifact a user pulls.
@@ -19,10 +19,10 @@ jobs:
       matrix:
         include:
           - {arch: linux-amd64, runner: ubuntu-24.04, compose: x86_64}
-          # arm64 as most hosts are: no amd64 emulation. redevops-qa then runs natively and its lanes are reported UNSUPPORTED, not passed.
+          # arm64, native, no emulation installed. From bundle 0.1.9 (redevops-qa 0.6.6) the QA lanes run here as they do on amd64, and a
+          # section reported UNSUPPORTED fails the job. Older bundles pinned an amd64-only QA image: their lanes are UNSUPPORTED here, not passed.
+          # (There was a third job that ran the amd64 image under QEMU; with native lanes it showed nothing a user would run.)
           - {arch: linux-arm64, runner: ubuntu-24.04-arm, compose: aarch64}
-          # arm64 with QEMU user emulation installed: the amd64 QA image runs and the approval round trip is exercised.
-          - {arch: linux-arm64-emulating-amd64, runner: ubuntu-24.04-arm, compose: aarch64, qemu: true}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -38,9 +38,6 @@ jobs:
           chmod +x ~/.docker/cli-plugins/docker-compose
           docker compose version
           uname -m
-      - name: amd64 emulation (only for the emulating job)
-        if: matrix.qemu
-        run: docker run --privileged --rm tonistiigi/binfmt:qemu-v9.2.2 --install amd64
       - name: Install the bundle with the documented script
         working-directory: deploy/combined
         run: |
@@ -50,7 +47,13 @@ jobs:
           ./bundle-bootstrap.sh
       - name: End-to-end smoke
         working-directory: deploy/combined
-        run: ./bundle-smoke.sh
+        run: |
+          set -o pipefail
+          ./bundle-smoke.sh | tee "$RUNNER_TEMP/smoke.out"
+          # from 0.1.9 every section runs on both architectures: "OK for what this platform supports" is no longer an acceptable outcome
+          if [ "$(printf '%s\n' "$BUNDLE_TAG" 0.1.9 | sort -V | head -1)" = 0.1.9 ] && grep -q '^UNSUPPORTED' "$RUNNER_TEMP/smoke.out"; then
+            echo "a section was UNSUPPORTED on ${{ matrix.arch }} with bundle $BUNDLE_TAG"; exit 1
+          fi
       # A failed QA run -> an Edge Sentinel case -> the decision and the re-test in Projects -> the case closed on a verified pass, with
       # every refusal on the way. Bundles before 0.1.7 do not have the whole chain (0.1.6 was published with Edge Sentinel 0.6.3, which has no resolution endpoint): the script would fail at its first check there.
       - name: Finding loop (QA finding, Sentinel case, Projects decision, re-test, resolution)

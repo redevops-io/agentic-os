@@ -104,10 +104,10 @@ rm -rf secrets .env products.yaml      # forget the install (secrets never leave
 
 ## Limitations (stated, not smoothed over)
 
-- **macOS / Docker Desktop (incl. Apple Silicon)**: QA publishes **linux/amd64 lanes only** — on arm64 hosts
-  every lane is refused with `ARCHITECTURE_UNSUPPORTED`, even under emulation, so this compose pins
-  `platform: linux/amd64`. Lanes therefore run under Rosetta/QEMU: slower, same evidence format, and **not**
-  native-ARM64 evidence — **no native ARM64 QA browser lane exists**; do not present an emulated pass as one.
+- **arm64 hosts (Apple Silicon with Docker Desktop, arm64 Linux)**: from redevops-qa 0.6.6 (bundle 0.1.9) the QA
+  image runs its lanes natively on linux/arm64, with its own pinned Chromium, and the bundle asks for the host's
+  own architecture. Bundles up to 0.1.8 pinned the amd64 image: lanes there ran emulated or not at all, and an
+  emulated pass is not native-ARM64 evidence.
   The **approval round trip QA → Sentinel** is exercised on Linux installs only: the callback routing that
   scope needs is not satisfied by Docker Desktop's bridge networking on macOS. Everything `smoke.sh` checks
   was verified working on macOS Docker Desktop (Apple Silicon) and gates on Linux CI.
