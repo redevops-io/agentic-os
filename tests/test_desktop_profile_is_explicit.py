@@ -120,8 +120,7 @@ def test_a_real_serve_reports_production_with_durable_authority(tmp_path):
         assert up, "the sidecar did not listen under the production profile:\n" + log.read_text(errors="replace")[-3000:]
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as r:
             assert r.status == 200
-        assert "redevops-sidecar: profile=production (selected by the packaged build); authority and replay stores are durable, per user" \
-            in log.read_text(errors="replace")
+        assert "redevops-sidecar: profile=production; authority and replay stores are durable, per user" in log.read_text(errors="replace")
         probe = subprocess.run([sys.executable, "-c", (
             "import json, os\n"
             "from agentic_os import desktop_profile\n"

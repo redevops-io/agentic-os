@@ -14,17 +14,17 @@ checked against it by `tests/test_r0prime_identity.py`. The frozen identity is r
 | Item | Frozen v0.3.2 | R0-prime | Where it is set |
 |---|---|---|---|
 | Product name (window title, menu, Finder name, dmg volume, Windows ARP name, Start Menu entry) | `Agentic Apps` | `Agentic Apps R0-prime` | `tauri.conf.json` `productName`, window `title` |
-| Version (Cargo, Tauri, `CFBundleShortVersionString`, MSI/NSIS display) | `0.1.0` | `0.1.1` | `tauri.conf.json` `version`, `Cargo.toml`, `Cargo.lock` |
-| `CFBundleVersion` | `0.1.0` (Tauri default = version) | `0.1.1` (explicit) | `tauri.conf.json` `bundle.macOS.bundleVersion` |
-| MSI `ProductVersion` | `0.1.0` | `0.1.1` (a.b.c, no build field, no pre-release) | derived by tauri-bundler from `version` |
-| NSIS `VIProductVersion` | `0.1.0.0` | `0.1.1.0` | derived |
+| Version (Cargo, Tauri, `CFBundleShortVersionString`, MSI/NSIS display) | `0.1.0` | `0.1.2` | `tauri.conf.json` `version`, `Cargo.toml`, `Cargo.lock` |
+| `CFBundleVersion` | `0.1.0` (Tauri default = version) | `0.1.2` (explicit) | `tauri.conf.json` `bundle.macOS.bundleVersion` |
+| MSI `ProductVersion` | `0.1.0` | `0.1.2` (a.b.c, no build field, no pre-release) | derived by tauri-bundler from `version` |
+| NSIS `VIProductVersion` | `0.1.0.0` | `0.1.2.0` | derived |
 | Bundle identifier | `io.redevops.agentic-apps` | `io.redevops.agentic-apps.r0prime` | `tauri.conf.json` `identifier` |
 | Sidecar code-signing identifier (for the later signing run) | `io.redevops.agentic-apps.sidecar` | `io.redevops.agentic-apps.r0prime.sidecar` | `packaging/identity.json`, `SIGNING-READINESS.md` |
 | macOS app bundle | `Agentic Apps.app` | `Agentic Apps R0-prime.app` | derived from `productName` |
-| macOS disk image | `Agentic Apps_0.1.0_aarch64.dmg` (released as `Agentic.Apps_0.1.0_aarch64.dmg`) | `Agentic Apps R0-prime_0.1.1_aarch64.dmg` (a release host that replaces spaces would show `Agentic.Apps.R0-prime_0.1.1_aarch64.dmg`) | derived |
+| macOS disk image | `Agentic Apps_0.1.0_aarch64.dmg` (released as `Agentic.Apps_0.1.0_aarch64.dmg`) | `Agentic Apps R0-prime_0.1.2_aarch64.dmg` (a release host that replaces spaces would show `Agentic.Apps.R0-prime_0.1.2_aarch64.dmg`) | derived |
 | dmg volume name | `Agentic Apps` | `Agentic Apps R0-prime` | derived |
-| Windows MSI | `Agentic Apps_0.1.0_x64_en-US.msi` | `Agentic Apps R0-prime_0.1.1_x64_en-US.msi` | derived |
-| Windows NSIS installer | `Agentic Apps_0.1.0_x64-setup.exe` | `Agentic Apps R0-prime_0.1.1_x64-setup.exe` | derived |
+| Windows MSI | `Agentic Apps_0.1.0_x64_en-US.msi` | `Agentic Apps R0-prime_0.1.2_x64_en-US.msi` | derived |
+| Windows NSIS installer | `Agentic Apps_0.1.0_x64-setup.exe` | `Agentic Apps R0-prime_0.1.2_x64-setup.exe` | derived |
 | Launcher executable (`CFBundleExecutable`, `Contents/MacOS/...`, installed `.exe`) | `agentic-apps` / `agentic-apps.exe` | `agentic-r0prime` / `agentic-r0prime.exe` (15 characters: fits the Linux process-name limit used by `pgrep -x`) | `tauri.conf.json` `mainBinaryName` |
 | MSI `UpgradeCode` | `79fccc4d-fe4b-5bed-9113-69daba98ac8f` (derived by Tauri from the product name) | `f13fc625-f77d-5c30-b308-a3c3ec1045fc` (pinned; the value Tauri would derive from the new name, written down so a later rename cannot silently change it) | `tauri.conf.json` `bundle.windows.wix.upgradeCode` |
 | MSI install directory name; NSIS install directory | `...\Agentic Apps` (Program Files for MSI, `%LOCALAPPDATA%` for NSIS) | `...\Agentic Apps R0-prime` | derived from `productName` |
@@ -41,19 +41,19 @@ checked against it by `tests/test_r0prime_identity.py`. The frozen identity is r
 | Launcher window text | heading "ReDevOps" | heading and `<title>` "Agentic Apps R0-prime" (RC3; the "Re" mark is not used in the page, nor in the icon files, which are TEMPORARY neutral artwork while D-LIC-11 is open), second sub-line "Private candidate, release line r0-prime." | `deploy/launcher/ui/index.html` (static text, no behaviour); window title in `tauri.conf.json` |
 | SBOM root component; notices title; source-offer build identity | `Agentic Apps (native build)`; `Agentic Apps (<platform>)` | `Agentic Apps R0-prime (native build)`; `Agentic Apps R0-prime (<platform>)`; a "product ... release line" line | `generate_sbom.py`, `build-licenses.sh`, `generate_source_offer.py` |
 
-## 2. Why version 0.1.1 and not a pre-release form
+## 2. Why version 0.1.2 and not a pre-release form
 
 * Apple wants `CFBundleShortVersionString` and `CFBundleVersion` to be one to three period-separated integers. Tauri copies `version` into
-  `CFBundleShortVersionString` and, unless `bundle.macOS.bundleVersion` is set, into `CFBundleVersion`. A semver pre-release such as `0.1.1-r0prime.1` or build
-  metadata such as `0.1.1+r0prime` would put a hyphen or a plus sign into both keys.
+  `CFBundleShortVersionString` and, unless `bundle.macOS.bundleVersion` is set, into `CFBundleVersion`. A semver pre-release such as `0.1.2-r0prime.1` or build
+  metadata such as `0.1.2+r0prime` would put a hyphen or a plus sign into both keys.
 * The MSI `ProductVersion` must be numeric `major.minor.patch[.build]` (major and minor at most 255, build at most 65535). tauri-bundler (2.9.4 and 2.10.4 source)
-  rejects a non-numeric pre-release for the msi target and turns a numeric one into the fourth field. A plain `0.1.1` satisfies Apple, MSI and NSIS
-  (`VIProductVersion` `0.1.1.0`) with no special case.
+  rejects a non-numeric pre-release for the msi target and turns a numeric one into the fourth field. A plain `0.1.2` satisfies Apple, MSI and NSIS
+  (`VIProductVersion` `0.1.2.0`) with no special case.
 * The distinction between the two lines therefore lives in the product name, bundle identifier, executable name, `UpgradeCode`, the `RedevopsReleaseLine` marker and
-  the build manifest, not in a version suffix. `0.1.1` sorts after `0.1.0`; that has no effect because the two lines are different products to the OS (different bundle
+  the build manifest, not in a version suffix. `0.1.2` sorts after `0.1.0`; that has no effect because the two lines are different products to the OS (different bundle
   identifier and UpgradeCode), and neither line ships an updater (`createUpdaterArtifacts` is unset).
-* `CFBundleVersion` is set explicitly to `0.1.1` so a later change of `version` does not silently change it. If a monotonic build counter is wanted later, it belongs in
-  `bundleVersion` only (Apple allows three integers, for example `0.1.1` -> `1.0.0`); that is an owner decision.
+* `CFBundleVersion` is set explicitly to `0.1.2` so a later change of `version` does not silently change it. If a monotonic build counter is wanted later, it belongs in
+  `bundleVersion` only (Apple allows three integers, for example `0.1.2` -> `1.0.0`); that is an owner decision.
 * The Cargo crate version (`redevops-launcher`) follows the product version so `CARGO_PKG_VERSION`, `Cargo.lock` and the compiled-crate lists agree with it.
 
 ## 3. What is intentionally unchanged
@@ -94,9 +94,9 @@ checked against it by `tests/test_r0prime_identity.py`. The frozen identity is r
 
 | Artifact | Frozen v0.3.2 | R0-prime |
 |---|---|---|
-| File name | `Agentic.Apps_0.1.0_aarch64.dmg`, `Agentic.Apps_0.1.0_x64_en-US.msi`, `Agentic.Apps_0.1.0_x64-setup.exe` | names containing `R0-prime` and `_0.1.1_` |
+| File name | `Agentic.Apps_0.1.0_aarch64.dmg`, `Agentic.Apps_0.1.0_x64_en-US.msi`, `Agentic.Apps_0.1.0_x64-setup.exe` | names containing `R0-prime` and `_0.1.2_` |
 | App bundle | `Agentic Apps.app` | `Agentic Apps R0-prime.app` |
-| `Info.plist` | `CFBundleIdentifier` `io.redevops.agentic-apps`, versions `0.1.0`, no `RedevopsReleaseLine` | `CFBundleIdentifier` `io.redevops.agentic-apps.r0prime`, versions `0.1.1`, `RedevopsReleaseLine` `r0-prime` (`plutil -p ".../Contents/Info.plist"`) |
+| `Info.plist` | `CFBundleIdentifier` `io.redevops.agentic-apps`, versions `0.1.0`, no `RedevopsReleaseLine` | `CFBundleIdentifier` `io.redevops.agentic-apps.r0prime`, versions `0.1.2`, `RedevopsReleaseLine` `r0-prime` (`plutil -p ".../Contents/Info.plist"`) |
 | Launcher process / file | `agentic-apps` | `agentic-r0prime` |
 | Window | title `Agentic Apps` | title `Agentic Apps R0-prime` and the line "Private candidate, release line r0-prime." |
 | Windows | ARP name `Agentic Apps`, folder `Agentic Apps` | ARP name `Agentic Apps R0-prime`, folder `Agentic Apps R0-prime`, MSI UpgradeCode `f13fc625-...` |
@@ -108,7 +108,7 @@ checked against it by `tests/test_r0prime_identity.py`. The frozen identity is r
 
 * OBSERVED: a scratch build in an isolated directory (tauri-cli 2.11.4, dummy sidecar, placeholder licences; not a candidate) produced `Agentic Apps R0-prime.app` with `CFBundleIdentifier`,
   `CFBundleShortVersionString`, `CFBundleVersion`, `CFBundleName`, `CFBundleDisplayName`, `CFBundleExecutable` and `RedevopsReleaseLine` as in the table, the dmg
-  `Agentic Apps R0-prime_0.1.1_aarch64.dmg` with volume name `Agentic Apps R0-prime`, and `check_bundle_identity.py` passing on both.
+  `Agentic Apps R0-prime_0.1.2_aarch64.dmg` with volume name `Agentic Apps R0-prime`, and `check_bundle_identity.py` passing on both.
 * STATIC: Windows rows and the `UpgradeCode`/GUID/version derivation (tauri-bundler 2.9.4 and 2.10.4 source), and `app_cache_dir()` being keyed by the compiled-in identifier.
 * UNVERIFIED: any Windows build or install; LaunchServices behaviour with both apps installed; behaviour of the signed bundle under the new identifiers.
 * The candidate directories were not rebuilt for this change; the existing candidates and evidence sets carry the old identity.

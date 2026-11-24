@@ -63,3 +63,11 @@ def apply(env: Optional[MutableMapping[str, str]] = None, home: Optional[str] = 
                 env[ENV_REPLAY_DB] = d + sep + "replay.db"
     return {"profile": effective, "chosen_here": chosen_here,
             "authority_db": (env.get(ENV_AUTHORITY_DB) or ""), "replay_db": (env.get(ENV_REPLAY_DB) or "")}
+
+
+def posture_line(env=None) -> str:
+    """One line for a packaged build's stderr, so the posture of an installed build can be read from its own output."""
+    env = os.environ if env is None else env
+    stores = bool((env.get(ENV_AUTHORITY_DB) or "").strip() and (env.get(ENV_REPLAY_DB) or "").strip())
+    return "redevops-sidecar: profile=%s; authority and replay stores are %s" % (
+        (env.get(ENV_PROFILE) or "").strip().lower() or "unset", "durable, per user" if stores else "not configured")

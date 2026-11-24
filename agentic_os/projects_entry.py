@@ -27,6 +27,11 @@ def main() -> int:
         sys.stderr.write(refusal_line(e) + "\n")
         sys.stderr.flush()
         return 1
+    import os
+    if os.environ.get("AGENTIC_OS_PACKAGED", "").strip() == "1":      # after the refusal above, so a refusal stays ONE line on stderr
+        from .desktop_profile import posture_line
+        sys.stderr.write(posture_line() + "\n")
+        sys.stderr.flush()
     serve()
     return 0
 

@@ -114,13 +114,7 @@ def main(argv=None) -> int:
     # posture from a missing setting (agentic_os/desktop_profile.py). With nothing set this selects `production` with durable authority and
     # replay stores in the per-user state directory.
     from agentic_os.desktop_profile import apply as _explicit_profile
-    _posture = _explicit_profile()
-    if action == "serve":
-        # One line on stderr, so the posture of an installed build can be read from its own output (the acceptance check does).
-        sys.stderr.write("redevops-sidecar: profile=%s (%s); authority and replay stores are %s\n" % (
-            _posture["profile"], "selected by the packaged build" if _posture["chosen_here"] else "set in the environment",
-            "durable, per user" if _posture["authority_db"] and _posture["replay_db"] else "not configured"))
-        sys.stderr.flush()
+    _explicit_profile()
     if action == "bootstrap":
         sys.argv = ["agentic_os.mission.bootstrap"]
         runpy.run_module("agentic_os.mission.bootstrap", run_name="__main__")
