@@ -52,11 +52,11 @@ jobs:
             exit 1
           fi
           TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
-          if [ "${TREE:0:8}" != "af865f5b" ]; then
-            echo "::error::BUILD_COMMIT's tree hash does not start with the expected af865f5b prefix (got $TREE) - refusing"
+          if [ "${TREE:0:8}" != "09d1f54c" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 09d1f54c prefix (got $TREE) - refusing"
             exit 1
           fi
-          echo "BUILD_COMMIT verified present, tree prefix af865f5b confirmed."
+          echo "BUILD_COMMIT verified present, tree prefix 09d1f54c confirmed."
 
   collect:
     needs: guard
