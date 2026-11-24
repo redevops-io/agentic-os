@@ -8,4 +8,6 @@ cryptography>=42
 runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@80e727d8d08b3d8bef371fefd0dedee8a77666f8
 discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@b49f66c60e25ea54273f2d23845db027d21db762
 knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@057258ae51e19ed6d3d69834093a794457fa4ffd
+# context-runtime (from the commit below on) requires agent-harness: standard library only, pinned to the commit context-runtime itself names.
+agent-harness @ git+https://github.com/redevops-io/agent-harness.git@1259d1b338e80414b32b863bcc97a0db93db8cd2
 context-runtime @ https://github.com/redevops-io/context-runtime/archive/69fcf6891e90c64ad40a2f0b62da27142f623a6d.tar.gz#sha256=a705767b7710c29a7ab0f9d1f4d43467862882eeece690bd7d71761e5389887a

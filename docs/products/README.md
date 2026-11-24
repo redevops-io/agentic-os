@@ -82,3 +82,23 @@ On the Projects line that serves `GET /api/ui-config`, the response carries an a
 ## Application directory
 
 On the Projects line that ships `agentic_os/app_directory.py`, [`app-directory.example.yaml`](app-directory.example.yaml) adds the "Open app" and "Open record" links (path-based: `/ui/cases/<id>`, `/ui/actions/<id>`).
+
+## The finding loop: a failed QA run, an Edge Sentinel case, a re-test
+
+A QA run that does not pass can be followed to closure across the three products. Each step is a person's action in Projects and uses a
+contract the product already has.
+
+| Step | Route in Projects | What happens in the product |
+|---|---|---|
+| Escalate | `POST /api/products/{qa}/runs/{run_id}/escalation` `{severity?}` | The run is reported to Edge Sentinel as an agent event (`qa.finding`). Sentinel opens an `INVESTIGATING` case whose evidence names the run and the digest of its evidence manifest. The case proposes no action. Escalating the same run again returns the same case. |
+| Re-test | `POST /api/products/{qa}/runs/{run_id}/retest` | A new run of the same target and profile, never with a seeded defect, bound to a fresh estimate. It needs its own approval (`…/runs/{id}/approval`). |
+| Resolve | `POST /api/products/{sentinel}/cases/{case_id}/resolution` `{finding_run_id, retest_run_id}` | Projects reads the re-test again and requires a pass of the same target and profile whose evidence verifies. It then sends Sentinel a single-use approval bound to the case and that record. Sentinel checks the record against the case, keeps it as evidence and sets the case `RESOLVED`. |
+
+What is refused, with nothing recorded: escalating a run that passed, was rejected or has not ended; closing on the finding run itself, on a
+re-test that is waiting or failed, on a run of another target or profile, or on evidence that does not verify; closing with the service
+credential alone; closing a case that was not opened from a quality finding.
+
+The fix itself happens where the defect is. Projects does not apply it and does not claim to. Where the remedy is an edge block, it is Edge
+Sentinel's own action with its own decision and execution steps.
+
+`deploy/combined/bundle-loop.sh` runs the whole chain on a running bundle.

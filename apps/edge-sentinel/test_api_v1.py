@@ -464,6 +464,94 @@ def test_an_approval_token_for_a_linked_user_decides_once_and_is_attributed_to_t
     assert adm.delete("/api/v1/actor-links/projects:local-owner").status_code == 200
 
 
+# ── a quality finding as a case, closed only on a passed re-test ─────────────────────────────────────────────────────────────────────
+
+QA_FINDING = {"kind": "qa.finding", "severity": "high", "subject": "qa-run:r20261124T100000Z-aaaaaa", "source": "redevops-qa",
+              "detail": "profile fixture-browser on tgt-1 ended FAILED: A-NOTIF-ON; evidence sha256:" + "1" * 64, "ts": 1.79e9}
+RETEST = {"kind": "qa.retest", "run_id": "r20261124T110000Z-bbbbbb", "outcome": "VERIFIED", "manifest_digest": "sha256:" + "2" * 64,
+          "finding_run_id": "r20261124T100000Z-aaaaaa"}
+
+
+def _resolution(case_id, ev):
+    return {"evidence": ev, "digest": live.resolution_digest(case_id, ev)}
+
+
+def test_a_quality_finding_case_is_closed_by_a_person_on_a_passed_retest_and_the_record_is_kept(env):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST))
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "RESOLVED" and r.json()["retest_run"] == RETEST["run_id"]
+    case = s.get(f"/api/v1/cases/{cid}").json()
+    assert case["summary"]["status"] == "RESOLVED" and any(h["type"] == "case.resolved" for h in case["history"])
+    got = s.get(f"/api/v1/cases/{cid}/evidence/{r.json()['evidence_id']}")
+    assert got.status_code == 200 and got.json()["evidence"]["run_id"] == RETEST["run_id"] and got.json()["resolved_by"] == "user:admin"
+    again = s.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST))
+    assert again.status_code == 409 and again.json()["error"] == "not_resolvable"          # already closed
+    _restart(env)
+    assert session(ADMIN).get(f"/api/v1/cases/{cid}").json()["summary"]["status"] == "RESOLVED"
+
+
+@pytest.mark.parametrize("change,status,error", [
+    ({"outcome": "FAILED"}, 409, "not_resolvable"),                                         # the re-test did not pass
+    ({"outcome": "NOT_COMPLETED"}, 409, "not_resolvable"),
+    ({"finding_run_id": "r20261124T090000Z-cccccc"}, 409, "not_resolvable"),                # a re-test of another finding
+    ({"run_id": "r20261124T100000Z-aaaaaa"}, 409, "not_resolvable"),                        # the finding run offered as its own re-test
+    ({"kind": "qa.finding"}, 422, "invalid_evidence"),
+    ({"extra": "x"}, 422, "invalid_evidence"),
+])
+def test_a_retest_record_that_does_not_show_a_pass_of_this_finding_closes_nothing(env, change, status, error):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    ev = {**RETEST, **change}
+    body = {"evidence": ev, "digest": live.resolution_digest(cid, ev) if error != "invalid_evidence" else "0" * 64}
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json=body)
+    assert r.status_code == status and r.json()["error"] == error, r.text
+    assert s.get(f"/api/v1/cases/{cid}").json()["summary"]["status"] == "INVESTIGATING"
+
+
+def test_a_resolution_is_bound_to_the_case_and_the_record_and_other_cases_cannot_be_closed_this_way(env):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    tampered = {**RETEST, "outcome": "VERIFIED", "run_id": "r20261124T120000Z-dddddd"}
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json={"evidence": tampered, "digest": live.resolution_digest(cid, RETEST)})
+    assert r.status_code == 422 and r.json()["error"] == "digest_required"                  # the digest is of another record
+    other = s.post("/api/v1/agent-events", json={"kind": "goal_loop_stuck", "severity": "high", "subject": "mission-7", "source": "mission-kernel"}).json()["case_id"]
+    r = s.post(f"/api/v1/cases/{other}/resolution", json=_resolution(other, RETEST))
+    assert r.status_code == 409 and r.json()["error"] == "not_resolvable"                   # not a quality finding
+    net = first_case(s)                                                                      # a CrowdSec case is never closed with a re-test
+    r = s.post(f"/api/v1/cases/{net['case_id']}/resolution", json=_resolution(net["case_id"], RETEST))
+    assert r.status_code == 409 and r.json()["error"] == "not_resolvable"
+    v = session(make_user(s, "vera", "viewer"))
+    assert v.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST)).json()["error"] == "role_required"
+    assert s.get(f"/api/v1/cases/{cid}").json()["summary"]["status"] == "INVESTIGATING"
+
+
+def test_the_service_credential_closes_a_finding_case_only_with_a_single_use_approval_of_a_linked_person(env, monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", "approval-secret-for-tests-0123456789abcdef")
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "service-token-for-tests-0123456789abcdef")
+    monkeypatch.setattr(api_v1, "_REPLAY", None)
+    adm = session(ADMIN)
+    make_user(adm, "olga", "operator")
+    assert adm.post("/api/v1/actor-links", json={"external_actor": "projects:local-owner", "user": "olga"}).status_code == 201
+    svc = client()
+    svc.headers["X-Control-Token"] = "service-token-for-tests-0123456789abcdef"
+    cid = svc.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    body = _resolution(cid, RETEST)
+    path = f"/api/v1/cases/{cid}/resolution"
+    assert svc.post(path, json=body).json()["error"] == "human_decision_required"           # the service alone cannot close a case
+    wrong = _tok("edge-sentinel", "sentinel.resolve_case", {"case_id": cid, "digest": "a" * 64}, "projects:local-owner")
+    assert svc.post(path, json=body, headers={"X-Approval-Token": wrong}).json()["error"] == "approval_token_invalid"
+    other_cap = _tok("edge-sentinel", "sentinel.decide", {"case_id": cid, "digest": body["digest"]}, "projects:local-owner")
+    assert svc.post(path, json=body, headers={"X-Approval-Token": other_cap}).json()["error"] == "approval_token_invalid"
+    tok = _tok("edge-sentinel", "sentinel.resolve_case", {"case_id": cid, "digest": body["digest"]}, "projects:local-owner")
+    ok = svc.post(path, json=body, headers={"X-Approval-Token": tok})
+    assert ok.status_code == 200 and ok.json()["status"] == "RESOLVED", ok.text
+    ev = adm.get(f"/api/v1/cases/{cid}/evidence/{ok.json()['evidence_id']}").json()
+    assert ev["resolved_by"] == "user:olga" and ev["via"] == "projects"
+    assert svc.post(path, json=body, headers={"X-Approval-Token": tok}).status_code in (403, 409)   # replayed token, and the case is closed
+
+
 def test_a_linked_viewer_cannot_decide_through_projects(env, monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", "approval-secret-for-tests-0123456789abcdef")
     monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "service-token-for-tests-0123456789abcdef")

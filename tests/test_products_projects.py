@@ -191,7 +191,7 @@ def test_every_write_route_the_products_add_is_classified_human_only(stack):
     pol = c.app.state.route_policies
     assert unclassified(c.app, pol) == []
     prod = {k: v for k, v in pol.items() if "/api/products/" in k}
-    assert len(prod) == 3 and all(v.access == "human_only" for v in prod.values())
+    assert len(prod) == 6 and all(v.access == "human_only" for v in prod.values())     # decision, execute, run approval; escalation, re-test, resolution
     assert not set(prod) - set(write_routes(c.app))
 
 
