@@ -36,5 +36,10 @@ PROJECTS_ROUTE_POLICIES = {
     f"POST {PREFIX}/today/{{item_id}}/reconcile": P("projects.today_reconcile", "human_only", rationale="resolving an unknown outcome needs a named person and evidence"),
     f"POST {PREFIX}/today/{{item_id}}/snooze": P("projects.today_snooze", "authority_required"),
     f"POST {PREFIX}/today/{{item_id}}/dismiss": P("projects.today_dismiss", "authority_required"),
+    # Dashboards (agentic_os/dashboards/routes.py): a person's own saved views, handing a finding to the intake, and a CI lane reporting a run.
+    "PUT /api/dashboards/views": P("dashboards.save_view", "authority_required"),
+    "DELETE /api/dashboards/views/{view_id}": P("dashboards.delete_view", "authority_required"),
+    "POST /api/dashboards/{dashboard_id}/track": P("dashboards.track", "authority_required"),
+    "POST /api/dashboards/qa/results": P("dashboards.ingest_qa", "authority_required"),
     f"POST {PREFIX}/today/{{item_id}}/simulate-outcome": P("projects.today_simulate_outcome", "human_only", rationale="a demo-only simulation of an outcome; never an agent's call"),
 }
