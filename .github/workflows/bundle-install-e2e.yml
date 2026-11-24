@@ -19,9 +19,12 @@ jobs:
       matrix:
         include:
           - {arch: linux-amd64, runner: ubuntu-24.04, compose: x86_64}
+          # arm64 as most hosts are: no amd64 emulation. redevops-qa then runs natively and its lanes are reported UNSUPPORTED, not passed.
           - {arch: linux-arm64, runner: ubuntu-24.04-arm, compose: aarch64}
+          # arm64 with QEMU user emulation installed: the amd64 QA image runs and the approval round trip is exercised.
+          - {arch: linux-arm64-emulating-amd64, runner: ubuntu-24.04-arm, compose: aarch64, qemu: true}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       BUNDLE_TAG: ${{ inputs.bundle_tag }}
     steps:
@@ -35,6 +38,9 @@ jobs:
           chmod +x ~/.docker/cli-plugins/docker-compose
           docker compose version
           uname -m
+      - name: amd64 emulation (only for the emulating job)
+        if: matrix.qemu
+        run: docker run --privileged --rm tonistiigi/binfmt:qemu-v9.2.2 --install amd64
       - name: Install the bundle with the documented script
         working-directory: deploy/combined
         run: |
