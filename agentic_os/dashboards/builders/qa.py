@@ -307,7 +307,7 @@ def build(b: Build) -> None:
             cells.append({"status": worst, "label": f"{n_ok}/{len(cs)}",
                           "drill": b.drill(f"matrix:{pj}:{su}:{pl}", f"{m.suite_names.get((pj, su), su)} on {pl}", [m.cell_record(x) for x in cs], columns=cols)})
         mrows.append({"label": f"{b.project_name(pj)} · {m.suite_names.get((pj, su), su)}", "cells": cells})
-    d.panels.append(panel("matrix", "Platform matrix", "matrix", sources=SRC, columns=[col(p, p) for p in platforms], rows=mrows,
+    d.panels.append(panel("matrix", "Platform matrix", "matrix", sources=SRC, span=2, columns=[col(p, p) for p in platforms], rows=mrows,
                           note="Each cell is passed/planned on that platform, coloured by its worst result. An empty cell means the suite is not planned there.",
                           empty="" if mrows else "No platform has reported yet."))
 

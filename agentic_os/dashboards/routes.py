@@ -58,6 +58,16 @@ def _owner(acc: Access, request: Request, x_demo_session: Optional[str]) -> str:
     return f"user:{acc.principal}" if acc.principal else f"demo:{_session(request, x_demo_session)}"
 
 
+def _authorize(svc: DashboardService, request: Request, x_demo_session: Optional[str]) -> "tuple[Access, str]":
+    """The caller of a write route: its access and the owner key its views are stored under. A caller who has been
+    granted no dashboard source at all (an ``access`` section or a tenant grant that leaves it nothing) is refused here,
+    before anything is stored; in the production profile the route policy has already required a credential."""
+    acc = caller_access(svc)
+    if acc.grant.sources is not None and not acc.grant.sources:
+        raise HTTPException(403, {"error": "forbidden", "detail": "you do not have access to the dashboards"})
+    return acc, _owner(acc, request, x_demo_session)
+
+
 def make_router(svc: DashboardService) -> APIRouter:
     r = APIRouter()
 
@@ -88,7 +98,7 @@ def make_router(svc: DashboardService) -> APIRouter:
 
     @r.put("/api/dashboards/views")
     def _save_view(request: Request, body: Dict[str, Any] = Body(default={}), x_demo_session: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-        acc = caller_access(svc)
+        acc, owner = _authorize(svc, request, x_demo_session)
         extra = set(body) - {"id", "name", "dashboard", "filters", "layout", "is_default"}
         dash, vid = body.get("dashboard"), body.get("id") or ""
         from .service import BY_ID  # noqa: PLC0415
@@ -99,13 +109,13 @@ def make_router(svc: DashboardService) -> APIRouter:
         if f.get("project") and not acc.project(str(f["project"])):
             raise HTTPException(403, {"error": "forbidden", "detail": "you do not have access to that project"})
         keep = {k: f[k] for k in ("project", "days", "since", "until", "product", "environment", "platform") if f.get(k) not in (None, "")}
-        return _guard(lambda: svc.store.save_view(_owner(acc, request, x_demo_session), name=body.get("name") or "", dashboard=dash, filters=keep,
+        return _guard(lambda: svc.store.save_view(owner, name=body.get("name") or "", dashboard=dash, filters=keep,
                                                   layout=body.get("layout") or {}, is_default=bool(body.get("is_default", False)), view_id=vid, now=svc.clock()))
 
     @r.delete("/api/dashboards/views/{view_id}")
     def _delete_view(view_id: str, request: Request, x_demo_session: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-        acc = caller_access(svc)
-        if not _VIEW.match(view_id) or not svc.store.delete_view(_owner(acc, request, x_demo_session), view_id):
+        _acc, owner = _authorize(svc, request, x_demo_session)
+        if not _VIEW.match(view_id) or not svc.store.delete_view(owner, view_id):
             raise HTTPException(404, {"error": "not_found", "detail": "no such view"})
         return {"deleted": view_id}
 
@@ -121,6 +131,8 @@ def make_router(svc: DashboardService) -> APIRouter:
                 if hmac.compare_digest(x_service_token.encode(), ident["token"].encode()) and \
                         any(fnmatchcase(CAP_INGEST, c) for c in ident["capabilities"]):
                     by = f"service:{name}"
+            if not by:      # a credential that was presented and did not verify is refused; it never falls back to who else the caller might be
+                raise HTTPException(401, {"error": "unauthenticated", "detail": f"the service token is not valid or does not hold {CAP_INGEST}"})
         if not by:
             p = _principal(svc)
             hub = getattr(svc.provider, "products_hub", None)
@@ -155,7 +167,7 @@ def make_router(svc: DashboardService) -> APIRouter:
         if set(body) - {"key", "note", "filters"} or not isinstance(key, str) or not _KEY.match(key) or not isinstance(note, str) \
                 or not isinstance(body.get("filters", {}), dict):
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {key, note?, filters?}"})
-        acc = caller_access(svc)
+        acc, _own = _authorize(svc, request, x_demo_session)
         filters = parse_filters(body.get("filters") or {}, now=svc.clock())
         try:
             item = _guard(lambda: svc.track(dashboard_id, key, filters, acc, session=_session(request, x_demo_session), note=note))

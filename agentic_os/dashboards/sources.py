@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .config import DashboardsConfig
-from .contracts import GATED, NOT_CONNECTED, OK, UNAVAILABLE, Record, SourceStatus
+from .contracts import GATED, NOT_CONNECTED, OK, STALE, UNAVAILABLE, Record, SourceStatus
 from .store import DAY, DashboardStore
 
 CACHE_TTL_S = 20.0
@@ -93,6 +93,51 @@ def _status(sid: str, state: str = OK, *, detail: str = "", at: float = 0.0, n: 
     return SourceStatus(id=sid, label=label, app=app, state=state, detail=detail, observed_at=at, records=n, basis=basis, remedy=remedy)
 
 
+class RemoteMissionPlane:
+    """A deployed Mission Plane read over its own HTTP API (``GET /missions`` and ``GET /missions/{id}/events``), shaped
+    like the in-process runtime the collectors already read. Read-only; ``MISSION_PLANE_URL`` (+ optional
+    ``MISSION_PLANE_TOKEN``) name it, and it is used only when the operator enabled ``sources.mission_plane``."""
+
+    def __init__(self, url: str, token: str = "", get: Optional[Callable[..., Tuple[int, Any]]] = None) -> None:
+        self.url, self.token, self._get = url.rstrip("/"), token, get or _http_json
+        self.repo = self
+
+    def _read(self, path: str) -> Any:
+        code, body = self._get(self.url + path, headers={"Authorization": f"Bearer {self.token}"} if self.token else {})
+        if code >= 400 or body is None:
+            raise RuntimeError(f"the Mission Plane answered {code}")
+        return body
+
+    def missions(self) -> List[Dict[str, Any]]:
+        body = self._read("/missions")
+        rows = body.get("missions") if isinstance(body, Mapping) else body
+        return [dict(r) for r in rows or [] if isinstance(r, Mapping) and r.get("id")]
+
+    def timeline(self, mission_id: str) -> List[Dict[str, Any]]:
+        if not re.match(r"^[A-Za-z0-9_.:-]{1,120}$", str(mission_id)):
+            return []
+        body = self._read(f"/missions/{mission_id}/events")
+        rows = body.get("timeline") if isinstance(body, Mapping) else body
+        return [dict(r) for r in rows or [] if isinstance(r, Mapping)]
+
+
+def _runtime(ctx: Context) -> Any:
+    """The Mission Runtime the dashboards read: the one bound to the provider, else an enabled remote Mission Plane."""
+    rt = getattr(ctx.provider, "mission_runtime", None)
+    if rt is not None or "mission_plane" not in ctx.config.sources:
+        return rt
+    c = ctx.clients.get("mission_plane")
+    if c is not None:
+        return c
+    import os  # noqa: PLC0415
+    url = os.environ.get("MISSION_PLANE_URL", "").strip()
+    return RemoteMissionPlane(url, os.environ.get("MISSION_PLANE_TOKEN", "").strip()) if url else None
+
+
+_MISSION_STATE = {"succeeded": "completed", "completed": "completed", "failed": "failed", "compensation_failed": "failed", "cancelled": "failed",
+                  "waiting_human": "needs", "planning": "running", "running": "running", "scheduled": "scheduled"}
+
+
 def _basis(ctx: Context) -> str:
     """Whether the provider's own rows are a demo sample (labelled so on every panel that uses them)."""
     name = type(ctx.provider).__name__
@@ -103,7 +148,8 @@ def _basis(ctx: Context) -> str:
 def missions(ctx: Context) -> SourceResult:
     now = ctx.now()
     rows: List[Record] = []
-    rt = getattr(ctx.provider, "mission_runtime", None)
+    rt = _runtime(ctx)
+    rt_error = ""
     if rt is not None:
         try:
             for m in rt.missions():
@@ -112,25 +158,31 @@ def missions(ctx: Context) -> SourceResult:
                 ended = next((e["ts"] for e in tl if e["type"] == "MissionOutcome"), 0.0)
                 state = str(m.get("state", ""))
                 tmpl = str(m.get("template") or m.get("title") or "mission")
+                title = str(m.get("title") or m.get("goal") or tmpl)
                 rows.append(Record(
-                    source="missions", kind="mission", id=str(m["id"]), title=str(m.get("title") or tmpl), at=float(ended or created or 0.0),
-                    status={"succeeded": "completed", "failed": "failed", "compensation_failed": "failed"}.get(state, "needs" if m.get("awaiting_human") else "running"),
-                    project=ctx.config.project_for_mission(tmpl, str(m.get("title") or "")) or ctx.default_project,
+                    source="missions", kind="mission", id=str(m["id"]), title=title, at=float(ended or created or 0.0),
+                    status="needs" if m.get("awaiting_human") else _MISSION_STATE.get(state, "running"),
+                    project=ctx.config.project_for_mission(tmpl, title) or ctx.config.source_project("mission_plane") or ctx.default_project,
                     fields={"workflow": tmpl, "raw_state": state, "duration_ms": round((ended - created) * 1000) if created and ended else None,
                             "awaiting_human": bool(m.get("awaiting_human")), "awaiting_reconciliation": bool(m.get("awaiting_reconciliation")),
-                            "created_at": created, "cost_usd": m.get("cost_usd")},
+                            "created_at": created, "progress": state.replace("_", " "), "runtime": "mission"},
                     ref=f"mission:{m['id']}"))
-            return SourceResult(_status("missions", at=now, n=len(rows)), rows)
         except Exception as e:  # noqa: BLE001
-            return SourceResult(_status("missions", UNAVAILABLE, detail=f"the Mission Runtime did not answer ({type(e).__name__})"))
+            if getattr(ctx.provider, "mission_runtime", None) is not None:
+                return SourceResult(_status("missions", UNAVAILABLE, detail=f"the Mission Runtime did not answer ({type(e).__name__})"))
+            rt_error = f"the Mission Plane did not answer ({type(e).__name__})"          # the provider's own rows are still shown, with this said
+            rows = []
     try:
         listed = ctx.provider.missions(ctx.default_project)
     except Exception as e:  # noqa: BLE001
         return SourceResult(_status("missions", UNAVAILABLE, detail=f"missions could not be read ({type(e).__name__})"))
+    from_runtime = bool(rows)
     for m in listed:
         refs = list(m.get("source_refs") or [])
         if str(m.get("id", "")).endswith(":unavailable"):
-            continue                                            # an explicit "product unavailable" row is a source status, not a mission
+            continue
+        if (from_runtime or rt is not None) and str(m.get("source_runtime", "")) not in ("security", "quality"):
+            continue                                            # with a runtime read, only the products' own rows are added to it                                            # an explicit "product unavailable" row is a source status, not a mission
         wf = str(m.get("workflow") or "")
         product = str(m.get("id", "")).split(":", 1)[0] if ":" in str(m.get("id", "")) else ""
         rows.append(Record(
@@ -138,7 +190,9 @@ def missions(ctx: Context) -> SourceResult:
             project=(ctx.config.project_for_product(product) if product else "") or ctx.config.project_for_mission(wf, str(m.get("title", ""))) or ctx.default_project,
             at=0.0, fields={"workflow": wf, "progress": str(m.get("progress", "")), "runtime": str(m.get("source_runtime", ""))},
             ref=refs[0] if refs else f"mission:{m.get('id', '')}"))
-    return SourceResult(_status("missions", at=now, n=len(rows), basis=_basis(ctx)), rows)
+    if rt_error:
+        return SourceResult(_status("missions", STALE if rows else UNAVAILABLE, detail=rt_error, at=now if rows else 0.0, n=len(rows)), rows)
+    return SourceResult(_status("missions", at=now, n=len(rows), basis="live" if rt is not None else _basis(ctx)), rows)
 
 
 def attention(ctx: Context) -> SourceResult:
@@ -235,25 +289,45 @@ def deployment(ctx: Context) -> SourceResult:
 
 
 def ai_usage(ctx: Context) -> SourceResult:
-    """Model spend and tokens the Mission Runtime recorded per executed step. Only a bound runtime has this; without one
-    the AI-cost dashboard is not offered (nothing is estimated)."""
-    rt = getattr(ctx.provider, "mission_runtime", None)
+    """What the Mission Runtime recorded about its own work: one row per executed step (capability, duration, and the
+    spend/tokens ONLY when the step event carries them — most runtimes record none) and one per plan with the planner's
+    projected cost. Nothing is estimated here; without a runtime the dashboard is not offered."""
+    rt = _runtime(ctx)
     if rt is None:
         return SourceResult(_status("ai_usage", NOT_CONNECTED, detail="no Mission Runtime is bound to this deployment, so no usage is recorded"))
     now, rows = ctx.now(), []
     try:
         for m in rt.missions():
             tmpl = str(m.get("template") or m.get("title") or "mission")
-            project = ctx.config.project_for_mission(tmpl, str(m.get("title") or "")) or ctx.default_project
-            for e in rt.repo.timeline(m["id"]):
+            project = ctx.config.project_for_mission(tmpl, str(m.get("title") or m.get("goal") or "")) or ctx.config.source_project("mission_plane") or ctx.default_project
+            ends: Dict[str, Tuple[float, str]] = {}
+            tl = rt.repo.timeline(m["id"])
+            for e in tl:
+                if e.get("type") in ("NodeSucceeded", "NodeFailed", "NodeCompensated"):
+                    ends.setdefault(str((e.get("payload") or {}).get("node_id")), (float(e.get("ts") or 0.0), str(e.get("type"))[4:].lower()))
+            for e in tl:
                 p = e.get("payload") or {}
-                if e.get("type") != "NodeDispatched" or not (p.get("cost_usd") or p.get("tokens")):
-                    continue
-                rows.append(Record(source="ai_usage", kind="usage", id=f"{m['id']}:{p.get('node_id', '')}", title=str(p.get("capability") or ""), status="recorded",
-                                   project=project, at=float(e.get("ts") or 0.0),
-                                   fields={"mission": str(m["id"]), "workflow": tmpl, "cost_usd": float(p.get("cost_usd") or 0.0), "tokens": int(p.get("tokens") or 0),
-                                           "model": str(p.get("model") or ""), "capability": str(p.get("capability") or "")},
-                                   ref=f"mission:{m['id']}"))
+                ts = float(e.get("ts") or 0.0)
+                if e.get("type") == "NodeDispatched":
+                    end = ends.get(str(p.get("node_id")))
+                    cost, tokens = p.get("cost_usd"), p.get("tokens")
+                    rows.append(Record(source="ai_usage", kind="usage", id=f"{m['id']}:{p.get('node_id', '')}", title=str(p.get("capability") or ""),
+                                       status=end[1] if end else "running", project=project, at=ts,
+                                       fields={"mission": str(m["id"]), "workflow": tmpl, "capability": str(p.get("capability") or ""),
+                                               "operator": str(p.get("capability") or "").split(".", 1)[0], "model": str(p.get("model") or ""),
+                                               "cost_usd": float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None,
+                                               "tokens": int(tokens) if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) else None,
+                                               "duration_ms": round((end[0] - ts) * 1000) if end and end[0] >= ts else None},
+                                       ref=f"mission:{m['id']}"))
+                elif e.get("type") == "PlanCreated" and isinstance(p.get("projection"), Mapping):
+                    pr = p["projection"]
+                    usd = pr.get("expected_usd")
+                    rows.append(Record(source="ai_usage", kind="plan", id=f"{m['id']}:{p.get('plan_id', '')}", title=str(p.get("signature") or p.get("plan_id") or "plan")[:160],
+                                       status=str(p.get("reason") or "plan"), project=project, at=ts,
+                                       fields={"mission": str(m["id"]), "workflow": tmpl, "expected_usd": float(usd) if isinstance(usd, (int, float)) and not isinstance(usd, bool) else None,
+                                               "expected_success": pr.get("expected_success"), "expected_approvals": pr.get("expected_approvals"),
+                                               "within_budget": pr.get("within_budget"), "revision": p.get("revision")},
+                                       ref=f"mission:{m['id']}"))
     except Exception as e:  # noqa: BLE001
         return SourceResult(_status("ai_usage", UNAVAILABLE, detail=f"the Mission Runtime did not answer ({type(e).__name__})"))
     return SourceResult(_status("ai_usage", at=now, n=len(rows)), rows)
@@ -417,10 +491,10 @@ def sentinel(ctx: Context) -> SourceResult:
             status = str(c.get("status") or "").upper()
             rows.append(Record(
                 source="sentinel", kind="security_case", id=cid, title=str(c.get("title") or cid), status=status, project=project,
-                at=parse_ts(c.get("opened_at") or c.get("created_at") or c.get("updated_at")),
+                at=parse_ts(c.get("opened_at") or c.get("created_at") or c.get("first_seen") or c.get("updated_at")),
                 fields={"severity": str(c.get("severity") or "unknown").lower(), "case_type": str(c.get("case_type") or ""),
                         "open": status not in ("RESOLVED", "CLOSED", "DISMISSED", "FALSE_POSITIVE"),
-                        "evidence": len(c.get("evidence") or []), "closed_at": parse_ts(c.get("closed_at") or c.get("resolved_at")),
+                        "evidence": (c.get("counts") or {}).get("evidence", len(c.get("evidence") or [])) if isinstance(c.get("counts"), Mapping) else len(c.get("evidence") or []), "closed_at": parse_ts(c.get("closed_at") or c.get("resolved_at")),
                         "environment": str(c.get("environment") or ""), "product": spec.id, "asset": asset,
                         "control": str(c.get("control") or c.get("framework") or "")},
                 ref=f"{spec.id}:{cid}", url=spec.ui_link(f"/ui/cases/{cid}")))
@@ -661,7 +735,7 @@ def listmonk(ctx: Context) -> SourceResult:
     import base64  # noqa: PLC0415
     import os  # noqa: PLC0415
     c = ctx.clients.get("listmonk")
-    url = (c or {}).get("url") or os.environ.get("LISTMONK_URL", "").rstrip("/")
+    url = (c or {}).get("url") or (os.environ.get("LISTMONK_URL") or os.environ.get("LISTMONK_API_URL") or "").rstrip("/")
     user, token = (c or {}).get("user") or os.environ.get("LISTMONK_API_USER", ""), (c or {}).get("token") or os.environ.get("LISTMONK_API_TOKEN", "")
     if not (url and user and token):
         return SourceResult(_status("listmonk", NOT_CONNECTED, detail="no connection is configured for this application",
@@ -698,11 +772,14 @@ def metabase(ctx: Context) -> SourceResult:
     w = ctx.clients.get("metabase")
     if w is None:
         url, email, pw = os.environ.get("METABASE_API_URL", "").rstrip("/"), os.environ.get("METABASE_ADMIN_EMAIL", ""), os.environ.get("METABASE_ADMIN_PASSWORD", "")
-        if not (url and email and pw):
+        session = os.environ.get("METABASE_SESSION", "").strip()          # an existing session token, as Control Tower uses
+        if not (url and ((email and pw) or session)):
             return SourceResult(_status("metabase", NOT_CONNECTED, detail="no Metabase connection is configured",
                                         remedy="set METABASE_API_URL, METABASE_ADMIN_EMAIL and METABASE_ADMIN_PASSWORD"))
         from agentic_os.visualization.client import HttpMetabaseWriter  # noqa: PLC0415
         w = HttpMetabaseWriter(base_url=url, email=email, password=pw)
+        if session:
+            w._token = session
     now, project, rows = ctx.now(), ctx.config.source_project("metabase"), []
     public = str(opts.get("public_url") or getattr(w, "base_url", "")).rstrip("/")
     try:

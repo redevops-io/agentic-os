@@ -118,7 +118,10 @@ def revenue(b: Build) -> None:
     d.panels.append(panel("deals", "Largest open deals", "table", sources=S, span=2, rows=rows, empty="" if rows else "No deal is open.",
                           columns=[col("deal", "Deal"), col("company", "Company"), col("stage", "Stage"), col("amount", "Amount", "right"), col("currency", "Cur."),
                                    col("idle_days", "Days idle", "right")]))
-    d.summary = f"{len(open_)} open deal(s) worth {pipe if pipe is not None else 'an unknown amount'} {cur}; {len(stalled)} stalled."
+    if b.usable("twenty"):
+        d.summary = f"{len(open_)} open deal(s) worth {pipe if pipe is not None else 'an unknown amount'} {cur}; {len(stalled)} stalled.".replace("  ", " ")
+    else:
+        d.summary = (f"Revenue by month from Control Tower ({len(rev)} month(s)). " if rev else "") + "The CRM is not connected, so pipeline and deals are not known."
 
 
 # ── financial health ────────────────────────────────────────────────────────────────────────────────────────────────

@@ -91,7 +91,7 @@ def security(b: Build) -> None:
                                   "drill": b.drill(f"control:{k}", f"Findings for {k}", v, columns=cols)} for k, v in sorted(controls.items())],
                           empty="" if controls else "No finding names a compliance control, so control coverage cannot be shown.",
                           note="Only findings the product tagged with a control appear here."))
-    rows = [row({"case": r.title, "severity": str(r.get("severity")).title(), "status": r.status, "project": b.project_name(r.project), "evidence": r.get("evidence")},
+    rows = [row({"case": r.title, "severity": str(r.get("severity")).title(), "status": r.status.replace("_", " ").capitalize(), "project": b.project_name(r.project), "evidence": r.get("evidence")},
                 tone=SEV_TONE.get(str(r.get("severity")), "mut"), ref=r.ref, url=r.url,
                 drill=b.drill(f"case:{r.id}", r.title, [r] + [a for a in actions if a.get("case_id") == r.id], columns=("severity", "capability", "verification")))
             for r in sorted(opened, key=lambda r: SEVERITIES.index(r.get("severity")) if r.get("severity") in SEVERITIES else 9)[:50]]
@@ -172,6 +172,7 @@ def portfolio(b: Build) -> None:
     qa = QaModel(b)
     sec_ok, mis_ok = b.usable("sentinel"), b.usable("missions")
     opened = _open_cases(b) if sec_ok else []
+    sec_all = b.records("sentinel", timed=False) if sec_ok else []
     ms = b.records("missions", "mission") if mis_ok else []
     att = b.records("attention", "attention")
     cols = ("suite_name", "platform", "reason")
@@ -187,7 +188,9 @@ def portfolio(b: Build) -> None:
         pm = [r for r in ms if r.project == pid]
         pfail = [r for r in pm if r.status == "failed"]
         pneeds = [r for r in att if r.project == pid]
-        signals = [rd["tone"] if rd["state"] != "unknown" else "", "bad" if crit else "ok" if sec_ok else "", "bad" if pfail else "ok" if pm else ""]
+        # a signal exists only where the project has records in that source: a project nothing reports on is "not known", not healthy
+        has_sec = sec_ok and any(r.project == pid for r in sec_all)
+        signals = [rd["tone"] if rd["state"] != "unknown" else "", "bad" if crit else "ok" if has_sec else "", "bad" if pfail else "ok" if pm else ""]
         signals = [s for s in signals if s]
         tone = "mut" if not signals else "bad" if "bad" in signals else "warn" if "warn" in signals or pneeds else "ok"
         if signals:
@@ -197,9 +200,9 @@ def portfolio(b: Build) -> None:
         recs = ([qa.cell_record(x) for st in ("failed", "blocked", "unexecuted") for x in qa.cells(st, pid)] if qa.available else []) + crit + pfail + pneeds
         rows.append(row({"project": b.project_name(pid), "health": {"ok": "Healthy", "warn": "Needs attention", "bad": "At risk", "mut": "Not known"}[tone],
                          "release": rd["label"], "coverage": pct(k.get("executed"), k.get("planned")) if k else None,
-                         "failed_tests": k.get("failed") if k else None, "critical": len(crit) if sec_ok else None,
-                         "missions_failed": len(pfail) if mis_ok else None, "needs_you": len(pneeds)},
-                        tone=tone, drill=b.drill(f"project:{pid}", f"{b.project_name(pid)}: what is behind its health", recs, columns=cols + ("severity", "workflow")) if recs else ""))
+                         "failed_tests": k.get("failed") if k and k.get("planned") else None, "critical": len(crit) if has_sec else None,
+                         "missions_failed": len(pfail) if pm else None, "needs_you": len(pneeds)},
+                        tone=tone, drill=b.drill(f"project:{pid}", f"{b.project_name(pid)}: what blocks the release and needs attention", recs, columns=cols + ("severity", "workflow")) if recs else ""))
     c = qa.counts() if qa.available else {}
     crit_all = [r for r in opened if r.get("severity") in ("critical", "high")]
     failed_m = [r for r in ms if r.status == "failed"]
@@ -275,36 +278,63 @@ def infrastructure(b: Build) -> None:
 
 # ── AI resource utilisation and cost ────────────────────────────────────────────────────────────────────────────────
 def ai_costs(b: Build) -> None:
+    """Runtime work as it was recorded. Actual spend and tokens are shown only when step events carry them; when they
+    do not, the figure is "not known" and the planner's projection is shown beside it, labelled as a projection."""
     d, S = b.d, ("ai_usage",)
     if not b.usable("ai_usage"):
-        b.down("No Mission Runtime usage is recorded on this deployment.", "cost", "Model spend", S)
+        b.down("No Mission Runtime usage is recorded on this deployment.", "steps", "Steps executed", S)
         return
     use = b.records("ai_usage", "usage")
-    cost = round(sum(float(r.get("cost_usd") or 0) for r in use), 4)
-    tokens = sum(int(r.get("tokens") or 0) for r in use)
+    plans = b.records("ai_usage", "plan")
+    costed = [r for r in use if r.get("cost_usd", None) is not None]
+    tokened = [r for r in use if r.get("tokens", None) is not None]
+    cost = round(sum(float(r.get("cost_usd")) for r in costed), 4) if costed else None
+    tokens = sum(int(r.get("tokens")) for r in tokened) if tokened else None
     n_m = len({r.get("mission") for r in use})
-    b.drill("usage", "Recorded usage", use, columns=("workflow", "capability", "cost_usd", "tokens"))
+    durs = [float(r.get("duration_ms")) for r in use if r.get("duration_ms") is not None]
+    failed = [r for r in use if r.status == "failed"]
+    proj = [float(r.get("expected_usd")) for r in plans if r.get("expected_usd", None) is not None]
+    cols = ("workflow", "capability", "duration_ms", "cost_usd", "tokens")
+    b.drill("usage", "Executed steps", use, columns=cols)
+    b.drill("usage:failed", "Steps that failed", failed, columns=cols)
+    b.drill("plans", "Plans and their projected cost", plans, columns=("workflow", "expected_usd", "expected_success", "expected_approvals"))
     per = b.group(use, lambda r: r.project)
-    spend = b.track(b.metric("cost", "Model spend", needs=S, value=cost, unit="USD", drill="usage", good="down", note=f"{len(use)} executed step(s) in the range"),
-                    {p: (round(sum(float(r.get("cost_usd") or 0) for r in v), 4), None) for p, v in per.items()} or {"": (0.0, None)})
+    steps = b.track(b.metric("steps", "Steps executed", needs=S, value=len(use), drill="usage", note=f"across {n_m} mission(s) in the range"),
+                    {p: (len(v), None) for p, v in per.items()} or {"": (0, None)})
+    missing = "the runtime's step records carry no spend or token figure"
     d.panels.append(panel("summary", "Usage", "stats", sources=S, span=2, metrics=[
-        spend, b.metric("tokens", "Tokens", needs=S, value=tokens, drill="usage"),
-        b.metric("per_mission", "Spend per mission", needs=S, value=round(cost / n_m, 4) if n_m else None, unit="USD", unknown="" if n_m else "no_data", good="down"),
-        b.metric("missions", "Missions with usage", needs=S, value=n_m)]))
+        steps, b.metric("missions", "Missions with activity", needs=S, value=n_m),
+        b.metric("cost", "Model spend, recorded", needs=S, value=cost, unit="USD", drill="usage", good="down", unknown="" if costed else "no_data",
+                 note=f"{len(costed)} of {len(use)} step(s) carry a spend figure" if costed else missing),
+        b.metric("tokens", "Tokens, recorded", needs=S, value=tokens, drill="usage", unknown="" if tokened else "no_data",
+                 note=f"{len(tokened)} of {len(use)} step(s) carry a token count" if tokened else missing),
+        b.metric("projected", "Projected cost of plans", needs=S, value=round(sum(proj), 4) if proj else None, unit="USD", drill="plans", unknown="" if proj else "no_data",
+                 note=f"the planner's own estimate for {len(proj)} plan(s) — a projection, not a bill" if proj else "no plan carries a projection"),
+        b.metric("step_p50", "Median step duration", needs=S, value=round(median(durs) / 1000.0, 2) if durs else None, unit="s", good="down", unknown="" if durs else "no_data"),
+        b.metric("step_failed", "Failed steps", needs=S, value=len(failed), drill="usage:failed", tone="bad" if failed else "ok", good="down")]))
     days = b.days()
-    by_day = {x: 0.0 for x in days}
+    by_day = {x: 0 for x in days}
     for r in use:
         if day_of(r.at) in by_day:
-            by_day[day_of(r.at)] += float(r.get("cost_usd") or 0)
-    d.panels.append(panel("daily", "Spend per day", "timeseries", sources=S, x=days, unit="USD", empty="" if use else "No usage in this range.",
-                          series=[{"id": "cost", "label": "Spend", "tone": "run", "values": [round(by_day[x], 4) for x in days]}]))
-    for key, title, field_ in (("by_workflow", "Spend by workflow", "workflow"), ("by_model", "Spend by model", "model")):
+            by_day[day_of(r.at)] += 1
+    d.panels.append(panel("daily", "Steps executed per day", "timeseries", sources=S, x=days, unit="steps", empty="" if use else "No step ran in this range.",
+                          series=[{"id": "steps", "label": "Steps", "tone": "run", "values": [by_day[x] for x in days]}]))
+    for key, title, field_ in (("by_workflow", "Steps by workflow", "workflow"), ("by_operator", "Steps by operator", "operator")):
         g = b.group(use, lambda r, f=field_: str(r.get(f) or "not recorded"))
-        d.panels.append(panel(key, title, "bars", sources=S, unit="USD", empty="" if use else "No usage in this range.",
-                              items=[{"label": k, "value": round(sum(float(r.get("cost_usd") or 0) for r in v), 4), "tone": "run",
-                                      "drill": b.drill(f"{key}:{k}", f"{title}: {k}", v, columns=("capability", "cost_usd", "tokens"))}
-                                     for k, v in sorted(g.items(), key=lambda kv: -sum(float(r.get("cost_usd") or 0) for r in kv[1]))[:12]]))
-    d.summary = f"{cost} USD and {tokens} tokens across {n_m} mission(s)."
+        d.panels.append(panel(key, title, "bars", sources=S, empty="" if use else "No step ran in this range.",
+                              items=[{"label": k, "value": len(v), "tone": "bad" if any(r.status == "failed" for r in v) else "run",
+                                      "note": (f"{round(sum(float(r.get('cost_usd')) for r in v if r.get('cost_usd', None) is not None), 4)} USD recorded"
+                                               if any(r.get("cost_usd", None) is not None for r in v) else ""),
+                                      "drill": b.drill(f"{key}:{k}", f"{title}: {k}", v, columns=cols)}
+                                     for k, v in sorted(g.items(), key=lambda kv: -len(kv[1]))[:12]]))
+    d.panels.append(panel("plans", "Plans", "table", sources=S, span=2, empty="" if plans else "No plan was created in this range.",
+                          rows=[row({"workflow": r.get("workflow"), "plan": r.title, "projected": r.get("expected_usd"), "success": r.get("expected_success"),
+                                     "approvals": r.get("expected_approvals"), "budget": "Within" if r.get("within_budget") else "Over" if r.get("within_budget") is False else None},
+                                    tone="warn" if r.get("within_budget") is False else "", ref=r.ref) for r in plans[:50]],
+                          columns=[col("workflow", "Workflow"), col("plan", "Plan"), col("projected", "Projected USD", "right"), col("success", "Expected success", "right"),
+                                   col("approvals", "Approvals", "right"), col("budget", "Budget")],
+                          note="Projected figures are the planner's estimates when the plan was made."))
+    d.summary = (f"{len(use)} step(s) across {n_m} mission(s); " + (f"{cost} USD recorded." if costed else "actual spend is not recorded by this runtime."))
 
 
 # ── knowledge, retrieval and data quality ───────────────────────────────────────────────────────────────────────────
