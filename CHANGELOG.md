@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.4; no version set)
 
+- **Bundle 0.1.7 supersedes 0.1.6.** 0.1.6 was published with Edge Sentinel 0.6.3: the publish workflow set the image tags in its own environment and they had not followed the compose default (0.6.5). The finding loop fails on 0.1.6 at its last step (0.6.3 has no resolution endpoint); everything else in 0.1.6 works. The workflow pin is corrected and `tests/test_bundle_publish_pins.py` keeps the workflow, the compose default and the example environment together.
+
 ## v0.4.4 (a quality finding as a security case; synthetic study reliability)
 
 - **Finding loop (Projects, Edge Sentinel 0.6.5).** Three human-only routes in Projects follow a QA run that did not pass to closure: `…/runs/{run}/escalation` reports it to Edge Sentinel as a `qa.finding` agent event (an `INVESTIGATING` case whose evidence names the run and the digest of its evidence manifest; no action proposed), `…/runs/{run}/retest` starts a new run of the same target and profile bound to a fresh estimate, and `…/cases/{case}/resolution` closes the case only after Projects has re-read the re-test and found a verified pass of the same target and profile. Edge Sentinel gains `POST /api/v1/cases/{case_id}/resolution` (a person's decision, single-use approval bound to the case and the record; the record is kept as evidence; a resolved case stays resolved across restarts). `deploy/combined/bundle-loop.sh` runs the chain on a running bundle. See `docs/products/README.md`.
