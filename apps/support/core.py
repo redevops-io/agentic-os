@@ -40,7 +40,16 @@ CHATWOOT_API_TOKEN = os.environ.get("CHATWOOT_API_TOKEN", "")
 CHATWOOT_ACCOUNT_ID = os.environ.get("CHATWOOT_ACCOUNT_ID", "1")
 CHATWOOT_FRONT_URL = os.environ.get("CHATWOOT_FRONT_URL", "http://localhost:3003").rstrip("/")
 
-TENANT = "Meridian Wealth Management"
+# Who the app speaks for. The default is the demo tenant the seed data belongs to; an installation that connects its own Chatwoot sets its own name, because the name is
+# written into text a customer reads (the welcome message) and into the drafts an agent reviews. SUPPORT_TENANT_DESCRIPTION is one clause for the model ("a ... firm");
+# SUPPORT_TOPICS is what the welcome message offers help with. Neither is invented when unset: a custom tenant without them gets neutral wording.
+DEMO_TENANT = "Meridian Wealth Management"
+TENANT = (os.environ.get("SUPPORT_TENANT") or "").strip() or DEMO_TENANT
+_IS_DEMO_TENANT = TENANT == DEMO_TENANT
+TENANT_DESCRIPTION = (os.environ.get("SUPPORT_TENANT_DESCRIPTION") or "").strip() or ("a registered investment advisory firm" if _IS_DEMO_TENANT else "")
+TOPICS = (os.environ.get("SUPPORT_TOPICS") or "").strip() or ("your statements, advisory fees, or your accounts" if _IS_DEMO_TENANT else "your account")
+#: what a draft must not make up: the demo tenant is a financial firm, so returns are named; any tenant must not have figures or dates invented for it
+NO_INVENTION = "do not invent specific returns, figures, or firm dates" if _IS_DEMO_TENANT else "do not invent figures, prices, dates or commitments"
 SUBTITLE = "Front-line support that drafts, resolves, and escalates on a real Chatwoot core — a human reviews any public reply before it reaches the customer."
 
 
@@ -312,9 +321,9 @@ def draft_reply(body: dict, blurb: Callable[[str], str | None] | None = None) ->
 
     # LLM draft (optional) → deterministic fallback.
     llm = blurb(
-        "You are a friendly, professional client-service agent for Meridian Wealth Management, a "
-        "registered investment advisory firm. Draft a concise reply (3-5 sentences) to this client message. "
-        "Be concrete, set a next step, and do not invent specific returns, figures, or firm dates. "
+        f"You are a friendly, professional client-service agent for {TENANT}{(', ' + TENANT_DESCRIPTION) if TENANT_DESCRIPTION else ''}. "
+        "Draft a concise reply (3-5 sentences) to this client message. "
+        f"Be concrete, set a next step, and {NO_INVENTION}. "
         f"Customer: {contact}. Channel: {channel}. Message: \"{subject}\". "
         "Return ONLY the reply text, no preamble."
     ) if blurb else None
@@ -324,7 +333,7 @@ def draft_reply(body: dict, blurb: Callable[[str], str | None] | None = None) ->
     else:
         first = contact.split()[0] if contact and contact != "—" else "there"
         draft = (
-            f"Hi {first}, thanks for reaching out to Meridian Wealth Management — we've received your "
+            f"Hi {first}, thanks for reaching out to {TENANT} — we've received your "
             f"message and a team member is reviewing it now. We'll follow up shortly with next "
             f"steps; if this is time-sensitive, reply here or call our office and we'll prioritize it. "
             f"We appreciate your patience."
@@ -378,10 +387,10 @@ def _welcome_text(name: str, plan: str | None) -> str:
         f" You're all set on the {plan} plan." if plan else " Your account is all set up."
     )
     return (
-        f"Hi {first}, welcome to Meridian Wealth Management! 🎉{plan_line} "
+        f"Hi {first}, welcome to {TENANT}! 🎉{plan_line} "
         "Your dedicated client-service team is here whenever you need us — just reply to this "
-        "message with any questions about your statements, advisory fees, or your accounts, and "
-        "we'll take great care of you. Thanks for choosing Meridian Wealth Management."
+        f"message with any questions about {TOPICS}, and "
+        f"we'll take great care of you. Thanks for choosing {TENANT}."
     )
 
 

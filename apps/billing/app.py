@@ -75,7 +75,7 @@ def _strip_approval(obj):
     return obj
 
 
-app = FastAPI(title="agentic-billing (Meridian Wealth Management · core: Lago)")
+app = FastAPI(title=f"agentic-billing ({TENANT} · core: Lago)")
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
