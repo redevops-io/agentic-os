@@ -102,6 +102,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p uiroot && (cd uiroot && npm init -y >/dev/null && npm i --silent @playwright/test@1.56.1 axe-core@4.10.3 && if [ "$RUNNER_OS" = Linux ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi)
+          # v0.6.1 predates the explicit profile (launcher 0.1.2): recorded as a known defect of that release, not as a pass.
+          if [ "$TAG" = v0.6.1 ]; then export KNOWN_NO_PROFILE=1; fi
           PW_ROOT="$PWD/uiroot" node packaging/acceptance/ui_workflow.mjs "$SIDECAR" ui_result.json
       - name: Windows - uninstall leaves nothing running
         if: runner.os == 'Windows' && endsWith(env.ASSET, '.msi')
