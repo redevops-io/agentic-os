@@ -32,7 +32,8 @@ from agentic_os.mission.operator_sdk import pending_approval
 
 from . import core
 
-MAX_PAGES = 80
+MAX_PAGES = 400            # the most pages one audit reads; a sitemap with more is audited in part, and the result says so
+DEFAULT_PAGES = 200
 TITLE_RANGE, DESC_RANGE = (20, 70), (50, 170)
 UA = "market-radar-site-audit/1 (+read-only)"
 Fetch = Callable[[str], "tuple[int, str, dict]"]
@@ -101,6 +102,25 @@ def _page_facts(site: str, path: str, fetch: Fetch) -> dict:
             "links": p.links, "cta_total": p.cta_total, "cta_tagged": p.cta_tagged, "analytics": p.analytics}
 
 
+def _other_form(path: str) -> str:
+    """The same address with or without its trailing slash (a file name is left alone)."""
+    if path in ("", "/") or "." in path.rsplit("/", 1)[-1]:
+        return path
+    return path[:-1] if path.endswith("/") else path + "/"
+
+
+def _parent(path: str, listed: "set[str]") -> str:
+    """The nearest page above ``path`` that the sitemap lists: where a link to an orphan belongs. The home page when there is none."""
+    parts = path.strip("/").split("/")
+    for i in range(len(parts) - 1, 0, -1):
+        up = "/" + "/".join(parts[:i]) + "/"
+        if up in listed:
+            return up
+        if up.rstrip("/") in listed:
+            return up.rstrip("/")
+    return "/"
+
+
 def run_check(site: str, check: dict, fetch: Fetch) -> "tuple[bool, str]":
     """One machine check against the live site. ``(passed, what was observed)``."""
     kind, path = check.get("kind"), check.get("path", "/")
@@ -130,8 +150,13 @@ def run_check(site: str, check: dict, fetch: Fetch) -> "tuple[bool, str]":
     if kind == "cta_instrumented":
         return f["cta_total"] == f["cta_tagged"], f"{f['cta_tagged']} of {f['cta_total']} buttons carry an event"
     if kind == "links_to":
-        target = check.get("target", ""); ok = any(urlsplit(urljoin(site, h)).path == target for h in f["links"])
+        target = check.get("target", ""); ok = any(urlsplit(urljoin(site + path, h)).path in (target, _other_form(target)) for h in f["links"])
         return ok, f"{'links' if ok else 'does not link'} to {target}"
+    if kind == "links_in_listed_form":
+        listed = set(_sitemap_paths(site, fetch)[0])
+        bad = sorted({u.path for u in (urlsplit(urljoin(site + path, h)) for h in f["links"]) if u.netloc in ("", urlsplit(site).netloc)
+                      and u.path not in listed and _other_form(u.path) in listed})
+        return not bad, (f"{len(bad)} internal link(s) are not in the form the sitemap lists: " + ", ".join(bad[:5])) if bad else "every internal link uses the listed form"
     return False, f"unknown check {kind!r}"
 
 
@@ -174,17 +199,25 @@ def site_audit(inp: dict, *, fetch: Fetch = _fetch) -> dict:
     err = core._watch_url_error(site) if site else "give the site to audit, for example https://example.com"
     if err:
         return {"status": "error", "action": "site_audit", "error": err}
-    limit = max(1, min(int(inp.get("max_pages") or MAX_PAGES), MAX_PAGES))
+    limit = max(1, min(int(inp.get("max_pages") or DEFAULT_PAGES), MAX_PAGES))
     paths, notes = _sitemap_paths(site, fetch)
     findings: List[dict] = [_finding("SITE", "/", n, {"kind": "in_sitemap", "path": "/"}, "high") for n in notes]
     pages, linked = [], set()
+    listed = set(paths)
     for path in paths[:limit]:
         f = _page_facts(site, path, fetch)
         pages.append({k: f[k] for k in ("path", "status", "title", "noindex", "cta_total", "cta_tagged")})
+        off_form = set()
         for h in f["links"]:
             u = urlsplit(urljoin(site + path, h))
             if u.netloc in ("", urlsplit(site).netloc):
                 linked.add(u.path if u.path.endswith("/") or "." in u.path.rsplit("/", 1)[-1] else u.path + "/")
+                other = _other_form(u.path)
+                if u.path not in listed and other in listed:          # the sitemap offers the page under the other form of this address
+                    off_form.add(u.path)
+        if f["status"] == 200 and off_form:
+            findings.append(_finding("LINK_FORM", path, f"{len(off_form)} internal link(s) use an address the sitemap lists in another form (each one is answered with a redirect): "
+                                     + ", ".join(sorted(off_form)[:5]), {"kind": "links_in_listed_form", "path": path}, "low"))
         if f["status"] != 200:
             findings.append(_finding("STATUS", path, f"listed in the sitemap but answers HTTP {f['status']}", {"kind": "listed_page_loads", "path": path}, "high")); continue
         if f["noindex"]:
@@ -199,16 +232,20 @@ def site_audit(inp: dict, *, fetch: Fetch = _fetch) -> dict:
             findings.append(_finding("H1", path, f"{len(f['h1'])} first-level headings", {"kind": "one_h1", "path": path}, "low"))
         if f["cta_total"] != f["cta_tagged"]:
             findings.append(_finding("CTA_EVENT", path, f"{f['cta_total'] - f['cta_tagged']} of {f['cta_total']} buttons carry no analytics event", {"kind": "cta_instrumented", "path": path}, "low"))
-    for path in paths[:limit]:
-        if path != "/" and path not in linked:
-            findings.append(_finding("ORPHAN", path, "in the sitemap but no audited page links to it", {"kind": "links_to", "path": "/", "target": path}, "low"))
+    truncated = len(paths) > limit
+    # A page that was not read may hold the only link to another page: for a partial audit "nothing links to it" cannot be said, so it is not said.
+    if not truncated:
+        for path in paths:
+            if path != "/" and path not in linked:
+                findings.append(_finding("ORPHAN", path, "in the sitemap but no page of the sitemap links to it", {"kind": "links_to", "path": _parent(path, listed), "target": path}, "low"))
     by_code: Dict[str, int] = {}
     for f in findings:
         by_code[f["code"]] = by_code.get(f["code"], 0) + 1
     audit = {"site": site, "pages_in_sitemap": len(paths), "pages_audited": len(pages), "findings": findings, "by_code": by_code,
-             "pages": pages, "truncated": len(paths) > limit}
+             "pages": pages, "truncated": truncated, "not_read": max(0, len(paths) - limit)}
     return {"status": "done", "action": "site_audit", "site_audit": audit,
-            "summary": f"{len(pages)} pages audited on {site}: {len(findings)} findings ({', '.join(f'{k} {v}' for k, v in sorted(by_code.items())) or 'none'})"}
+            "summary": f"{len(pages)} pages audited on {site}: {len(findings)} findings ({', '.join(f'{k} {v}' for k, v in sorted(by_code.items())) or 'none'})"
+                       + (f"; {len(paths) - limit} page(s) of the sitemap were not read, so pages without inbound links are not reported" if truncated else "")}
 
 
 def _fact(inp: dict, key: str) -> Any:
@@ -223,7 +260,8 @@ _WHY = {"STATUS": "a page the sitemap offers to search engines does not load", "
         "TITLE": "the title is what a search result shows first", "DESCRIPTION": "the description is the rest of the search result",
         "CANONICAL": "without a self-canonical, duplicates split what the page earns", "H1": "one first-level heading tells a reader and a crawler what the page is",
         "CTA_EVENT": "a button with no event is a step of the funnel that cannot be measured", "ORPHAN": "a page nothing links to is found only through the sitemap",
-        "SITE": "the site-level files decide whether anything else is read"}
+        "SITE": "the site-level files decide whether anything else is read",
+        "LINK_FORM": "an internal link in another form than the listed one costs a redirect on every click and every crawl"}
 
 
 def plan_digest(items: List[dict]) -> str:

@@ -168,3 +168,49 @@ def test_the_mission_template_runs_the_whole_loop_and_stops_for_a_person_and_for
         assert ("NodeSucceeded", cap) in ev3, cap
     re = ev3[("NodeSucceeded", "radar.reassess")]["reassessment"]
     assert re["remaining"] == [] and re["new"] == [] and re["analytics_before"] and re["analytics_after"]
+
+
+def test_a_partial_audit_does_not_call_a_page_an_orphan_and_says_how_much_it_did_not_read():
+    """Found on a real site: the page that held the only link was past the limit, and the audit called its target an orphan."""
+    s = Site()
+    s.fix()
+    s.sitemap = ["/", "/a/", "/b/", "/z-index/"]
+    s.pages.update({"/": page(GOOD_T, GOOD_D, "/", links=["/a/", "/z-index/"]), "/a/": page(GOOD_T, GOOD_D, "/a/"), "/b/": page(GOOD_T, GOOD_D, "/b/"),
+                    "/z-index/": page(GOOD_T, GOOD_D, "/z-index/", links=["/b/"])})
+    part = loop.site_audit({"site": SITE, "max_pages": 3}, fetch=s.fetch)["site_audit"]          # reads /, /a/, /b/; /z-index/ (which links to /b/) is not read
+    assert part["truncated"] is True and part["not_read"] == 1 and part["pages_audited"] == 3 and "ORPHAN" not in part["by_code"]
+    whole = loop.site_audit({"site": SITE}, fetch=s.fetch)
+    assert whole["site_audit"]["truncated"] is False and whole["site_audit"]["not_read"] == 0 and "ORPHAN" not in whole["site_audit"]["by_code"]
+    assert "not read" in loop.site_audit({"site": SITE, "max_pages": 3}, fetch=s.fetch)["summary"] and "not read" not in whole["summary"]
+
+
+def test_an_orphan_is_to_be_linked_from_the_nearest_listed_page_above_it():
+    s = Site()
+    s.fix()
+    s.sitemap = ["/", "/docs/", "/docs/install/linux/", "/lonely/"]
+    s.pages.update({"/": page(GOOD_T, GOOD_D, "/", links=["/docs/"]), "/docs/": page(GOOD_T, GOOD_D, "/docs/"),
+                    "/docs/install/linux/": page(GOOD_T, GOOD_D, "/docs/install/linux/"), "/lonely/": page(GOOD_T, GOOD_D, "/lonely/")})
+    found = {f["page"]: f["check"] for f in loop.site_audit({"site": SITE}, fetch=s.fetch)["site_audit"]["findings"] if f["code"] == "ORPHAN"}
+    assert found == {"/docs/install/linux/": {"kind": "links_to", "path": "/docs/", "target": "/docs/install/linux/"},
+                     "/lonely/": {"kind": "links_to", "path": "/", "target": "/lonely/"}}
+    assert loop.run_check(SITE, found["/docs/install/linux/"], s.fetch)[0] is False
+    s.pages["/docs/"] = page(GOOD_T, GOOD_D, "/docs/", links=["install/linux/"])                 # a relative link, resolved against the page it is on
+    assert loop.run_check(SITE, found["/docs/install/linux/"], s.fetch)[0] is True
+
+
+def test_an_internal_link_in_another_form_than_the_sitemaps_is_a_finding_until_it_is_written_in_the_listed_form():
+    s = Site()
+    s.fix()
+    s.pages["/"] = page(GOOD_T, GOOD_D, "/", links=["/pricing", "/guide/", "/orphan/", "/file.pdf", "https://elsewhere.example.com/pricing"])
+    audit = loop.site_audit({"site": SITE}, fetch=s.fetch)["site_audit"]
+    (f,) = [x for x in audit["findings"] if x["code"] == "LINK_FORM"]
+    assert f["page"] == "/" and "/pricing" in f["detail"] and "/file.pdf" not in f["detail"] and "elsewhere" not in f["detail"]
+    assert f["check"] == {"kind": "links_in_listed_form", "path": "/"} and "ORPHAN" not in audit["by_code"], "the link still counts as a link to the page"
+    ok, seen = loop.run_check(SITE, f["check"], s.fetch)
+    assert ok is False and "/pricing" in seen
+    rec = next(i for i in loop.recommend({"site_audit": audit})["recommendations"]["items"] if i["id"] == "REC-LINK_FORM")
+    assert rec["why"] and rec["checks"] == [f["check"]]
+    s.pages["/"] = page(GOOD_T, GOOD_D, "/", links=["/pricing/", "/guide/", "/orphan/"])
+    assert loop.run_check(SITE, f["check"], s.fetch) == (True, "every internal link uses the listed form")
+    assert "LINK_FORM" not in loop.site_audit({"site": SITE}, fetch=s.fetch)["site_audit"]["by_code"]
+
