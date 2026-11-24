@@ -57,6 +57,9 @@ DEFINITIONS: Tuple[Definition, ...] = (
                "Context sources, what was indexed or skipped, and what is stale."),
 )
 BY_ID = {d.id: d for d in DEFINITIONS}
+#: every source a dashboard reads (not only the ones that decide whether it is offered), fetched together before it is built
+WARM = {"portfolio": ("missions", "attention", "qa", "qa_ingest", "sentinel"), "missions": ("missions", "attention"), "market": ("umami", "twenty"),
+        "revenue": ("twenty", "metabase"), "finance": ("erpnext", "lago", "metabase"), "marketing": ("postiz", "listmonk")}
 
 
 class NotFound(LookupError):
@@ -134,6 +137,7 @@ class DashboardService:
 
     def catalog(self, acc: Access) -> Dict[str, Any]:
         shown, hidden = [], []
+        self.cache.warm([sid for df in DEFINITIONS for sid in df.needs_any if acc.source(sid)])
         for df in DEFINITIONS:
             states = {sid: self._source_state(sid, acc) for sid in df.needs_any}
             if any(st not in (NOT_CONNECTED, UNAUTHORIZED) for st in states.values()):
@@ -163,6 +167,7 @@ class DashboardService:
             # a caller may ask for a new read, but not make this server hammer the connected applications
             self._last_fresh = time.monotonic()
             self.cache.invalidate()
+        self.cache.warm([sid for sid in WARM.get(df.id, df.needs_any) if acc.source(sid)])
         d = Dashboard(id=df.id, title=df.title, priority=df.priority)
         b = Build(dashboard=d, cache=self.cache, access=acc, store=self.store, filters=filters, projects=self.projects(), now=self.clock())
         df.builder(b)

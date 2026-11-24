@@ -868,6 +868,18 @@ class SourceCache:
             self._hit[sid] = (now, res)
         return res
 
+    def warm(self, sids: Sequence[str]) -> None:
+        """Read several sources at once. A person waits for the slowest application, not for the sum of them."""
+        todo = [sid for sid in dict.fromkeys(sids) if sid in COLLECTORS and self.enabled(sid)]
+        now = time.monotonic()
+        with self._lock:
+            todo = [sid for sid in todo if not (self._hit.get(sid) and now - self._hit[sid][0] < max(self.ttl, SOURCE_TTL_S.get(sid, 0.0)))]
+        if len(todo) < 2:
+            return
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+        with ThreadPoolExecutor(max_workers=min(8, len(todo)), thread_name_prefix="dash-src") as pool:
+            list(pool.map(self.get, todo))
+
     def invalidate(self) -> None:
         """Forget what was read, except a rate-limited source that answered: a forced refresh must not spend its quota."""
         now = time.monotonic()
