@@ -46,7 +46,7 @@ jobs:
       TAG: ${{ inputs.release_tag }}
       CONFIRM: ${{ inputs.confirm }}
       RUN_ID: ${{ inputs.signing_run_id }}
-      BUILD_COMMIT: 6e52e3efa093fd7e6b34f38f6350947af499f639
+      BUILD_COMMIT: d64d7b2ac95137e63bcd10474e1b822080b39f7b
     steps:
       - name: Check the confirmation and the branch
         run: |
