@@ -1,0 +1,10 @@
+# Dashboards of this installation (AGENTIC_OS_DASHBOARDS). Reference: docs/DASHBOARDS.md.
+# Each source below is read through its application's API with the key from .env; without the key the dashboard says the
+# application is not connected. Edit the project names freely; add projects and QA suites as you need them.
+schema: aos.dashboards/v1
+projects:
+  - {id: main, name: Operations}
+sources:
+  twenty: {project: main}      # needs TWENTY_API_KEY   (Twenty: Settings > APIs & Webhooks)
+  postiz: {project: main}      # needs POSTIZ_API_KEY   (Postiz: Settings > Public API)
+  metabase: {project: main}    # needs METABASE_ADMIN_EMAIL and METABASE_ADMIN_PASSWORD
