@@ -173,6 +173,9 @@ class CaptureItem:
         return d
 
 
+_OPEN_LOCK = threading.Lock()
+
+
 class CaptureStore:
     """Durable captures: one row per item, keyed by tenant and project, holding the whole item with its event history.
     A tenant only ever reads its own rows. SQLite, one file; safe for the threads of one process."""
@@ -180,10 +183,14 @@ class CaptureStore:
     def __init__(self, path: str) -> None:
         self.path = path
         self._lock = threading.Lock()
-        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("CREATE TABLE IF NOT EXISTS captures (tenant TEXT NOT NULL, project TEXT NOT NULL, id TEXT NOT NULL, "
-                         "actor TEXT NOT NULL, updated REAL NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (tenant, project, id))")
+        # Opening is serialised across the process, and a busy file is waited for: two requests that both open the store for the first
+        # time used to collide on the journal-mode change ("database is locked"), and the first page load of a fresh install answered 500.
+        with _OPEN_LOCK:
+            self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=30)
+            self._db.execute("PRAGMA busy_timeout=30000")
+            self._db.execute("PRAGMA journal_mode=WAL")
+            self._db.execute("CREATE TABLE IF NOT EXISTS captures (tenant TEXT NOT NULL, project TEXT NOT NULL, id TEXT NOT NULL, "
+                             "actor TEXT NOT NULL, updated REAL NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (tenant, project, id))")
 
     def load(self, tenant: str, project: str) -> List[dict]:
         with self._lock:

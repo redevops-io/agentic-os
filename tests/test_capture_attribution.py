@@ -85,3 +85,23 @@ def test_in_the_sample_sandbox_an_authenticated_caller_is_still_named(monkeypatc
     assert got["actor_id"] == "requester:acme" and got["tenant_id"] == "acme"
     anon = c.post(f"/api/projects/{pid}/capture", json={"content": "Remind me to call John tomorrow", "source": "manual"}).json()
     assert anon["actor_id"] == "user:operator" and anon["tenant_id"] == "demo" and anon["id"] != got["id"]
+
+
+def test_many_requests_that_open_the_store_and_the_ledger_for_the_first_time_all_succeed(tmp_path, monkeypatch):
+    """The first page load of a fresh install sends several requests at once. Each used to open the capture store itself; two opens
+    of a new file collided ("database is locked") and the Today feed answered 500 on some machines."""
+    import threading
+    from agentic_os.capture import CaptureStore
+    errors = []
+    for round_ in range(60):
+        path = str(tmp_path / f"c{round_}.db"); gate = threading.Barrier(8)
+
+        def first_open():
+            gate.wait()
+            try:
+                CaptureStore(path).load("t", "p")
+            except Exception as e:  # noqa: BLE001
+                errors.append(repr(e))
+        ts = [threading.Thread(target=first_open) for _ in range(8)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+    assert errors == []
