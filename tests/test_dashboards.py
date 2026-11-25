@@ -691,3 +691,19 @@ def test_metabase_must_prove_its_sign_in_even_with_no_card_configured(monkeypatc
     mb.code = 200
     d = c.get("/api/dashboards/revenue", params={"fresh": "true"}).json()
     assert _panel(d, "revenue_month")["series"][0]["values"] == [10, 12]
+
+
+def test_how_to_enable_a_source_is_said_only_to_a_caller_who_may_read_it(monkeypatch, tmp_path):
+    """Setting names, the dashboards file path and connection detail are for a caller with access to that source."""
+    c, *_ = _app(monkeypatch, tmp_path, access=ACCESS)
+    admin, acme = ({"Authorization": f"Bearer {t}"} for t in (ADMIN, ACME))
+    full = {d["id"]: d for d in c.get("/api/dashboards", headers=admin).json()["not_connected"]}
+    assert full and all(d.get("needs") and d.get("why") for d in full.values())
+    scoped = c.get("/api/dashboards", headers=acme).json()["not_connected"]
+    assert any("needs" not in d for d in scoped), "the scoped caller is told how to enable every source: the case under test did not occur"
+    for d in scoped:
+        allowed = {n["id"] for n in d.get("needs", [])}
+        assert allowed <= {n["id"] for n in full[d["id"]]["needs"]}
+        assert d["connect"] == full[d["id"]]["connect"]                       # the title and the application names stay
+        if not allowed:
+            assert "why" not in d and "needs" not in d and "dashboards file" not in json.dumps(d)
