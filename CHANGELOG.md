@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.8; no version set)
 
+- **Pins: Edge Sentinel 0.6.7, bundle 0.1.10.** The bundle's Projects image is built from this tree (kernel 0.4.8 and later: the dashboards, no sample data in the production profile).
+
 ## v0.4.8 (a production deployment serves no fixture; who did it is who the server authenticated)
 
 - **`AGENTIC_OS_PROFILE=production` never serves sample data.** Projects then runs `LiveProjectionProvider`: missions come from the Mission Plane (`MISSION_PLANE_URL`), runtime health says only what the deployment knows, and workflows, discovery, sources, templates, apps, activity, social and inspection are real or empty. `PROJECTS_PROVIDER=sample` is refused there. Before, a production deployment showed the demo project, demo "needs you" cases and notifications, and its knowledge and infrastructure dashboards read demo rows labelled live. `/api/projects` now says `sample: true|false` so the UI shows illustrative content only on a sample deployment.
