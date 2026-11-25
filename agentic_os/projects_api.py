@@ -274,6 +274,8 @@ class SampleProjectionProvider:
 
     project_id: str = "customer-ops"
     project_name: str = "Customer Operations"
+    #: This provider's own projections are demo fixtures; anything built on them says so (the dashboards label them "sample").
+    serves_fixtures = True
     #: Today's sandbox cases + simulated sends exist ONLY on the pure sample provider. A provider backed by real
     #: producers (RegisteredProducersProvider) sets this False: its Today is the read-only feed of real signals.
     today_sample_cases: bool = True
@@ -309,7 +311,8 @@ class SampleProjectionProvider:
             self.outcome_events = list(FileOutcomeStore(self.persist_path).load())
 
     def projects(self) -> List[dict]:
-        return [{"id": self.project_id, "name": self.project_name, "health": "ok"}]
+        # ``sample`` tells the UI whether this deployment serves demo fixtures, so it shows its illustrative content only there
+        return [{"id": self.project_id, "name": self.project_name, "health": "ok", "sample": bool(self.serves_fixtures)}]
 
     def missions(self, _pid: str) -> List[dict]:
         m = [
@@ -368,18 +371,55 @@ class SampleProjectionProvider:
 
     # ── Today: the outcome-first feed (agentic_os.today). Per-session sandboxed sample ledger; a real
     # provider supplies its own implementation of these methods against the governed runtime.
+    #: The tenant of a caller who is not a tenant credential (the operator, the desktop owner, the anonymous sandbox).
+    deployment_tenant: str = "demo"
+
+    def _caller(self) -> "tuple[Optional[str], str]":
+        """(actor, tenant) of the request being served, from the credential the SERVER validated; ``(None, deployment tenant)``
+        for an anonymous caller. A tenant credential (``requester:<t>`` / ``approver:<t>``) acts in its own tenant and nowhere else."""
+        from agentic_os.products.principal import current_principal
+        hub = getattr(self, "products_hub", None)
+        p = current_principal(hub.registry.single_owner if hub is not None else "")
+        if p and ":" in p and p.split(":", 1)[0] in ("requester", "approver"):
+            return p, p.split(":", 1)[1]
+        return p, self.deployment_tenant
+
+    def _capture_store(self):
+        """The durable intake's file: ``$AGENTIC_OS_CAPTURE_DB``. Unset = no durable intake (the sample sandbox stays in memory)."""
+        import os
+        if getattr(self, "_cstore", None) is None:
+            path = os.environ.get("AGENTIC_OS_CAPTURE_DB", "").strip()
+            if not path:
+                return None
+            from agentic_os.capture import CaptureStore
+            self._cstore = CaptureStore(path)
+        return self._cstore
+
     def _today(self, pid: str, session: str):
-        from agentic_os.today import TodaySessions
+        from agentic_os.today import Today, TodaySessions
+        actor, tenant = self._caller()
+        if actor and not self.today_sample_cases:
+            # An authenticated caller on a real deployment: ONE ledger per tenant and project (not a per-browser sandbox), kept for
+            # the life of the process, with a durable intake when a capture store is configured.
+            if getattr(self, "_tenant_today", None) is None:
+                self._tenant_today = {}
+            t = self._tenant_today.get((tenant, pid))
+            if t is None:
+                t = Today(tenant=tenant, project=pid, sample_cases=False)
+                t.capture_store = self._capture_store()
+                self._tenant_today[(tenant, pid)] = t
+            return t
         if getattr(self, "_today_sessions", None) is None:
             self._today_sessions = TodaySessions()
-        return self._today_sessions.get(session or "anon", tenant="demo", project=pid,
+        # the sandbox is keyed by tenant as well, so two tenants on one address never share a ledger
+        return self._today_sessions.get(f"{tenant}|{session or 'anon'}", tenant=tenant, project=pid,
                                         sample_cases=self.today_sample_cases)
 
     def today(self, pid: str, session: str = "") -> dict:
         feed = self._today(pid, session).feed(self.priorities(pid), self.attention(pid))
         # What Today can do here, so the UI offers only that. Without a governed case source Today is read-only: capture and the item detail
         # both answer 501, and a UI that was not told would show a dead Quick Capture box and request both on every load.
-        feed["supports"] = {"capture": bool(self.today_sample_cases), "detail": bool(self.today_sample_cases)}
+        feed["supports"] = {"capture": self.capture_supported(), "detail": bool(self.today_sample_cases)}
         return feed
 
     def today_item(self, pid: str, item_id: str, session: str = "", targets=None, identity_id=None) -> dict:
@@ -397,10 +437,16 @@ class SampleProjectionProvider:
         return {**hit, "why": hit["reason"], "evidence": [], "action": None, "history": [], "receipt": None}
 
     def today_approve(self, pid: str, item_id: str, session: str = "", **kw) -> dict:
+        actor = self._caller()[0]
+        if actor and kw.get("approver", "user:operator") == "user:operator":
+            kw["approver"] = actor                # the decision record names who the server authenticated, never the built-in label
         return self._today(pid, session).approve(item_id, **kw)
 
     def today_reconcile(self, pid: str, item_id: str, session: str = "", manual: Optional[str] = None,
                         by: str = "user:operator") -> dict:
+        actor = self._caller()[0]
+        if actor and by == "user:operator":
+            by = actor
         return self._today(pid, session).reconcile(item_id, manual=manual, by=by)
 
     def today_snooze(self, pid: str, item_id: str, session: str = "", seconds: float = 0) -> dict:
@@ -427,23 +473,30 @@ class SampleProjectionProvider:
     def today_simulate_outcome(self, pid: str, item_id: str, session: str = "") -> dict:
         return self._today(pid, session).observe_outcome(item_id)
 
+    def capture_supported(self) -> bool:
+        """The sample sandbox always has an intake. A real deployment has one only for a caller the server authenticated AND with a
+        durable store configured: an intake that cannot name its actor and tenant, or forgets on restart, is not offered."""
+        if self.today_sample_cases:
+            return True
+        return bool(self._caller()[0]) and self._capture_store() is not None
+
     def _intake(self, pid: str, session: str):
         from agentic_os.capture import CaptureError
-        if not self.today_sample_cases:                       # fail closed: durable intake needs tenant+actor binding
+        if not self.capture_supported():                      # fail closed: durable intake needs tenant+actor binding
             raise CaptureError(501, "unsupported", "capture is not enabled for this deployment")
         return self._today(pid, session).intake
 
     def capture(self, pid: str, session: str = "", **kw) -> dict:
-        return self._intake(pid, session).capture(**kw)
+        return self._intake(pid, session).capture(actor=self._caller()[0], **kw)
 
     def capture_list(self, pid: str, session: str = "", status=None) -> list:
         return self._intake(pid, session).list(status=status)
 
     def capture_resolve(self, pid: str, capture_id: str, session: str = "", case_id: str = "") -> dict:
-        return self._intake(pid, session).resolve(capture_id, case_id)
+        return self._intake(pid, session).resolve(capture_id, case_id, actor=self._caller()[0])
 
     def capture_archive(self, pid: str, capture_id: str, session: str = "") -> dict:
-        return self._intake(pid, session).archive(capture_id)
+        return self._intake(pid, session).archive(capture_id, actor=self._caller()[0])
 
     def social_intelligence(self, _pid: str) -> dict:
         """Phase 9 Social Intelligence card over the offline replay corpus (no live social provider)."""
@@ -1505,17 +1558,156 @@ def open_intervention_store_from_env():
     return FileInterventionStore(p)
 
 
+def production_profile() -> bool:
+    import os as _os
+    return _os.environ.get("AGENTIC_OS_PROFILE", "").strip().lower() == "production"
+
+
+_EMPTY_PRIORITIES = {"summary": "Nothing needs you right now.", "surfaced": [], "deferred": [], "handled_automatically": 0, "abstained": 0}
+
+
+@dataclass
+class LiveProjectionProvider(RegisteredProducersProvider):
+    """The provider of a PRODUCTION deployment: nothing it serves is a fixture.
+
+    Every projection is either read from a real system (registered producers, the products registry mixed in front of this
+    class, a Mission Plane named by ``MISSION_PLANE_URL``, a deployment named by ``PROJECTS_INSPECTION_TARGET``) or is the
+    honest empty state. The sample provider's customers, missions, workflows, findings, sources, runtime health, templates
+    and "needs you" cases never appear here, so a number on this deployment cannot be a demo number."""
+
+    project_id: str = field(default_factory=lambda: __import__("os").environ.get("PROJECTS_PROJECT_ID", "").strip() or "main")
+    project_name: str = field(default_factory=lambda: __import__("os").environ.get("PROJECTS_PROJECT_NAME", "").strip() or "Operations")
+    deployment_tenant: str = field(default_factory=lambda: __import__("os").environ.get("PROJECTS_TENANT", "").strip() or "default")
+    connected: Set[str] = field(default_factory=set)
+    serves_fixtures = False
+    today_sample_cases: bool = False
+
+    _STATE = {"succeeded": "completed", "completed": "completed", "failed": "failed", "running": "running", "executing": "running",
+              "waiting_approval": "needs", "awaiting_approval": "needs", "paused": "needs", "pending": "scheduled", "planned": "scheduled"}
+
+    def _plane(self):
+        import os as _os
+        url = _os.environ.get("MISSION_PLANE_URL", "").strip()
+        if not url:
+            return None
+        from agentic_os.dashboards.sources import RemoteMissionPlane
+        return RemoteMissionPlane(url, _os.environ.get("MISSION_PLANE_TOKEN", "").strip())
+
+    def _plane_missions(self) -> "tuple[List[dict], str]":
+        """(rows, error). Cached for a few seconds: the UI asks for missions on most views."""
+        import time as _time
+        hit = getattr(self, "_pm", None)
+        if hit and _time.time() - hit[0] < 15:
+            return hit[1], hit[2]
+        plane, rows, err = self._plane(), [], ""
+        if plane is not None:
+            try:
+                rows = plane.missions()
+            except Exception as e:  # noqa: BLE001  (an unreachable plane is a stated outage, not an empty portfolio)
+                err = type(e).__name__
+        self._pm = (_time.time(), rows, err)
+        return rows, err
+
+    def missions(self, _pid: str) -> List[dict]:
+        rows, _ = self._plane_missions()
+        out = []
+        for m in rows:
+            st = str(m.get("state") or m.get("status") or "").lower()
+            out.append({"id": str(m["id"]), "title": str(m.get("title") or m.get("goal") or m["id"])[:200],
+                        "workflow": str(m.get("template") or ""), "state": self._STATE.get(st, "running" if st else "scheduled"),
+                        "progress": st or "—", "context_used": [], **_prov("mission", f"mission:{m['id']}")})
+        return out
+
+    def mission_detail(self, project_id: str, mission_id: str) -> dict:
+        summary = next((m for m in self.missions(project_id) if m["id"] == mission_id), None)
+        return {"summary": summary, "steps": [], "context_used": [], "context_plan_note": ""} if summary else {}
+
+    def workflows(self, _pid: str) -> List[dict]:
+        return []
+
+    def attention(self, _pid: str) -> List[dict]:
+        return []
+
+    def discovery(self, _pid: str) -> List[dict]:
+        return []
+
+    def activity(self, _pid: str) -> List[dict]:
+        return []
+
+    def templates(self, _pid: str) -> List[dict]:
+        return []
+
+    def sources(self, _pid: str) -> List[dict]:
+        return []
+
+    def apps(self, _pid: str) -> List[dict]:
+        return []
+
+    def connect_app(self, provider: str) -> dict:
+        return {"provider": provider, "state": "NOT_CONNECTED", "connected": False,
+                "detail": "connections on this deployment are configured by its operator, not from this screen"}
+
+    def priorities(self, project_id: str) -> dict:
+        if not registered_live_sources(self.registry):
+            return {**_EMPTY_PRIORITIES, "basis": "none"}
+        return super().priorities(project_id)
+
+    def social_intelligence(self, _pid: str) -> dict:
+        return {"mission": "Social Intelligence", "sources": [], "observations": 0,
+                "opportunities": {"total": 0, "problem_signals": 0, "solution_seeking": 0, "commercial_intent_evidence": 0, "unknown_commercial_intent": 0},
+                "market_signals": 0, "proposed_actions": [], "opportunity_cards": [], "data_source": "none (no social provider is connected)"}
+
+    def deployment_inspection(self, _pid: str) -> dict:
+        import os as _os
+        target = _os.environ.get("PROJECTS_INSPECTION_TARGET", "").strip()
+        if target:
+            from agentic_os.agent_gateway.external.sample_projections import deployment_inspection_view
+            return deployment_inspection_view(target)
+        return {"mission": "Deployment Inspection", "target": "", "connected": False,
+                "boundary": {"inspection": "unavailable", "remediation": "unavailable"}, "kpis": [], "findings": [],
+                "findings_by_severity": {}, "finding_count": 0, "proposed_actions": [], "governed_action": None}
+
+    def runtime(self, _pid: str) -> dict:
+        """What this deployment can actually say about itself: the Mission Plane it reads (answering or not) and the model
+        Sidekick is configured to use (configured, not probed). No invented units."""
+        import os as _os
+        units, models = [], []
+        if self._plane() is not None:
+            _, err = self._plane_missions()
+            units.append({"name": "Mission Plane", "state": "bad" if err else "ok", "detail": f"not answering ({err})" if err else "answering"})
+        name = _os.environ.get("SIDEKICK_MODEL_NAME", "").strip()
+        if name and _os.environ.get("SIDEKICK_MODEL_BASE_URL", "").strip():
+            models.append({"name": name, "role": "primary", "state": "mut"})
+        return {"runtimes": units, "models": models, "security": {}, "apps": [], "sources": [], **_prov("project", "runtime:health")}
+
+    def overview(self, project_id: str) -> dict:
+        return {"project": self.projects()[0], "attention": self.attention(project_id), "missions": self.missions(project_id),
+                "workflows": [], "discovery": [], "apps": self.apps(project_id), "sources": [], "runtime": self.runtime(project_id)}
+
+
 def select_provider(*, persist_path: Optional[str] = None) -> ProjectionProvider:
     """Choose the default provider explicitly. ``$PROJECTS_PROVIDER``: ``sample`` -> the sample provider;
-    ``registered`` -> the registered-producers provider; unset/``auto`` -> registered when some registered
-    producer has a live-state source, else the sample provider (whose surface is labelled ``basis: "sample"``)."""
+    ``registered`` -> the registered-producers provider; ``live`` -> the provider that serves no fixtures; unset/``auto`` ->
+    registered when some registered producer has a live-state source, else the sample provider (whose surface is labelled
+    ``basis: "sample"``). With ``AGENTIC_OS_PROFILE=production`` the provider is always the live one and ``sample`` is refused."""
     import os as _os
     choice = _os.environ.get("PROJECTS_PROVIDER", "").strip().lower()
     istore = open_intervention_store_from_env()
+    if production_profile():
+        # A production deployment never serves fixtures. Asking for the sample provider there is a configuration error, not a
+        # preference: its customers, missions and "needs you" cases would sit next to real records and read as real.
+        if choice == "sample":
+            raise ValueError("PROJECTS_PROVIDER=sample is refused with AGENTIC_OS_PROFILE=production: a production deployment serves "
+                             "no sample data. Use the development profile for an evaluation deployment.")
+        if choice not in ("", "auto", "registered", "live"):
+            raise ValueError(f"PROJECTS_PROVIDER must be 'live', 'registered' or unset in the production profile (got {choice!r})")
+        return LiveProjectionProvider(persist_path=persist_path, intervention_store=istore)
+    if choice == "live":
+        return LiveProjectionProvider(persist_path=persist_path, intervention_store=istore)
     if choice == "sample":
         return SampleProjectionProvider(persist_path=persist_path, intervention_store=istore)
     if choice not in ("", "auto", "registered"):
-        raise ValueError(f"PROJECTS_PROVIDER must be 'sample', 'registered' or unset (got {choice!r})")
+        raise ValueError(f"PROJECTS_PROVIDER must be 'sample', 'registered', 'live' or unset (got {choice!r})")
     if choice == "registered" or registered_live_sources():
         return RegisteredProducersProvider(persist_path=persist_path, intervention_store=istore)
     return SampleProjectionProvider(persist_path=persist_path, intervention_store=istore)

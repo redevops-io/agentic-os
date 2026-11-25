@@ -15,7 +15,16 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.7; no version set)
+## Unreleased (after v0.4.8; no version set)
+
+## v0.4.8 (a production deployment serves no fixture; who did it is who the server authenticated)
+
+- **`AGENTIC_OS_PROFILE=production` never serves sample data.** Projects then runs `LiveProjectionProvider`: missions come from the Mission Plane (`MISSION_PLANE_URL`), runtime health says only what the deployment knows, and workflows, discovery, sources, templates, apps, activity, social and inspection are real or empty. `PROJECTS_PROVIDER=sample` is refused there. Before, a production deployment showed the demo project, demo "needs you" cases and notifications, and its knowledge and infrastructure dashboards read demo rows labelled live. `/api/projects` now says `sample: true|false` so the UI shows illustrative content only on a sample deployment.
+- **Quick Capture keeps the actor the server authenticated.** A capture, and every event in its history, names the caller (`requester:<tenant>`, `approver:<tenant>`, `operator`, `admin`, `local-owner`) and belongs to that caller's tenant; a tenant bearer was recorded as `user:operator` in tenant `demo`. Tenants no longer share an intake. Today's approve and reconcile record the authenticated caller the same way.
+- **Durable intake for real deployments**: with `AGENTIC_OS_CAPTURE_DB` set, an authenticated caller on a deployment without sample cases gets a tenant-scoped intake that survives a restart (items and their histories). Without a store or without a credential the intake is not offered (501), as before.
+- **QA reporting for CI**: `.github/actions/report-qa` reports JUnit files by project, release, suite, environment and platform. A run reported twice replaces itself and the answer says `duplicate: true`; runs older than `AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS` (default 400, 0 = keep all) are pruned, except the latest run of each lane. Runs carry an optional `release`.
+- Security dashboard: a case the product reports as resolved counts as closed (new `Closed in range` tile) even when the product gives no closing time; only the time-to-close is then "not known". Found by running the real QA → Edge Sentinel → Projects → CrowdSec remediation: Edge Sentinel 0.6.6 marks a case RESOLVED without a closing time.
+- Dashboards label the sample provider's own rows (context sources, runtime units) as sample even when a products registry is configured.
 
 ## v0.4.7 (a platform nobody ran is not coverage)
 
