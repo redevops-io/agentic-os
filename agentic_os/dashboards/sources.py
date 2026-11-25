@@ -14,6 +14,7 @@ Rules every source follows:
 from __future__ import annotations
 
 import calendar
+import os
 import re
 import threading
 import time
@@ -294,14 +295,16 @@ def context_sources(ctx: Context) -> SourceResult:
 def deployment(ctx: Context) -> SourceResult:
     fn = getattr(ctx.provider, "deployment_inspection", None)
     if fn is None:
-        return SourceResult(_status("deployment", NOT_CONNECTED, detail="this deployment does not provide deployment inspection"))
+        return SourceResult(_status("deployment", NOT_CONNECTED, detail="this deployment does not provide deployment inspection",
+                                    remedy="nothing to enable here: this build has no deployment inspection"))
     now = ctx.now()
     try:
         view = fn(ctx.default_project) or {}
     except Exception as e:  # noqa: BLE001
         return SourceResult(_status("deployment", UNAVAILABLE, detail=f"the inspection could not be read ({type(e).__name__})"))
     if (view.get("boundary") or {}).get("inspection") == "unavailable":
-        return SourceResult(_status("deployment", NOT_CONNECTED, detail="no deployment is named for inspection (PROJECTS_INSPECTION_TARGET)"))
+        return SourceResult(_status("deployment", NOT_CONNECTED, detail="no deployment is named for inspection (PROJECTS_INSPECTION_TARGET)",
+                                    remedy="set PROJECTS_INSPECTION_TARGET to the deployment to inspect, and restart"))
     live = bool(view.get("connected"))
     rows = [Record(source="deployment", kind="deployment_finding", id=f"{f.get('source', '')}:{f.get('kind', '')}:{i}", title=str(f.get("detail") or f.get("kind") or ""),
                    status=str(f.get("severity") or "unknown").lower(), project=ctx.default_project, at=now,
@@ -318,7 +321,8 @@ def ai_usage(ctx: Context) -> SourceResult:
     projected cost. Nothing is estimated here; without a runtime the dashboard is not offered."""
     rt = _runtime(ctx)
     if rt is None:
-        return SourceResult(_status("ai_usage", NOT_CONNECTED, detail="no Mission Runtime is bound to this deployment, so no usage is recorded"))
+        return SourceResult(_status("ai_usage", NOT_CONNECTED, detail="no Mission Runtime is bound to this deployment, so no usage is recorded",
+                                    remedy="list `mission_plane` under `sources` in the dashboards file and set MISSION_PLANE_URL (and MISSION_PLANE_TOKEN) to a Mission Plane, then restart"))
     now, rows = ctx.now(), []
     try:
         for m in rt.missions():
@@ -954,6 +958,19 @@ class SourceCache:
         key = SOURCE_META[sid][2]
         return not key or key in self.ctx.config.sources
 
+    def enable_hint(self, sid: str) -> str:
+        """How to enable a business source that is switched off, naming the file a person has to edit. Three cases: a
+        dashboards file is in use; none is, and the deployment says where it would read one (the desktop app does); neither."""
+        key = SOURCE_META[sid][2]
+        used = (self.ctx.config.source or os.environ.get("AGENTIC_OS_DASHBOARDS", "")).strip()
+        if used:
+            return f"list `{key}` under `sources` in the dashboards file ({used}) and restart"
+        default = os.environ.get("AGENTIC_OS_DASHBOARDS_DEFAULT_FILE", "").strip()
+        if default:
+            return (f"create the dashboards file {default} with `schema: aos.dashboards/v1` and `{key}` listed under `sources`, set the "
+                    "application's address and credential in the environment the app starts from, and restart the app")
+        return f"set AGENTIC_OS_DASHBOARDS to a dashboards file that lists `{key}` under `sources`, and restart"
+
     def _ttl(self, sid: str) -> float:
         return max(self.ttl, SOURCE_TTL_S.get(sid, 0.0))
 
@@ -989,8 +1006,7 @@ class SourceCache:
 
     def get(self, sid: str, *, fresh: bool = False) -> SourceResult:
         if not self.enabled(sid):
-            return SourceResult(_status(sid, NOT_CONNECTED, detail="this source is not enabled on this deployment",
-                                        remedy=f"list `{SOURCE_META[sid][2]}` under `sources` in the dashboards file"))
+            return SourceResult(_status(sid, NOT_CONNECTED, detail="this source is not enabled on this deployment", remedy=self.enable_hint(sid)))
         now = time.monotonic()
         with self._lock:
             hit = self._hit.get(sid)

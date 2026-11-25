@@ -369,6 +369,19 @@ def test_a_dashboard_is_offered_only_when_its_application_is_connected(monkeypat
     assert hidden["qa"] == ["QA runs", "Reported test results"] and hidden["revenue"] == ["Control Tower (Metabase)", "Twenty CRM"]
     for hid in hidden:                                                                    # every dashboard that is not offered explains itself
         assert c.get(f"/api/dashboards/{hid}").json()["empty"], hid
+    # a dashboard that is not offered says why, names every application it could be built on, and how each is enabled
+    for d in cat["not_connected"]:
+        assert d["why"] and d["about"] and [n["label"] for n in d["needs"]] and sorted({n["label"] for n in d["needs"]}) == d["connect"], d["id"]
+        assert all(n["state"] == "not_connected" and n["remedy"] for n in d["needs"]), (d["id"], d["needs"])
+    rev = {n["id"]: n["remedy"] for n in next(d for d in cat["not_connected"] if d["id"] == "revenue")["needs"]}
+    assert "list `twenty` under `sources` in the dashboards file (" in rev["twenty"] and "dashboards.yaml)" in rev["twenty"]    # the file in use, by path
+    from types import SimpleNamespace
+    from agentic_os.dashboards.sources import SourceCache
+    bare = SourceCache(SimpleNamespace(config=SimpleNamespace(source="", sources=())))
+    monkeypatch.delenv("AGENTIC_OS_DASHBOARDS", raising=False)
+    assert bare.enable_hint("twenty").startswith("set AGENTIC_OS_DASHBOARDS to a dashboards file that lists `twenty`")
+    monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_DEFAULT_FILE", "/home/u/dashboards/dashboards.yaml")
+    assert "create the dashboards file /home/u/dashboards/dashboards.yaml" in bare.enable_hint("twenty")
     d = c.get("/api/dashboards/qa").json()                                                # asked for directly: an explanation, no fabricated zero
     assert d["empty"] and all(m["value"] is None for p in d["panels"] for m in p["metrics"])
     assert c.get("/api/dashboards/nope").status_code == 404
