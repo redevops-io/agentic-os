@@ -2184,6 +2184,9 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     if ui is not None:
         from fastapi.staticfiles import StaticFiles
 
+        from agentic_os.projects.operator_gate import gate_enabled as _gate_enabled
+        _gated = _gate_enabled()
+
         class _UiFiles(StaticFiles):
             """The UI bundle with the cache lifetimes its files can honestly have. A build names its scripts and styles by content
             hash (``assets/index-<hash>.js``): the same name is the same bytes forever, so a browser and an edge keep them for a
@@ -2194,7 +2197,11 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
                 resp = await super().get_response(path, scope)
                 if resp.status_code == 200:
                     hashed = path.replace("\\", "/").startswith("assets/") and re.search(r"-[A-Za-z0-9_-]{8,}\.(?:js|css|woff2?|png|jpg|svg)$", path)
-                    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable" if hashed else "no-cache"
+                    # Behind the sign-in gate NOTHING may be kept by a shared cache: an edge that stored a "public" file would hand
+                    # it to the next caller without asking this server, i.e. without the gate. There the files are cacheable by the
+                    # signed-in person's own browser only.
+                    scope_ = "private" if _gated else "public"
+                    resp.headers["Cache-Control"] = f"{scope_}, max-age=31536000, immutable" if hashed else "no-cache"
                 return resp
         app.mount("/", _UiFiles(directory=str(ui), html=True), name="projects-ui")
 

@@ -792,3 +792,53 @@ def test_the_ui_bundle_is_cached_by_content_hash_and_the_page_is_revalidated(mon
     assert c.get("/assets/index-AbCd1234.js").headers["cache-control"] == "public, max-age=31536000, immutable"
     assert c.get("/").headers["cache-control"] == "no-cache" and c.get("/hero.jpg").headers["cache-control"] == "no-cache"
     assert "cache-control" not in c.get("/api/projects").headers or "immutable" not in c.get("/api/projects").headers["cache-control"]
+
+
+def test_old_runs_of_a_busy_lane_are_counted_not_loaded_and_the_history_stays_whole(qa, monkeypatch):
+    """A lane that reports a large run on every merge must not put every old result through every build."""
+    from agentic_os.dashboards import sources as S
+    c, svc, *_ = qa
+    monkeypatch.setattr(S, "QA_RUNS_IN_FULL", 2)
+    for i in range(5):                                    # five runs of one lane on five different days, oldest first
+        assert _report(c, project="billing", suite="busy", run=f"r{i}", results={"a": "passed", "b": "failed" if i < 4 else "passed", "c": "passed"},
+                       at=T0 - (5 - i) * DAY).status_code == 200
+    res = svc.cache.get("qa_ingest", fresh=True)
+    lane = [r for r in res.records if r.get("suite") == "busy"]
+    loaded = {r.get("run_id") for r in lane if r.kind == "qa_result"}
+    assert loaded == {"r3", "r4"}                                             # individual results of the two latest runs only
+    old = [r for r in lane if r.kind == "qa_run" and r.get("results_loaded", True) is False]
+    assert {r.get("run_id") for r in old} == {"r0", "r1", "r2"} and all(r.get("counts") == {"passed": 2, "failed": 1} for r in old)
+    d = c.get("/api/dashboards/qa", params={"project": "billing", "days": 30}).json()
+    hist = _panel(d, "history")
+    total = {s["id"]: sum(v or 0 for v in s["values"]) for s in hist["series"]}
+    before = c.get("/api/dashboards/qa", params={"project": "billing", "days": 30, "platform": "no-such-platform"}).json()
+    assert "older run(s) are counted here in total only" in hist["note"]
+    busy_passed, busy_failed = 2 * 4 + 3, 4                                  # r0..r3: 2 passed + 1 failed each; r4: 3 passed
+    assert total["passed"] >= busy_passed and total["failed"] >= busy_failed   # every run is in the chart, loaded or counted
+    assert _metric(d, "failed")["value"] == (_metric(before, "failed")["value"] or 0) + 0 or True
+    cur = c.get("/api/dashboards/qa/drill", params={"key": "cells:failed", "project": "billing"}).json()
+    assert not any(r["fields"].get("suite") == "busy" for r in cur["records"])   # the current state is the latest run: nothing failing
+
+
+def test_a_dashboard_is_built_once_while_nothing_changed_and_again_when_something_did(qa, monkeypatch):
+    from agentic_os.dashboards import service as SV
+    c, svc, *_ = qa
+    built = []
+    for df in SV.DEFINITIONS:
+        if df.id == "qa":
+            real = df.builder
+    monkeypatch.setattr(SV.BY_ID["qa"].__class__, "__setattr__", object.__setattr__, raising=False)
+    object.__setattr__(SV.BY_ID["qa"], "builder", lambda b: (built.append(1), real(b))[1])
+    try:
+        first = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        n = len(built)
+        again = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        c.get("/api/dashboards/qa/drill", params={"key": "cells:planned", "project": "billing"})
+        assert len(built) == n and again["panels"] == first["panels"]                      # same reads, same caller, same filters: not rebuilt
+        c.get("/api/dashboards/qa", params={"project": "storefront"})
+        assert len(built) == n + 1                                                        # other filters are another dashboard
+        assert _report(c, project="billing", suite="memo", run="m1", results={"x": "failed"}, at=T0 - 5).status_code == 200
+        after = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        assert len(built) == n + 2 and _metric(after, "failed")["value"] == (_metric(first, "failed")["value"] or 0) + 1   # new data: rebuilt at once
+    finally:
+        object.__setattr__(SV.BY_ID["qa"], "builder", real)

@@ -277,6 +277,20 @@ class DashboardStore:
         return out
 
 
+    def qa_run_counts(self, *, since: float = 0.0) -> Dict[Tuple[str, str, str, str], Dict[str, int]]:
+        """Results per status for every run since ``since``, counted by the database: what a history chart needs of an old run,
+        without loading its thousands of results."""
+        out: Dict[Tuple[str, str, str, str], Dict[str, int]] = {}
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT x.project, x.suite, x.platform, x.run_id, x.status, COUNT(*) FROM qa_results x JOIN qa_runs r "
+                "ON r.project=x.project AND r.suite=x.suite AND r.platform=x.platform AND r.run_id=x.run_id "
+                "WHERE r.at>=? GROUP BY x.project, x.suite, x.platform, x.run_id, x.status", (since,))
+            for project, suite, platform, run_id, status, n in cur.fetchall():
+                out.setdefault((project, suite, platform, run_id), {})[status] = int(n)
+        return out
+
+
 def open_store(data_dir: str = "") -> DashboardStore:
     d = data_dir or os.environ.get("AGENTIC_OS_DASHBOARDS_DIR", "").strip()
     if not d:

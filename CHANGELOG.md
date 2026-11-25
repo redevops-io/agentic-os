@@ -15,7 +15,13 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.12; no version set)
+## Unreleased (after v0.4.13; no version set)
+
+## v0.4.13 (behind the gate nothing is publicly cacheable; the QA model is bounded)
+
+- **Security fix for 0.4.12**: behind the sign-in gate the UI's hashed files are `Cache-Control: private` (the person's own browser may keep them). 0.4.12 marked them `public`, so an edge cache in front of a gated deployment served the script and stylesheet to anonymous callers without asking the server. No data was exposed (the files are the public UI bundle), but the gate's contract is that nothing is served before sign-in. Deployments on 0.4.12 behind a CDN should upgrade.
+- QA dashboards stay fast as CI runs accumulate: individual results are loaded for the latest 8 runs of each (project, suite, platform); older runs contribute their counts per status, taken by the database, so the history chart keeps its whole range. A built dashboard is handed out again while nothing it was built from has changed (30 s at most).
+- Projects UI v0.3.4: tables show exact values where a tile abbreviates ("31.3k" in a tile, 31,287 in the table).
 
 ## v0.4.12 (a page does not wait for the applications; a failed host check is on the screen)
 
