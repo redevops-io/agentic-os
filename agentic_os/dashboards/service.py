@@ -24,6 +24,7 @@ MAX_DRILL = 200
 FRESH_MIN_INTERVAL_S = 5.0
 #: how long a built dashboard may be handed out again while nothing it was built from has changed
 BUILD_MEMO_S = 30.0
+BUILD_STALE_OK_S = 120.0     # an older build is still SERVED this long while one background build replaces it
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,7 @@ class DashboardService:
         self._last_fresh = -1e9
         self._memo: Dict[Any, Any] = {}
         self._memo_lock = __import__("threading").Lock()
+        self._rebuilding: set = set()
 
     # ── projects ──────────────────────────────────────────────────────────────────────────────────
     def _provider_projects(self) -> List[Dict[str, Any]]:
@@ -176,11 +178,46 @@ class DashboardService:
         # it is handed out again instead of being rebuilt (the QA model walks every result of every loaded run). It is dropped
         # as soon as any read is replaced, and after BUILD_MEMO_S regardless, because some figures depend on the time of day.
         memo_key = (df.id, filters, acc.principal, acc.grant, acc.basis)
-        gen, now_m = self.cache.generation, time.monotonic()
+        gen, epoch, now_m = self.cache.generation, self.cache.epoch, time.monotonic()
         with self._memo_lock:
             hit = self._memo.get(memo_key)
-            if hit and hit[0] == gen and now_m - hit[1] < BUILD_MEMO_S:
+        if hit and hit[3] == epoch:
+            if hit[0] == gen and now_m - hit[1] < BUILD_MEMO_S:
                 return hit[2]
+            # Older than that, or a source was re-read behind it: nobody waits for the rebuild (the QA model takes seconds on
+            # a large history, and the sources are re-read every few seconds under traffic, so somebody always did). The
+            # previous build is served as it is - its numbers and its drill-downs are one snapshot, and it says when it was
+            # generated - while ONE background build replaces it. Never after a write or a forced refresh (the epoch).
+            if now_m - hit[1] < BUILD_STALE_OK_S and self._rebuild_behind(memo_key, df, filters, acc, states):
+                return hit[2]
+        return self._build_now(memo_key, df, filters, acc, states)
+
+    def _rebuild_behind(self, memo_key: Any, df: Any, filters: Filters, acc: Access, states: List[str]) -> bool:
+        """Start one background build for this key. False = it could not be started (no threads): the caller builds."""
+        with self._memo_lock:
+            if memo_key in self._rebuilding:
+                return True
+            self._rebuilding.add(memo_key)
+
+        def run() -> None:
+            try:
+                self._build_now(memo_key, df, filters, acc, states)
+            except Exception:      # noqa: BLE001  (the next request builds in the foreground and reports the error to its caller)
+                with self._memo_lock:
+                    self._memo.pop(memo_key, None)
+            finally:
+                with self._memo_lock:
+                    self._rebuilding.discard(memo_key)
+        try:
+            __import__("threading").Thread(target=run, name=f"dash-build-{df.id}", daemon=True).start()
+        except RuntimeError:
+            with self._memo_lock:
+                self._rebuilding.discard(memo_key)
+            return False
+        return True
+
+    def _build_now(self, memo_key: Any, df: Any, filters: Filters, acc: Access, states: List[str]) -> Dashboard:
+        gen, epoch, now_m = self.cache.generation, self.cache.epoch, time.monotonic()
         d = Dashboard(id=df.id, title=df.title, priority=df.priority)
         b = Build(dashboard=d, cache=self.cache, access=acc, store=self.store, filters=filters, projects=self.projects(), now=self.clock())
         df.builder(b)
@@ -196,7 +233,7 @@ class DashboardService:
             with self._memo_lock:
                 if len(self._memo) >= 64:
                     self._memo.pop(min(self._memo, key=lambda k: self._memo[k][1]))
-                self._memo[memo_key] = (gen, now_m, d)
+                self._memo[memo_key] = (gen, now_m, d, epoch)
         return d
 
     def drill(self, dashboard_id: str, key: str, filters: Filters, acc: Access, *, limit: int = MAX_DRILL) -> Dict[str, Any]:
