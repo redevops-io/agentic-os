@@ -20,6 +20,7 @@ import _cr_enterprise_stub as stub  # noqa: E402
 from _route_table import FRAMEWORK_ROUTES, OPERATOR_ROUTES, PUBLIC, ROUTES  # noqa: E402
 
 from agentic_os import app_gate  # noqa: E402
+from agentic_os.app_kit.capability_inventory import walk_routes  # noqa: E402
 from agentic_os.tool_actions import TOOL_ACTIONS  # noqa: E402
 
 APPS = tuple(ROUTES)
@@ -93,11 +94,11 @@ def _documented_routes(mod):
     out = set()
     for path, ops in mod.app.openapi()["paths"].items():
         out |= {(m.upper(), path) for m in ops}
-    for r in mod.app.routes:                                                    # routes that are not in the schema (HTML pages, include_in_schema=False)
-        for m in (getattr(r, "methods", None) or set()) - {"HEAD", "OPTIONS"}:
-            if hasattr(r, "path"):
-                out.add((m, r.path))
-    return out
+    # routes that are not in the schema (HTML pages, include_in_schema=False), INCLUDING those inside an included router: such a
+    # router is one entry with no path of its own, so reading app.routes' paths skipped everything in it
+    walked: set = set()
+    walk_routes(mod.app.router.routes, walked)
+    return out | {(m, p) for m, p in walked if m != "WS"}
 
 
 @pytest.mark.parametrize("app", APPS)

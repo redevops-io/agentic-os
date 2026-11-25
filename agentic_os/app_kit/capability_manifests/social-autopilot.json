@@ -1,0 +1,484 @@
+{
+ "app": "social-autopilot",
+ "digest": "sha256:ce1d3e33ef975c5ad556f77659840a708f842ab5ebd314e3d31ffb56dfea895e",
+ "operations": [
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/"
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity"
+    },
+    {
+     "method": "GET",
+     "path": "/api/reel/status"
+    },
+    {
+     "method": "GET",
+     "path": "/api/reel/video"
+    },
+    {
+     "method": "GET",
+     "path": "/api/vibex/status"
+    }
+   ],
+   "id": "social.activity",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "draft",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "method": "POST",
+     "path": "/api/reel/schedule"
+    },
+    {
+     "method": "POST",
+     "path": "/api/vibex/draft"
+    }
+   ],
+   "id": "social.draft",
+   "inputs": {},
+   "outputs": {
+    "draft_staged": "post copy generated and staged as a DRAFT in Postiz"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "authority_required",
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "social.draft_visual",
+   "inputs": {
+    "topic": "str",
+    "visual_export": "dict"
+   },
+   "outputs": {
+    "visual_draft_staged": "post copy and a validated, labelled visual staged as a DRAFT in Postiz"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "publish",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "social.publish",
+   "inputs": {},
+   "outputs": {
+    "publish_staged": "post staged for human approval before it goes live"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "record_reel",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "method": "POST",
+     "path": "/api/reel/record"
+    }
+   ],
+   "id": "social.record_reel",
+   "route_access": [
+    "authority_required",
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "vibex_generate",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "method": "POST",
+     "path": "/api/vibex/generate"
+    }
+   ],
+   "id": "social.vibex_generate",
+   "route_access": [
+    "authority_required",
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "vibex_trends",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "method": "POST",
+     "path": "/api/vibex/trends"
+    }
+   ],
+   "id": "social.vibex_trends",
+   "route_access": [
+    "read_only",
+    "stages_only"
+   ],
+   "typed": false
+  }
+ ],
+ "problems": [],
+ "routes": [
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/",
+   "tools": [
+    {
+     "tool": "social.activity"
+    }
+   ]
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/_security"
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/activity",
+   "tools": [
+    {
+     "tool": "social.activity"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/reel/status",
+   "tools": [
+    {
+     "tool": "social.activity"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/reel/video",
+   "tools": [
+    {
+     "tool": "social.activity"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/vibex/status",
+   "tools": [
+    {
+     "tool": "social.activity"
+    }
+   ]
+  },
+  {
+   "gate": "operator_credential",
+   "method": "GET",
+   "path": "/capabilities"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs/oauth2-redirect"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/health"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/openapi.json"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/redoc"
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/agent/run",
+   "tools": [
+    {
+     "action": "draft",
+     "tool": "social.draft"
+    },
+    {
+     "action": "publish",
+     "tool": "social.publish"
+    },
+    {
+     "action": "record_reel",
+     "tool": "social.record_reel"
+    },
+    {
+     "action": "vibex_generate",
+     "tool": "social.vibex_generate"
+    },
+    {
+     "action": "vibex_trends",
+     "tool": "social.vibex_trends"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "social-autopilot.agent_run",
+    "permission": "social-autopilot:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/reel/record",
+   "tools": [
+    {
+     "tool": "social.record_reel"
+    }
+   ],
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "social-autopilot.reel_record",
+    "permission": "social-autopilot:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/reel/schedule",
+   "tools": [
+    {
+     "tool": "social.draft"
+    }
+   ],
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "social-autopilot.reel_schedule",
+    "permission": "social-autopilot:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/vibex/draft",
+   "tools": [
+    {
+     "tool": "social.draft"
+    }
+   ],
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "social-autopilot.vibex_draft",
+    "permission": "social-autopilot:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/vibex/generate",
+   "tools": [
+    {
+     "tool": "social.vibex_generate"
+    }
+   ],
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "social-autopilot.vibex_generate",
+    "permission": "social-autopilot:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/vibex/trends",
+   "tools": [
+    {
+     "tool": "social.vibex_trends"
+    }
+   ],
+   "write_policy": {
+    "access": "read_only",
+    "agent_actions": [],
+    "capability": "social-autopilot.vibex_trends",
+    "permission": "social-autopilot:write"
+   }
+  },
+  {
+   "gate": "operator_credential",
+   "method": "POST",
+   "path": "/invoke",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "social-autopilot.invoke",
+    "permission": "social-autopilot:write"
+   }
+  }
+ ],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "operations": 7,
+  "reachable_by_external_agents": 0,
+  "routes": 19,
+  "routes_without_a_gate_decision": 0,
+  "typed": 3,
+  "ui_calls": 7,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 5
+ },
+ "ui_calls": [
+  {
+   "call": "/api/reel/record",
+   "route": "/api/reel/record"
+  },
+  {
+   "call": "/api/reel/schedule",
+   "route": "/api/reel/schedule"
+  },
+  {
+   "call": "/api/reel/status",
+   "route": "/api/reel/status"
+  },
+  {
+   "call": "/api/vibex/draft",
+   "route": "/api/vibex/draft"
+  },
+  {
+   "call": "/api/vibex/generate",
+   "route": "/api/vibex/generate"
+  },
+  {
+   "call": "/api/vibex/status",
+   "route": "/api/vibex/status"
+  },
+  {
+   "call": "/api/vibex/trends",
+   "route": "/api/vibex/trends"
+  }
+ ]
+}

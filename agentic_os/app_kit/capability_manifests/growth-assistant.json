@@ -1,0 +1,475 @@
+{
+ "app": "growth-assistant",
+ "digest": "sha256:d9a5dc1e9d3b5c510c10256fed86a2f714bedd2071f49215d38a6b4f2674be91",
+ "operations": [
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/"
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity"
+    },
+    {
+     "method": "GET",
+     "path": "/api/assets"
+    },
+    {
+     "method": "GET",
+     "path": "/api/assets/{aid}"
+    },
+    {
+     "method": "GET",
+     "path": "/api/chat/job/{job_id}"
+    },
+    {
+     "action": "ask",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "method": "POST",
+     "path": "/api/chat"
+    }
+   ],
+   "id": "assistant.ask",
+   "inputs": {},
+   "outputs": {
+    "growth_answer": "NL answer over the saved assets + core connectivity"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "cold_outreach",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "assistant.cold_outreach",
+   "inputs": {},
+   "outputs": {
+    "cold_outreach_kit": "audit-Loom outreach kit; push=true only stages"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "community_blueprint",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "assistant.community_blueprint",
+   "inputs": {},
+   "outputs": {
+    "community_blueprint": "lead-magnet community blueprint; push=true only stages"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "founder_content",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "assistant.founder_content",
+   "inputs": {},
+   "outputs": {
+    "founder_content": "founder-voice posts; push=true only stages (see assistant.push_assets)"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "hire_brief",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "assistant.hire_brief",
+   "inputs": {},
+   "outputs": {
+    "hire_brief": "freelancer JD + vetting scorecard + freelancer search links"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "playbook",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "assistant.playbook",
+   "inputs": {},
+   "outputs": {
+    "growth_playbook": "4-pillar zero-to-traction playbook (saved asset)"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "assistant.push_assets",
+   "inputs": {},
+   "outputs": {
+    "asset_push": "pushes a saved founder_content/community_blueprint/cold_outreach asset to Postiz / Listmonk / ERPNext (approval-gated)"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "subreddit_plan",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "assistant.subreddit_plan",
+   "inputs": {},
+   "outputs": {
+    "subreddit_plan": "brand-subreddit incubation plan + seed threads"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  }
+ ],
+ "problems": [],
+ "routes": [
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/",
+   "tools": [
+    {
+     "tool": "assistant.ask"
+    }
+   ]
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/_security"
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/activity",
+   "tools": [
+    {
+     "tool": "assistant.ask"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/assets",
+   "tools": [
+    {
+     "tool": "assistant.ask"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/assets/{aid}",
+   "tools": [
+    {
+     "tool": "assistant.ask"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/chat/job/{job_id}",
+   "tools": [
+    {
+     "tool": "assistant.ask"
+    }
+   ]
+  },
+  {
+   "gate": "operator_credential",
+   "method": "GET",
+   "path": "/capabilities"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs/oauth2-redirect"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/health"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/openapi.json"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/redoc"
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/agent/run",
+   "tools": [
+    {
+     "action": "ask",
+     "tool": "assistant.ask"
+    },
+    {
+     "action": "cold_outreach",
+     "tool": "assistant.cold_outreach"
+    },
+    {
+     "action": "community_blueprint",
+     "tool": "assistant.community_blueprint"
+    },
+    {
+     "action": "founder_content",
+     "tool": "assistant.founder_content"
+    },
+    {
+     "action": "hire_brief",
+     "tool": "assistant.hire_brief"
+    },
+    {
+     "action": "playbook",
+     "tool": "assistant.playbook"
+    },
+    {
+     "action": "subreddit_plan",
+     "tool": "assistant.subreddit_plan"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "growth-assistant.agent_run",
+    "permission": "growth-assistant:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/chat",
+   "tools": [
+    {
+     "tool": "assistant.ask"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "growth-assistant.chat",
+    "permission": "growth-assistant:write"
+   }
+  },
+  {
+   "gate": "operator_credential",
+   "method": "POST",
+   "path": "/invoke",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "growth-assistant.invoke",
+    "permission": "growth-assistant:write"
+   }
+  }
+ ],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "operations": 8,
+  "reachable_by_external_agents": 0,
+  "routes": 15,
+  "routes_without_a_gate_decision": 0,
+  "typed": 8,
+  "ui_calls": 3,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 7
+ },
+ "ui_calls": [
+  {
+   "call": "/api/activity",
+   "route": "/api/activity"
+  },
+  {
+   "call": "/api/chat",
+   "route": "/api/chat"
+  },
+  {
+   "call": "/api/chat/job/",
+   "route": "/api/chat/job/{job_id}"
+  }
+ ]
+}

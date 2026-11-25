@@ -17,6 +17,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.17; no version set)
 
+- **Capability manifests** (`rails.app-capabilities/1`) for every app and Projects, generated from the code: operations with action class, typed inputs and outputs, approval and reversibility; every route with its gate decision and write-access class; the paths each UI calls; and whether an external agent can reach each operation. [docs/CAPABILITY_COVERAGE.md](docs/CAPABILITY_COVERAGE.md) lists every operation it cannot. A stale manifest fails CI.
+- Fixed: the route completeness test did not see routes inside an included router that are hidden from the OpenAPI schema (two Edge Sentinel console routes had no recorded gate decision).
+
 ## v0.4.17 (one token per external agent, a real MCP server; Vault stays the authority on a deployed host)
 
 - `integrations/mcp-bridge`: a local stdio MCP server that forwards to the Governed Agent Gateway, with an MCPB manifest for Claude Desktop (not part of the Python package). Its test covers the handshake, tool list, a governed call and refusals against the mounted gateway on a socket, and packs the bundle. Installing it in Claude Desktop, use from an installed Artifact and other clients are **not** verified.

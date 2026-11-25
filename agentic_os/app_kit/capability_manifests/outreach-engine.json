@@ -1,0 +1,521 @@
+{
+ "app": "outreach-engine",
+ "digest": "sha256:99225dc529e7e29005ed55a4edde141ef4798788900375152528de4287eff0fa",
+ "operations": [
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "approve",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "outreach.approve",
+   "inputs": {},
+   "outputs": {
+    "lead_synced": "approved lead synced to Twenty (Company + Person + Opportunity)"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "check_replies",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "outreach.check_replies",
+   "inputs": {},
+   "outputs": {
+    "reply_checked": "whether a reply from the prospect was found in the sender's inbox"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/agent"
+    },
+    {
+     "method": "POST",
+     "path": "/api/discover"
+    }
+   ],
+   "id": "outreach.discover",
+   "route_access": [
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "outreach.draft_followup",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "draft_pitch",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "outreach.draft_pitch",
+   "inputs": {},
+   "outputs": {
+    "pitch_drafted": "LLM-personalized pitch (evidence visualization + the lead's real link) attached to the account's draft"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "enrich",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "outreach.enrich",
+   "inputs": {},
+   "outputs": {
+    "contact_email": "verified business email resolved via the configured enrichment provider (Hunter by default)"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "follow_up",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "outreach.follow_up",
+   "inputs": {},
+   "outputs": {
+    "followup_drafted": "the second-touch draft (reply-aware thank-you, or a no-reply nudge) attached to the account; send_all dispatches it"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "outreach.pipeline_summary",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/"
+    },
+    {
+     "method": "GET",
+     "path": "/api/pipeline"
+    },
+    {
+     "action": "refresh",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "action": "refresh",
+     "method": "POST",
+     "path": "/api/run"
+    }
+   ],
+   "id": "outreach.refresh",
+   "inputs": {},
+   "outputs": {
+    "outreach_pipeline": "ranked accounts + drafted openers rebuilt from live signals"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "send_all",
+     "method": "POST",
+     "path": "/api/run"
+    }
+   ],
+   "id": "outreach.send_all",
+   "inputs": {},
+   "outputs": {
+    "sequences_sent": "approved outreach sequences dispatched to prospects"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/api/synced"
+    }
+   ],
+   "id": "outreach.synced",
+   "typed": false
+  }
+ ],
+ "problems": [],
+ "routes": [
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/",
+   "tools": [
+    {
+     "tool": "outreach.refresh"
+    }
+   ]
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/_security"
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/pipeline",
+   "tools": [
+    {
+     "tool": "outreach.refresh"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/synced",
+   "tools": [
+    {
+     "tool": "outreach.synced"
+    }
+   ]
+  },
+  {
+   "gate": "operator_credential",
+   "method": "GET",
+   "path": "/capabilities"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs/oauth2-redirect"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/health"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/openapi.json"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/redoc"
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/agent/run",
+   "tools": [
+    {
+     "action": "approve",
+     "tool": "outreach.approve"
+    },
+    {
+     "action": "check_replies",
+     "tool": "outreach.check_replies"
+    },
+    {
+     "action": "draft_pitch",
+     "tool": "outreach.draft_pitch"
+    },
+    {
+     "action": "enrich",
+     "tool": "outreach.enrich"
+    },
+    {
+     "action": "follow_up",
+     "tool": "outreach.follow_up"
+    },
+    {
+     "action": "refresh",
+     "tool": "outreach.refresh"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "outreach-engine.agent_run",
+    "permission": "outreach-engine:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/agent",
+   "tools": [
+    {
+     "tool": "outreach.discover"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "outreach-engine.agent",
+    "permission": "outreach-engine:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/discover",
+   "tools": [
+    {
+     "tool": "outreach.discover"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "outreach-engine.discover",
+    "permission": "outreach-engine:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/run",
+   "tools": [
+    {
+     "action": "refresh",
+     "tool": "outreach.refresh"
+    },
+    {
+     "action": "send_all",
+     "tool": "outreach.send_all"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "outreach-engine.run",
+    "permission": "outreach-engine:write"
+   }
+  },
+  {
+   "gate": "operator_credential",
+   "method": "POST",
+   "path": "/invoke",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "outreach-engine.invoke",
+    "permission": "outreach-engine:write"
+   }
+  }
+ ],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "operations": 11,
+  "reachable_by_external_agents": 0,
+  "routes": 15,
+  "routes_without_a_gate_decision": 0,
+  "typed": 7,
+  "ui_calls": 2,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 3
+ },
+ "ui_calls": [
+  {
+   "call": "/api/run",
+   "route": "/api/run"
+  },
+  {
+   "call": "/api/synced",
+   "route": "/api/synced"
+  }
+ ]
+}
