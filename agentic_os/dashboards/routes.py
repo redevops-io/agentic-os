@@ -120,7 +120,7 @@ def make_router(svc: DashboardService) -> APIRouter:
             raise HTTPException(404, {"error": "not_found", "detail": "no such view"})
         return {"deleted": view_id}
 
-    def _reporter(x_service_token: Optional[str]) -> str:
+    def _require_reporter(x_service_token: Optional[str]) -> str:
         """Who may report (or withdraw) a test run: a service identity holding the capability, or the operator."""
         by = ""
         if x_service_token:
@@ -147,7 +147,7 @@ def make_router(svc: DashboardService) -> APIRouter:
         """A CI lane reports one run: {project, suite, run_id, platform?, environment?, product?, at?, origin?, ref?, url?,
         evidence_verified?, results: [{test_id, status, severity?, detail?, requirements?, duration_ms?}]}. Statuses are
         passed | failed | unsupported | blocked; a test that did not run is left out and is then counted as not executed."""
-        by = _reporter(x_service_token)
+        by = _require_reporter(x_service_token)
         if svc.config.projects and body.get("project") not in svc.config.projects:
             raise HTTPException(422, {"error": "unknown_project", "detail": "project is not declared in the dashboards file"})
         out = _guard(lambda: svc.store.ingest_qa(body, by=by, now=svc.clock()))
@@ -159,7 +159,7 @@ def make_router(svc: DashboardService) -> APIRouter:
                   x_service_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
         """Remove one reported run that was filed in the wrong place (all four of project, suite, platform, run_id are
         required and must match exactly). The same callers that may report may withdraw; the answer and the log say who did."""
-        by = _reporter(x_service_token)
+        by = _require_reporter(x_service_token)
         if not (project and suite and platform and run_id):
             raise HTTPException(422, {"error": "invalid", "detail": "project, suite, platform and run_id are all required"})
         n = _guard(lambda: svc.store.withdraw_qa(project, suite, platform, run_id))
