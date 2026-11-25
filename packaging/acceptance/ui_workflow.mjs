@@ -5,7 +5,9 @@
 //   node ui_workflow.mjs <path to the installed redevops-sidecar> <result.json>
 //   needs: @playwright/test and axe-core resolvable from $PW_ROOT (a directory with node_modules), Chromium installed for Playwright.
 //
-// Sample data only: the desktop app ships a sample workspace and simulates its actions. Nothing here approves a consequential action.
+// A build either ships a sample workspace (launcher up to 0.1.3) or serves no sample data at all (0.1.4 and later, production profile). The
+// script finds out which from the page and checks what that kind of build has: a check that needs sample items is recorded as UNSUPPORTED
+// on a build without them, never as passed. Nothing here approves a consequential action.
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import os from 'node:os'; import fs from 'node:fs'; import path from 'node:path';
@@ -17,6 +19,8 @@ const results = []; const known = []; const t00 = Date.now();
 const check = async (name, fn) => { const t = Date.now(); try { const d = await fn(); results.push({ name, status: 'PASS', detail: String(d ?? '').slice(0, 300), ms: Date.now() - t }); console.log('PASS  ' + name + (d ? '  | ' + String(d).slice(0, 160) : '')); }
   catch (e) { results.push({ name, status: 'FAIL', detail: String(e && e.message || e).slice(0, 400), ms: Date.now() - t }); console.log('FAIL  ' + name + '  | ' + String(e && e.message || e).slice(0, 300)); } };
 const assert = (c, m) => { if (!c) throw new Error(m); };
+const unsupported = (name, why) => { results.push({ name, status: 'UNSUPPORTED', detail: why, ms: 0 }); console.log('UNSUPPORTED  ' + name + '  | ' + why); };
+let sample = true;
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-ui-'));
 const port = 28000 + Math.floor(Math.random() * 900);
@@ -51,41 +55,84 @@ if (!posture && process.env.KNOWN_NO_PROFILE === '1') {
 if (url) {
   await check('the launch link opens the workspace, and the one-time code does not stay in the address bar', async () => {
     await p.goto(url, { waitUntil: 'networkidle' }); await p.waitForTimeout(800);
-    const t = await body(); assert(/need your decision/i.test(t), 'the Today view did not render: ' + t.slice(0, 200));
+    const t = await body(); assert(/need your decision|nothing needs you/i.test(t), 'the Today view did not render: ' + t.slice(0, 200));
+    sample = /sample data/i.test(t);
     assert(!p.url().includes('#lc='), 'the launch code is still in the URL'); return p.url().replace(origin, ''); });
   await check('the keyboard reaches the content: "Skip to content" is the first stop and moves focus into the main region', async () => {
     await p.keyboard.press('Tab');
     const first = await p.evaluate(() => (document.activeElement && (document.activeElement.innerText || document.activeElement.getAttribute('aria-label')) || '').trim());
     assert(/skip to (main )?content/i.test(first), 'the first tab stop is "' + first + '"'); await p.keyboard.press('Enter'); return first; });
-  await check('Today lists what needs a decision and says the data is a sample', async () => {
-    const t = await body(); const n = Number((t.match(/(\d+) things? need your decision/i) || [])[1] || 0);
-    assert(n >= 1, 'no count of items'); assert(/sample data/i.test(t), 'no sample-data notice'); return n + ' items; sample-data notice present'; });
+  if (sample) {
+    await check('Today lists what needs a decision and says the data is a sample', async () => {
+      const t = await body(); const n = Number((t.match(/(\d+) things? need your decision/i) || [])[1] || 0);
+      assert(n >= 1, 'no count of items'); assert(/sample data/i.test(t), 'no sample-data notice'); return n + ' items; sample-data notice present'; });
+  } else await check('Today says that nothing needs a decision, and shows no sample data', async () => {
+    const t = await body(); assert(/nothing needs you/i.test(t), 'no empty-state line: ' + t.slice(0, 200)); assert(!/sample data/i.test(t), 'a sample-data notice on a build that serves none');
+    return 'empty state; no sample notice'; });
   await check('Today passes WCAG 2 A/AA (axe)', async () => { const v = await axe(); assert(v.length === 0, v.join(', ')); return 'no violations'; });
-  await check('an item opens with its detail and its next step', async () => {
-    const before = await body();
-    const item = p.getByRole('button', { name: /milestone at risk|Visa documents|Quote hasn't|patients haven't/i }).first();
-    assert(await item.count(), 'no item button found'); const label = ((await item.innerText()) || '').replace(/\s+/g, ' ').slice(0, 60);
-    await item.click(); await p.waitForTimeout(1200);
-    let after = await body();
-    if (after === before) { const open = p.getByRole('button', { name: /^Open$/ }).first(); if (await open.count()) { await open.click(); await p.waitForTimeout(1200); after = await body(); } }
-    const added = after.length - before.length;
-    assert(after !== before && /suggest|next step|evidence|trail|approve|why/i.test(after), 'opening the item showed no detail (text changed by ' + added + ' characters)');
-    return label + ' (+' + added + ' characters of detail)'; });
-  await check('the opened item passes WCAG 2 A/AA (axe)', async () => { const v = await axe(); assert(v.length === 0, v.join(', ')); return 'no violations'; });
+  if (sample) {
+    await check('an item opens with its detail and its next step', async () => {
+      const before = await body();
+      const item = p.getByRole('button', { name: /milestone at risk|Visa documents|Quote hasn't|patients haven't/i }).first();
+      assert(await item.count(), 'no item button found'); const label = ((await item.innerText()) || '').replace(/\s+/g, ' ').slice(0, 60);
+      await item.click(); await p.waitForTimeout(1200);
+      let after = await body();
+      if (after === before) { const open = p.getByRole('button', { name: /^Open$/ }).first(); if (await open.count()) { await open.click(); await p.waitForTimeout(1200); after = await body(); } }
+      const added = after.length - before.length;
+      assert(after !== before && /suggest|next step|evidence|trail|approve|why/i.test(after), 'opening the item showed no detail (text changed by ' + added + ' characters)');
+      return label + ' (+' + added + ' characters of detail)'; });
+    await check('the opened item passes WCAG 2 A/AA (axe)', async () => { const v = await axe(); assert(v.length === 0, v.join(', ')); return 'no violations'; });
+  } else { unsupported('an item opens with its detail and its next step', 'this build serves no sample cases: Today has nothing to open');
+    unsupported('the opened item passes WCAG 2 A/AA (axe)', 'this build serves no sample cases: Today has nothing to open'); }
   await check('first workflow: a note is captured from the keyboard and shows up as captured', async () => {
     const note = 'acceptance note ' + Date.now() + ' call Dana about the invoice';
     const cap = p.getByPlaceholder(/Capture anything/i); assert(await cap.count(), 'no capture field');
     await cap.fill(note); await cap.press('Enter'); await p.waitForTimeout(2500);
     const t = await body(); assert(t.includes(note), 'the captured note is not shown'); return 'shown under "' + ((t.match(/Captured[^.]{0,30}/i) || ['captured'])[0]) + '"'; });
-  await check('find narrows the list', async () => {
-    const f = p.getByPlaceholder(/Find a customer or item/i); assert(await f.count(), 'no find field');
-    await f.fill('Visa'); await p.waitForTimeout(900); const t = await body(); assert(/Visa documents/i.test(t), 'the matching item is not shown'); await f.fill(''); return 'query "Visa" shows the matching item'; });
+  if (sample) {
+    await check('find narrows the list', async () => {
+      const f = p.getByPlaceholder(/Find a customer or item/i); assert(await f.count(), 'no find field');
+      await f.fill('Visa'); await p.waitForTimeout(900); const t = await body(); assert(/Visa documents/i.test(t), 'the matching item is not shown'); await f.fill(''); return 'query "Visa" shows the matching item'; });
+  } else unsupported('find narrows the list', 'this build serves no sample cases: there is no list to narrow');
   await check('every main section opens without an error', async () => {
     const seen = [];
     for (const name of ['Work', 'Activity', 'Automations', 'Connections', 'Settings', 'Today']) {
       const b = p.getByRole('button', { name: new RegExp('^' + name, 'i') }).first(); if (!(await b.count())) continue;
       await b.click(); await p.waitForTimeout(700); const t = await body(); assert(t.length > 200 && !/something went wrong|unexpected error/i.test(t), name + ' did not render'); seen.push(name); }
     assert(seen.length >= 4, 'only ' + seen.join(',') + ' found'); return seen.join(', '); });
+  // ---- Dashboards (Projects UI 0.3 and later). A build without the section records the checks as UNSUPPORTED. ----
+  const dashButton = p.getByRole('button', { name: /^Dashboards/i }).first();
+  if (!(await dashButton.count())) {
+    for (const n of ['the Dashboards section opens and lists what this build can show', 'every offered dashboard opens with its sources named', 'a dashboard passes WCAG 2 A/AA (axe)', 'a dashboard does not scroll sideways in a phone-width window'])
+      unsupported(n, 'this build has no Dashboards section');
+  } else {
+    // The catalogue is read from the page's own request (the session lives in the page, not in a cookie this script could reuse).
+    let cat = {}; let offered = [];
+    await check('the Dashboards section opens and lists what this build can show', async () => {
+      const [resp] = await Promise.all([
+        p.waitForResponse((r) => new URL(r.url()).pathname === '/api/dashboards' && r.status() === 200, { timeout: 20000 }),
+        dashButton.click()]);
+      cat = await resp.json(); offered = (cat.dashboards || []).map((d) => d.title);
+      await p.waitForTimeout(1500); const t = await body();
+      assert(offered.length >= 1, 'the catalogue offers no dashboard'); assert(!/something went wrong|unexpected error/i.test(t), 'the section shows an error');
+      const missing = offered.filter((title) => !t.includes(title)); assert(missing.length === 0, 'offered by the API and not on the page: ' + missing.join(', ') + ' | page: ' + t.slice(0, 200));
+      return offered.join(', '); });
+    await check('every offered dashboard opens with its sources named', async () => {
+      const seen = []; assert((cat.dashboards || []).length >= 1, 'no dashboard to open');
+      for (const d of (cat.dashboards || [])) {
+        const link = p.getByRole('button', { name: new RegExp(d.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }).or(p.getByRole('link', { name: new RegExp(d.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })).or(p.getByRole('tab', { name: new RegExp(d.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })).first();
+        assert(await link.count(), 'no control opens "' + d.title + '"'); await link.click(); await p.waitForTimeout(1200);
+        const t = await body(); assert(!/something went wrong|unexpected error/i.test(t), d.title + ' shows an error');
+        const src = (d.sources || []).map((x) => x.label).filter((l) => !t.includes(l)); assert(src.length === 0, d.title + ' does not name its source(s): ' + src.join(', '));
+        seen.push(d.id); }
+      return seen.join(', '); });
+    await check('a dashboard passes WCAG 2 A/AA (axe)', async () => { const v = await axe(); assert(v.length === 0, v.join(', ')); return 'no violations'; });
+    await check('a dashboard does not scroll sideways in a phone-width window', async () => {
+      await p.setViewportSize({ width: 390, height: 800 }); await p.waitForTimeout(600);
+      const m = await p.evaluate(() => ({ w: window.innerWidth, sw: document.documentElement.scrollWidth })); await p.setViewportSize({ width: 1280, height: 860 });
+      assert(m.sw <= m.w + 1, 'the page is ' + m.sw + ' px wide in a ' + m.w + ' px window'); return '390 px'; });
+    const today = p.getByRole('button', { name: /^Today/i }).first(); if (await today.count()) { await today.click(); await p.waitForTimeout(600); }
+  }
   await check('a phone-width window does not scroll sideways', async () => {
     await p.setViewportSize({ width: 390, height: 800 }); await p.waitForTimeout(500);
     const m = await p.evaluate(() => { const w = window.innerWidth, sw = document.documentElement.scrollWidth; const wide = [];
@@ -106,7 +153,7 @@ if (url) {
 await browser.close();
 try { proc.stdin.end(); } catch {}
 await new Promise((r) => setTimeout(r, 2500)); if (proc.exitCode === null) proc.kill();
-const summary = { pass: results.filter((r) => r.status === 'PASS').length, fail: results.filter((r) => r.status === 'FAIL').length, known_defect: results.filter((r) => r.status === 'KNOWN_DEFECT').length, seconds: Math.round((Date.now() - t00) / 100) / 10 };
+const summary = { pass: results.filter((r) => r.status === 'PASS').length, fail: results.filter((r) => r.status === 'FAIL').length, unsupported: results.filter((r) => r.status === 'UNSUPPORTED').length, known_defect: results.filter((r) => r.status === 'KNOWN_DEFECT').length, seconds: Math.round((Date.now() - t00) / 100) / 10 };
 fs.writeFileSync(outFile, JSON.stringify({ platform: os.platform() + ' ' + os.release() + ' ' + os.arch(), sidecar: side, at: new Date().toISOString(), summary, results }, null, 1));
 console.log(JSON.stringify(summary));
 process.exit(summary.fail ? 1 : 0);

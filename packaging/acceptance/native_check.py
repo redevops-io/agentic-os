@@ -109,28 +109,72 @@ def t_ui():
     sizes = [len(http("GET", u.decode())[1]) for u in srcs[:4]]; assert all(n > 1000 for n in sizes), sizes
     return f"HTML shell plus {len(srcs)} asset(s), first sizes {sizes}"
 check("the UI document is real HTML", t_ui)
+state = {"pid": "customer-ops"}                              # replaced by the first project the build lists
 def t_projects():
     s, raw = http("GET", "/api/projects"); assert s == 200; d = J(raw)
     items = d if isinstance(d, list) else d.get("projects", d)
-    assert items, "no project"; return f"{len(items)} project(s)"
+    assert items, "no project"
+    state["pid"] = str(items[0]["id"])
+    return f"{len(items)} project(s); first: {state['pid']}" + (" (no sample data)" if items[0].get("sample") is False else "")
 check("the API lists a project", t_projects)
-state = {}
 def t_today():
-    s, raw = http("GET", "/api/projects/customer-ops/today"); assert s == 200, s; d = J(raw)
+    s, raw = http("GET", f"/api/projects/{state['pid']}/today"); assert s == 200, s; d = J(raw)
     state["feed"] = d; return f"{len(d['items'])} items, basis={d.get('basis')}, supports={d.get('supports')}"
 check("the Today feed loads", t_today)
 def t_capture():
-    s, raw = http("POST", "/api/projects/customer-ops/capture", {"content": "Call the supplier about the late delivery tomorrow", "source": "manual"})
+    s, raw = http("POST", f"/api/projects/{state['pid']}/capture", {"content": "Call the supplier about the late delivery tomorrow", "source": "manual"})
     if s == 501: return "UNSUPPORTED on this build: capture is not enabled"
     assert s == 200, (s, raw[:200]); d = J(raw); assert d.get("id"), d
     return f"captured -> {d.get('status')} / {(d.get('routing') or {}).get('kind')}"
 check("first workflow: a note is captured and routed", t_capture)
 def t_item():
-    items = state["feed"]["items"]; assert items, "the feed has no item"
-    s, raw = http("GET", f"/api/projects/customer-ops/today/{items[0]['id']}")
+    items = state["feed"]["items"]
+    if not items and (state["feed"].get("supports") or {}).get("detail") is False:
+        # a build that serves no sample cases says so in the feed (supports.detail = false) and has nothing to open
+        return "UNSUPPORTED on this build: it serves no sample cases and says it offers no item detail"
+    assert items, "the feed has no item"
+    s, raw = http("GET", f"/api/projects/{state['pid']}/today/{items[0]['id']}")
     if s == 501: return "UNSUPPORTED on this build: item detail is not provided"
     assert s == 200, s; return J(raw).get("user_title", "")[:80]
 check("an item opens with its detail", t_item)
+# ---- dashboards (kernel 0.4.5 and later; a build without them answers 404 and the three checks are recorded as unsupported) ----
+def t_dash_catalog():
+    s, raw = http("GET", "/api/dashboards")
+    if s == 404: state["dash"] = None; return "UNSUPPORTED on this build: it has no dashboards"
+    assert s == 200, (s, raw[:160]); d = J(raw)
+    offered = [x["id"] for x in d.get("dashboards", [])]; assert offered, "no dashboard is offered"
+    for i in offered:
+        s2, raw2 = http("GET", f"/api/dashboards/{i}"); assert s2 == 200, (i, s2, raw2[:160])
+        doc = J(raw2); assert doc.get("id") == i and doc.get("schema") and "generated_at" in doc, (i, sorted(doc)[:8])
+    sa, _ = http("GET", "/api/dashboards/" + offered[0], anonymous=True); assert sa == 401, f"a caller without the local session got {sa}"
+    state["dash"] = offered
+    return f"{len(offered)} offered and each opens ({', '.join(offered)}); {len(d.get('not_connected', []))} named as not connected; 401 without the session"
+check("dashboards: the catalogue lists what this build can show and each one opens", t_dash_catalog)
+def t_dash_views():
+    if not state.get("dash"): return "UNSUPPORTED on this build: it has no dashboards"
+    s, raw = http("PUT", "/api/dashboards/views", {"name": "acceptance view", "dashboard": state["dash"][0], "filters": {"days": 7}})
+    assert s == 200, (s, raw[:200]); vid = J(raw)["id"]
+    s, raw = http("GET", "/api/dashboards/views"); assert s == 200, s; d = J(raw)
+    assert any(v["id"] == vid and v["filters"] == {"days": 7} for v in d["views"]), d
+    assert d.get("durable") is True, "saved views are kept in memory only: the build did not get a per-user dashboards directory"
+    sa, _ = http("PUT", "/api/dashboards/views", {"name": "x", "dashboard": state["dash"][0]}, anonymous=True); assert sa in (401, 403), sa
+    s, _ = http("DELETE", f"/api/dashboards/views/{vid}"); assert s == 200, s
+    s, raw = http("GET", "/api/dashboards/views"); assert not any(v["id"] == vid for v in J(raw)["views"])
+    return "a view is saved durably for the local owner, listed, refused without the session, and deleted"
+check("dashboards: a saved view is durable, private to the session and can be deleted", t_dash_views)
+def t_dash_not_offered():
+    if not state.get("dash"): return "UNSUPPORTED on this build: it has no dashboards"
+    d = J(http("GET", "/api/dashboards")[1])
+    hidden = [x["id"] for x in d.get("not_connected", [])]
+    if not hidden: return "every dashboard is offered on this build"
+    s, raw = http("GET", "/api/dashboards/" + hidden[0]); assert s == 200, (hidden[0], s); doc = J(raw)
+    states = {src.get("state") for src in doc.get("sources", [])}
+    assert states == {"not_connected"}, f"{hidden[0]} is listed as not connected and its sources say {sorted(states)}"
+    values = [m.get("value") for pnl in doc.get("panels", []) for m in pnl.get("metrics", [])]
+    assert all(v is None for v in values), f"{hidden[0]} is not connected and shows numbers: {[v for v in values if v is not None][:5]}"
+    assert all(src.get("remedy") for src in doc.get("sources", [])), "a source that is not connected does not say what would connect it"
+    return f"{hidden[0]}: every source says not_connected with a remedy, and none of its {len(values)} metric(s) carries a number"
+check("dashboards: one whose application is not connected is not served as if it had data", t_dash_not_offered)
 def t_anonymous_write_refused():
     s, _ = http("POST", "/api/products/edge-sentinel/actions/x/execute", {})
     assert s in (401, 403, 404, 405, 422), s; return f"HTTP {s}"
