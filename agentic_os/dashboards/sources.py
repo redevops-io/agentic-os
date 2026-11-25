@@ -980,7 +980,11 @@ class SourceCache:
             finally:
                 with self._lock:
                     self._refreshing.discard(sid)
-        threading.Thread(target=run, name=f"dash-src-{sid}", daemon=True).start()
+        try:
+            threading.Thread(target=run, name=f"dash-src-{sid}", daemon=True).start()
+        except RuntimeError:
+            # No threads here (WebAssembly Python in a browser): refresh in the caller's own time instead. Slower, never wrong.
+            run()
 
     def get(self, sid: str, *, fresh: bool = False) -> SourceResult:
         if not self.enabled(sid):
@@ -1017,8 +1021,12 @@ class SourceCache:
         if len(wait) < 2:
             return
         from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
-        with ThreadPoolExecutor(max_workers=min(8, len(wait)), thread_name_prefix="dash-src") as pool:
-            list(pool.map(self._read, wait))
+        try:
+            with ThreadPoolExecutor(max_workers=min(8, len(wait)), thread_name_prefix="dash-src") as pool:
+                list(pool.map(self._read, wait))
+        except RuntimeError:                              # a runtime without threads: one after the other (get() reads what is still missing)
+            for sid in wait:
+                self.get(sid)
 
     def invalidate(self) -> None:
         """Forget what was read, except from a rate-limited source: a forced refresh must not spend its quota."""
