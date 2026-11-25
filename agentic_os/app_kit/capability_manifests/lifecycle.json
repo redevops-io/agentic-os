@@ -1,0 +1,291 @@
+{
+ "app": "lifecycle",
+ "digest": "sha256:990a38757c47ed651291215beb6472961f202e0373406b18307c3f74ee82da9a",
+ "operations": [
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "compose_campaign",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "lifecycle.compose_campaign",
+   "inputs": {},
+   "outputs": {
+    "campaign_drafted": "True only if the campaign was re-fetched from Listmonk by id and its real status is 'draft'",
+    "campaign_verified": "True only if the read-back GET /api/campaigns/{id} matched the create response"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "segment",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "lifecycle.segment",
+   "inputs": {},
+   "outputs": {
+    "segment_proposed": "a Listmonk advanced SQL subscriber query (advisory)"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "suggest_flow",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "lifecycle.suggest_flow",
+   "inputs": {},
+   "outputs": {
+    "flow_suggested": "a multi-step lifecycle flow outline with per-step copy (advisory)"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/"
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity"
+    }
+   ],
+   "id": "lifecycle_summary",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/agent"
+    }
+   ],
+   "id": "list_campaigns",
+   "route_access": [
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "list_segments",
+   "typed": false
+  }
+ ],
+ "problems": [],
+ "routes": [
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/",
+   "tools": [
+    {
+     "tool": "lifecycle_summary"
+    }
+   ]
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/_security"
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/activity",
+   "tools": [
+    {
+     "tool": "lifecycle_summary"
+    }
+   ]
+  },
+  {
+   "gate": "operator_credential",
+   "method": "GET",
+   "path": "/capabilities"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs/oauth2-redirect"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/health"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/openapi.json"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/redoc"
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/agent/run",
+   "tools": [
+    {
+     "action": "compose_campaign",
+     "tool": "lifecycle.compose_campaign"
+    },
+    {
+     "action": "segment",
+     "tool": "lifecycle.segment"
+    },
+    {
+     "action": "suggest_flow",
+     "tool": "lifecycle.suggest_flow"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "lifecycle.agent_run",
+    "permission": "lifecycle:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/agent",
+   "tools": [
+    {
+     "tool": "list_campaigns"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "lifecycle.agent",
+    "permission": "lifecycle:write"
+   }
+  },
+  {
+   "gate": "operator_credential",
+   "method": "POST",
+   "path": "/invoke",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "lifecycle.invoke",
+    "permission": "lifecycle:write"
+   }
+  }
+ ],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "operations": 6,
+  "reachable_by_external_agents": 0,
+  "routes": 12,
+  "routes_without_a_gate_decision": 0,
+  "typed": 3,
+  "ui_calls": 0,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 1
+ },
+ "ui_calls": []
+}

@@ -96,6 +96,10 @@ PUBLIC["agentic-privacy"].update({
     ("GET", "/intake"): "the public data-subject intake form (static HTML)", ("POST", "/intake"): "public intake (registered in tool_actions.PUBLIC_INTAKE_ROUTES): the same constrained submission as /request",
     ("GET", "/verify"): "the confirm page for the emailed single-use link (does not consume the token)", ("POST", "/verify"): "redeems the single-use emailed token",
     ("GET", "/export"): "single-use short-TTL export protected by request id + token issued after /verify"})
+_SENTINEL_UI = ("the browser console's static files, from a fixed list of names (never a path from the request); they carry no data and the sign-in "
+                "page has to load before anyone can sign in; everything shown comes from /api/v1, which authenticates (ui_routes.py)")
+PUBLIC["edge-sentinel"][("GET", "/ui")] = _SENTINEL_UI
+PUBLIC["edge-sentinel"][("GET", "/ui/{path:path}")] = _SENTINEL_UI
 PUBLIC["edge-sentinel"][("GET", "/readyz")] = "readiness probe: {ready, per-check booleans, profile name, a connectivity boolean}; no case or activity data"
 PUBLIC["edge-sentinel"][("GET", "/enforcement/{address}")] = ("opt-in (SENTINEL_ENFORCEMENT_PROBE=1; 404 otherwise, and never with the fixture core): one word, whether a "
                                                               "DOCUMENTATION address (RFC 5737, RFC 3849) has an active ban; no real address can be asked about; reads only")
