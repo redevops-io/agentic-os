@@ -24,6 +24,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 - `deploy/apps`: optional `PROJECTS_CORS_ORIGINS`, `PROJECTS_VIEWER_TOKENS`, `PROJECTS_VIEWER_LIMITS` for the portable dashboards page.
 - A panel with nothing to draw says so in words (found on the Knowledge dashboard of a deployment with no knowledge source).
 - `packaging/acceptance/dashboards_check.py`: a dependency-free, read-only dashboards check for an installed build.
+- QA dashboard: a suite's state is the state of the release its newest run names. A platform last run for an earlier release reads "not executed" for the current one, with the release it last ran for in the drill-down (before, an old pass on one platform stood beside newer results of another and read as one qualified release). Report one product per suite.
+- `DELETE /api/dashboards/qa/results?project=&suite=&platform=&run_id=` withdraws exactly one misfiled run; the callers are the ones that may report.
 - Sidekick's stack knowledge explains a sealed Vault: what stops, how to recover, never to paste a key, and auto-unseal.
 
 - **Market Intelligence: read-only research needs no approval.** New mission template `market_intelligence_research` (watch brief, site audit, analytics, recommendations): every step only reads, so it has no approval step and finishes without a person. `radar.recommend` says whether its list proposes a change to the site (`plan_kind`: `changes` or `read_only`). The approval in `market_intelligence_loop` is unchanged: a list is approved by a person, by its digest, before anything is verified against it.
