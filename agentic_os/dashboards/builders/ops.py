@@ -40,9 +40,16 @@ def security(b: Build) -> None:
     b.drill("actions:verified", "Executed and verified by read-back", verified, columns=("capability", "verification"))
     b.drill("actions:unverified", "Executed, not verified", unverified, columns=("capability", "verification"),
             note="The action ran, and the read-back did not confirm it. Treat it as not done.")
-    closed = [r for r in cases_all if not r.get("open") and r.get("closed_at") and r.at and b.since <= float(r.get("closed_at")) <= b.until]
-    hours = [(float(r.get("closed_at")) - r.at) / 3600.0 for r in closed if float(r.get("closed_at")) >= r.at]
-    b.drill("cases:closed", "Cases closed in this range", closed, columns=cols)
+    # A case is closed when the product says so (its status). WHEN it closed is a separate fact that some products do not
+    # report: such a case is still counted and listed as closed (placed in the range by its opening time), and only the
+    # time-to-close is "not known" for it. Counting it as zero closed cases would hide real remediation.
+    timed = [r for r in cases_all if not r.get("open") and r.get("closed_at") and r.at and b.since <= float(r.get("closed_at")) <= b.until]
+    untimed = [r for r in cases_all if not r.get("open") and not r.get("closed_at") and (not r.at or b.since <= r.at <= b.until)]
+    closed = timed + untimed
+    hours = [(float(r.get("closed_at")) - r.at) / 3600.0 for r in timed if float(r.get("closed_at")) >= r.at]
+    b.drill("cases:closed", "Cases closed in this range", closed, columns=cols,
+            note=(f"{len(untimed)} of {len(closed)} carry no closing time from the product, so they are listed by when they opened "
+                  "(or always, when that is not reported either) and are left out of the time-to-close.") if untimed else "")
     per = b.group(opened, lambda r: r.project)
     m_open = b.track(b.metric("open_cases", "Open cases", needs=S, value=len(opened), drill="cases:open", good="down", tone="warn" if opened else "ok"),
                      {p: (len(v), None) for p, v in per.items()} or {"": (0, None)})
@@ -56,7 +63,10 @@ def security(b: Build) -> None:
                  drill="actions:unverified" if unverified else "actions:verified", tone=tone_of(pct(len(verified), len(executed)), good=100, warn=90),
                  note=f"{len(verified)} of {len(executed)} executed actions were confirmed by reading the system back"),
         b.metric("mttr", "Median time to close", needs=S, value=round(median(hours), 1) if hours else None, unit="h", drill="cases:closed", good="down",
-                 unknown="" if hours else "no_data", note=f"{len(closed)} case(s) closed in the range" if hours else "no case was closed in this range"),
+                 unknown="" if hours else "no_data",
+                 note=(f"from {len(hours)} of {len(closed)} closed case(s)" + (f"; {len(untimed)} carry no closing time" if untimed else "")) if hours
+                 else (f"{len(closed)} case(s) closed, but the product reports no closing time for them" if closed else "no case was closed in this range")),
+        b.metric("closed_cases", "Closed in range", needs=S, value=len(closed), drill="cases:closed", good="up"),
         b.metric("new_cases", "Opened in range", needs=S, value=len([r for r in in_range if r.at]), note="cases with a known opening time"),
     ]))
     by_sev = b.group(opened, lambda r: r.get("severity") or "unknown")

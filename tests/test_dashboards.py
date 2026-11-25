@@ -360,6 +360,26 @@ def test_a_dashboard_is_offered_only_when_its_application_is_connected(monkeypat
     assert c.get("/api/dashboards/missions/drill", params={"key": "nope"}).status_code == 404
 
 
+def test_a_resolved_case_counts_as_closed_even_when_the_product_reports_no_closing_time(monkeypatch, tmp_path):
+    """Found on a real remediation: Edge Sentinel marks a case RESOLVED without a closing time. The remediation must still show."""
+    fake = FakeSentinel()
+    c, svc, _ = _app(monkeypatch, tmp_path, sentinel=fake.serve())
+    try:
+        before = c.get("/api/dashboards/security").json()
+        assert _metric(before, "open_cases")["value"] == 1 and _metric(before, "closed_cases")["value"] == 0
+        assert "no case was closed" in _metric(before, "mttr")["note"]
+        fake.cases[CASE]["status"] = "RESOLVED"                                  # no closed_at, exactly as the product reports it
+        svc.provider.products_hub.invalidate("edge-sentinel")
+        d = c.get("/api/dashboards/security", params={"fresh": "true"}).json()
+        assert _metric(d, "open_cases")["value"] == 0 and _metric(d, "closed_cases")["value"] == 1
+        mttr = _metric(d, "mttr")
+        assert mttr["value"] is None and "reports no closing time" in mttr["note"]            # the time is not known; the closure is
+        dr = c.get("/api/dashboards/security/drill", params={"key": "cases:closed"}).json()
+        assert [r["ref"] for r in dr["records"]] == [f"edge-sentinel:{CASE}"] and "no closing time" in dr["note"]
+    finally:
+        fake.close()
+
+
 def test_a_source_outage_makes_numbers_unknown_not_zero(monkeypatch, tmp_path):
     fake = FakeSentinel()
     c, svc, _ = _app(monkeypatch, tmp_path, sentinel=fake.serve())
