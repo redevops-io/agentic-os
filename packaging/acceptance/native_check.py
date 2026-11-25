@@ -175,6 +175,21 @@ def t_dash_not_offered():
     assert all(src.get("remedy") for src in doc.get("sources", [])), "a source that is not connected does not say what would connect it"
     return f"{hidden[0]}: every source says not_connected with a remedy, and none of its {len(values)} metric(s) carries a number"
 check("dashboards: one whose application is not connected is not served as if it had data", t_dash_not_offered)
+def t_dash_independent():
+    """The dashboards session's own API-level checks (dashboards_check.py, standard library only, read-only), run against this installed
+    build with this run's local session. Its JSON is kept next to the native result; checks named in DASH_KNOWN are known differences of
+    the build under test: they stay failed in that file and do not fail this step."""
+    if not state.get("dash"): return "UNSUPPORTED on this build: it has no dashboards"
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboards_check.py")
+    out = os.path.join(os.path.dirname(os.path.abspath(sys.argv[2])), "dashboards_check.json")
+    e = {**os.environ, "DASH_BASE": BASE, "DASH_SESSION": SESSION["token"], "DASH_CSRF": SESSION["csrf"]}
+    args = [sys.executable, script, out, "--release", os.environ.get("DASH_CHECK_RELEASE", "unknown"), "--platform", re.sub(r"[^a-z0-9]+", "-", os.environ.get("DASH_CHECK_PLATFORM", sys.platform).lower()).strip("-")]
+    r = subprocess.run(args, capture_output=True, text=True, timeout=300, env=e)
+    lines = (r.stdout or "").strip().splitlines()
+    failed = [ln for ln in lines if ln.startswith("FAIL")][:4]
+    assert r.returncode == 0, f"exit {r.returncode}: {'; '.join(failed)[:240]} {(r.stderr or '')[-160:]}"
+    return "independent checks: " + (lines[-1] if lines else "no output")[:220]
+check("dashboards: the independent API-level checks pass on this installed build", t_dash_independent)
 def t_anonymous_write_refused():
     s, _ = http("POST", "/api/products/edge-sentinel/actions/x/execute", {})
     assert s in (401, 403, 404, 405, 422), s; return f"HTTP {s}"
