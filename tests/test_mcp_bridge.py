@@ -116,3 +116,32 @@ def test_the_extension_manifest_is_a_valid_mcpb_manifest_that_keeps_the_token_in
     assert m["server"]["mcp_config"]["env"] == {"RAILS_URL": "${user_config.rails_url}", "RAILS_TOKEN": "${user_config.rails_token}"}
     src = BRIDGE.read_text(encoding="utf-8")
     assert "require('node:" in src and not [line for line in src.splitlines() if "require(" in line and "node:" not in line and "require.main" not in line]   # standard library only
+
+
+def test_with_an_agents_directory_and_a_token_file_the_bridge_finds_the_running_app_by_itself(deployment, tmp_path):
+    """No address and no token in the client's settings: the app publishes where it listens, the token is read from its private file."""
+    agents = tmp_path / "agents"
+    (agents / "tokens").mkdir(parents=True)
+    token_file = agents / "tokens" / "agent-1.token"
+    token_file.write_text(TOKEN + "\n", encoding="utf-8")
+    port = deployment.rsplit(":", 1)[1]
+    gw = agents / "gateway.json"
+    env = {"RAILS_AGENTS_DIR": str(agents), "RAILS_TOKEN_FILE": str(token_file)}
+    ask = [INIT, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
+
+    def run():
+        out = subprocess.run([NODE, str(BRIDGE)], input="".join(json.dumps(m) + "\n" for m in ask), capture_output=True, text=True, timeout=60, env={"PATH": os.environ.get("PATH", ""), **env})
+        return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
+
+    assert "not running" in run()[1]["error"]["message"]                                   # nothing published: say so, offer nothing
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": f"http://127.0.0.1:{port}", "pid": os.getpid()}), encoding="utf-8")
+    assert "projects_list" in [t["name"] for t in run()[1]["result"]["tools"]]
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": f"http://127.0.0.1:{port}", "pid": dead.pid}), encoding="utf-8")
+    assert "not running" in run()[1]["error"]["message"]                                   # a stale file is not followed
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": "http://evil.example:80", "pid": os.getpid()}), encoding="utf-8")
+    assert "not written by the rAIls app" in run()[1]["error"]["message"]                  # only a loopback address is followed
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": f"http://127.0.0.1:{port}", "pid": os.getpid()}), encoding="utf-8")
+    token_file.unlink()
+    assert "not connected to the rAIls app any more" in run()[1]["error"]["message"]       # the credential was removed
