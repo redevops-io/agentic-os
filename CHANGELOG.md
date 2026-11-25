@@ -9,6 +9,13 @@ No curated changelog is kept. History:
 - Release procedure and known drift between `pyproject.toml`, tags and release objects: [docs/RELEASING.md](docs/RELEASING.md).
 - Downstream pins: `mission-sdk` `COMPATIBILITY.md`.
 
+## Desktop 0.1.5 (unavailable dashboards explain themselves)
+
+- A dashboard that is not offered says why, names every application it could be built on, and how each is enabled; the Dashboards page lists them (Projects UI v0.3.9). How to enable a source is said only to a caller who may read it.
+- The desktop app reads `<data>/dashboards/dashboards.yaml` once a person has created it, and names that file in the explanation.
+- Sign-in panel controls are at least 24 CSS px tall (WCAG 2.2 AA 2.5.8): the About link was 17 px.
+- A release manifest requires and lists one SBOM per platform and architecture.
+
 ## Desktop 0.1.4 (dashboards)
 
 - The Dashboards section ships in the desktop app: the kernel side was ported from v0.4.9 (#793) and the Projects UI is re-pinned to release v0.3.2. The packaged sidecar keeps its explicit production profile, so the desktop serves no sample data: an empty workspace is the honest first state, and a dashboard appears when its application is connected or a run is reported.

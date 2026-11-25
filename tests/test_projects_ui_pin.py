@@ -187,6 +187,13 @@ def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_relea
     assert LOCK["source_commit_published"] is True and LOCK["url"] == ""
 
 
-def test_the_record_states_that_the_npm_lock_is_unchanged_since_the_base():
-    assert REC["lock_unchanged_since_base"] is True
+def test_the_record_states_what_changed_in_the_npm_lock_since_the_base():
+    """Until v0.3.2 the UI's npm lock was byte-identical to the v0.2.0 base. v0.3.7 added one dev-only package for the portable page
+    (pyodide). What matters for the notices of THIS artifact is that the production packages are unchanged and that nothing of the new
+    package is in the shipped files; both are stated in the record and the second is checked against the artifact here."""
+    assert REC["lock_unchanged_since_base"] is False and REC["lock_production_unchanged_since_base"] is True
     assert "byte-identical" in REC["lock_change_since_base"]
+    added = REC["lock_dev_additions_since_base"]
+    assert [(a["name"], a["dev"]) for a in added] == [("pyodide", True)] and all(a["license"] and a["version"] for a in added)
+    for name, data in _members().items():
+        assert b"pyodide" not in data.lower(), f"{name} carries code of a package the record says is not shipped"

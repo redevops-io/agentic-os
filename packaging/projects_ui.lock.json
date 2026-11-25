@@ -1,13 +1,13 @@
 {
- "_comment": "RE-PINNED 2026-11-25 to redevops-projects release v0.3.2 (commit 33c1a3e0: the Dashboards section, Sidekick docked beside the page, no demo content on a deployment that serves no fixtures). The build output is byte-identical, file by file, to the published release asset projects-ui-root.tgz of v0.3.2 (sha256 13f9be92479ef9b2471e97788847792e39ddf73d27b15ed02f5196aa59cb9a74), which additionally carries hero.jpg. RE-PINNED 2026-11-24 to redevops-projects main e6032e8e (PRs #28 and #29 on top of 2bbb9811: Today honours a read-only deployment; every flexible grid track can shrink, which fixes the page being wider than a 390 px window on Linux). The pinned Projects UI artifact: url + sha256 + source commit. RE-PINNED 2026-11-19 (owner decision): the previous pin's source commit (ea9e53e56b...24fa, and its whole ancestor chain back through 9a1788b1, 5751e9e5, 312a811a, 2f24719e, ee958a01, 2fdef7f5) was a LOCAL, UNPUBLISHED commit of a local redevops-projects clone; that clone was lost in the 2026-11-07 scratchpad wipe and no longer exists anywhere (checked: no surviving local clone, no dangling git object by that sha in any repository on this machine, no remote branch/tag). Only the already-built, minified dist output of that lost source survives, in the `previous_pin` chain below, as history. This build is therefore pinned instead to the current public tip of github.com/redevops-io/redevops-projects's `main` branch (source_commit, below), which is itself two commits past the v0.2.0 release (base_commit) this repository had previously built on. Because source_commit is a real commit on the public repository's default branch today, source_commit_published is TRUE: decisions pins-04 and pins-10 (packaging/DECISIONS-REQUIRED.md, packaging/PINS.md) are resolved by this fact alone. D-LIC-12 (which AGPL section 6 option to use for the Corresponding Source) stays OPEN and is NOT decided by this re-pin -- that remains the owner's/counsel's choice among options (a)-(d); this re-pin only makes options (a) and (c) actually available, where before only a repository pointer to unpublished work could be offered. Known regression: this re-pin DROPS every feature that only existed in the lost local commits -- the accessibility series (UIA-01..12), the mission drill-down views, the data-source-driven 'Partly sample' chip, and the fixed-wording connect/propose/remove-source flows. None of that is in this build; it ships only what is on the public repository today (the Today-first views of v0.2.0 plus PR #24 routing/restore-last-place, #25 audit-findings fixes, #26 Snooze-on-live-signals). Redoing and this time actually pushing that lost work is tracked separately, not by this lock file. scripts/fetch_projects_ui.py verifies the sha256 before anything is extracted, whichever source it reads. `previous_pin` is the artifact this one replaces (the previous, now-unrecoverable-source local build chain), which stays in the repository: going back is a lock edit.",
+ "_comment": "RE-PINNED 2026-11-25 to redevops-projects release v0.3.9 (commit 5ad1ebbc: an unavailable dashboard says why it is not shown, what it needs and how to enable it). The build output is byte-identical, file by file, to the published release asset projects-ui-root.tgz of v0.3.9 (sha256 71328177a5340edea0dc4a48421221024e9306407b877c522451a3a216e7083c), which additionally carries hero.jpg. Previous pins are kept below (pin_33c1a3e0, pin_e6032e8e, pin_2bbb9811). Earlier note: RE-PINNED 2026-11-25 to redevops-projects release v0.3.2 (commit 33c1a3e0: the Dashboards section, Sidekick docked beside the page, no demo content on a deployment that serves no fixtures). The build output is byte-identical, file by file, to the published release asset projects-ui-root.tgz of v0.3.2 (sha256 13f9be92479ef9b2471e97788847792e39ddf73d27b15ed02f5196aa59cb9a74), which additionally carries hero.jpg. RE-PINNED 2026-11-24 to redevops-projects main e6032e8e (PRs #28 and #29 on top of 2bbb9811: Today honours a read-only deployment; every flexible grid track can shrink, which fixes the page being wider than a 390 px window on Linux). The pinned Projects UI artifact: url + sha256 + source commit. RE-PINNED 2026-11-19 (owner decision): the previous pin's source commit (ea9e53e56b...24fa, and its whole ancestor chain back through 9a1788b1, 5751e9e5, 312a811a, 2f24719e, ee958a01, 2fdef7f5) was a LOCAL, UNPUBLISHED commit of a local redevops-projects clone; that clone was lost in the 2026-11-07 scratchpad wipe and no longer exists anywhere (checked: no surviving local clone, no dangling git object by that sha in any repository on this machine, no remote branch/tag). Only the already-built, minified dist output of that lost source survives, in the `previous_pin` chain below, as history. This build is therefore pinned instead to the current public tip of github.com/redevops-io/redevops-projects's `main` branch (source_commit, below), which is itself two commits past the v0.2.0 release (base_commit) this repository had previously built on. Because source_commit is a real commit on the public repository's default branch today, source_commit_published is TRUE: decisions pins-04 and pins-10 (packaging/DECISIONS-REQUIRED.md, packaging/PINS.md) are resolved by this fact alone. D-LIC-12 (which AGPL section 6 option to use for the Corresponding Source) stays OPEN and is NOT decided by this re-pin -- that remains the owner's/counsel's choice among options (a)-(d); this re-pin only makes options (a) and (c) actually available, where before only a repository pointer to unpublished work could be offered. Known regression: this re-pin DROPS every feature that only existed in the lost local commits -- the accessibility series (UIA-01..12), the mission drill-down views, the data-source-driven 'Partly sample' chip, and the fixed-wording connect/propose/remove-source flows. None of that is in this build; it ships only what is on the public repository today (the Today-first views of v0.2.0 plus PR #24 routing/restore-last-place, #25 audit-findings fixes, #26 Snooze-on-live-signals). Redoing and this time actually pushing that lost work is tracked separately, not by this lock file. scripts/fetch_projects_ui.py verifies the sha256 before anything is extracted, whichever source it reads. `previous_pin` is the artifact this one replaces (the previous, now-unrecoverable-source local build chain), which stays in the repository: going back is a lock edit.",
  "repo": "redevops-io/redevops-projects",
- "version": "v0.3.2+33c1a3e0",
+ "version": "v0.3.9+5ad1ebbc",
  "asset": "projects-ui-root.tgz",
- "sha256": "9ead221b939bb51f4e2fe69162cf450f658b78b7107de95bf6734c347bee0c80",
+ "sha256": "9e0fd6bd630401228f8278008d37f8a27adaef57e488a157af1d7c35b21ae437",
  "url": "",
- "local_path": "packaging/ui-artifacts/projects-ui-root-33c1a3e0.tgz",
- "source_commit": "33c1a3e096cb7c5e36a204f1f18fb39b95f3ffdd",
- "source_tree": "204c8d9e404db5e3fb50bc521ba68371efd0dd5a",
+ "local_path": "packaging/ui-artifacts/projects-ui-root-5ad1ebbc.tgz",
+ "source_commit": "5ad1ebbca673fa25f5fcec5a56a125ff20d517be",
+ "source_tree": "e7c7befc48436011d885c0567d00fcc67e6b8073",
  "source_commit_published": true,
  "base_commit": "84f17fceddb84d1af909a5919b5efbb2956b2b22",
  "base_commit_public": true,
@@ -17,10 +17,23 @@
   "note": "v0.2.0 is an ancestor of source_commit on the public repository's own main branch (PRs #24, #25, #26 are the commits between them); nothing is merged in from a lost local branch anymore, source_commit IS the public history."
  },
  "bundle_files": {
-  "index.html": "54a45139e2fec56fcb421a797c7cc8ce9abd1801f45dd79c2135e877cdf84b50",
-  "assets/index-B9zZyR22.js": "13b63b2edc3cd23d1205c17bd9d44715dfc57c6603094d21fffa0043e53228d1",
-  "assets/index-DrTLtYG2.css": "938d5feef0c4edc25e27ebbd6657ac87db304ab0eb6746b85996e4ba23e57d5d",
+  "index.html": "2ff435d9c51c2e93dee0fb6bd75d40ee4fb19a81d04ac06625a5cb699bf9efd8",
+  "assets/index-CLW4eln8.css": "3a101e43384909a49493b4cfd59d13fdc1dcc6e9e081089999d5d524fff9d846",
+  "assets/index-Cu-cxBE5.js": "58e040ad68893c2fe61439ca58a4910687b8bf98e6a2dd702f32711ca04ade7a",
   "assets/mockDashboards-Lw4QGbeP.js": "6959df5eb1bdc38bbd3eb77e354093ab5c9e11ae514ad1298d96f21215245e08"
+ },
+ "pin_33c1a3e0": {
+  "version": "v0.3.2+33c1a3e0",
+  "sha256": "9ead221b939bb51f4e2fe69162cf450f658b78b7107de95bf6734c347bee0c80",
+  "local_path": "packaging/ui-artifacts/projects-ui-root-33c1a3e0.tgz",
+  "source_commit": "33c1a3e096cb7c5e36a204f1f18fb39b95f3ffdd",
+  "source_tree": "204c8d9e404db5e3fb50bc521ba68371efd0dd5a",
+  "bundle_files": {
+   "index.html": "54a45139e2fec56fcb421a797c7cc8ce9abd1801f45dd79c2135e877cdf84b50",
+   "assets/index-B9zZyR22.js": "13b63b2edc3cd23d1205c17bd9d44715dfc57c6603094d21fffa0043e53228d1",
+   "assets/index-DrTLtYG2.css": "938d5feef0c4edc25e27ebbd6657ac87db304ab0eb6746b85996e4ba23e57d5d",
+   "assets/mockDashboards-Lw4QGbeP.js": "6959df5eb1bdc38bbd3eb77e354093ab5c9e11ae514ad1298d96f21215245e08"
+  }
  },
  "pin_e6032e8e": {
   "version": "main+e6032e8e",
@@ -154,9 +167,9 @@
   }
  },
  "source_release": {
-  "tag": "v0.3.2",
-  "commit": "33c1a3e096cb7c5e36a204f1f18fb39b95f3ffdd",
-  "asset_sha256": "13f9be92479ef9b2471e97788847792e39ddf73d27b15ed02f5196aa59cb9a74",
-  "note": "source_commit is the commit of the public release v0.3.2; the artifact's files are byte-identical to that release's projects-ui-root.tgz, which additionally carries hero.jpg."
+  "tag": "v0.3.9",
+  "commit": "5ad1ebbca673fa25f5fcec5a56a125ff20d517be",
+  "asset_sha256": "71328177a5340edea0dc4a48421221024e9306407b877c522451a3a216e7083c",
+  "note": "source_commit is the commit of the public release v0.3.9; the artifact's files are byte-identical to that release's projects-ui-root.tgz, which additionally carries hero.jpg."
  }
 }
