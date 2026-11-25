@@ -5,7 +5,7 @@ dashboards import, nothing else.
     python packaging/wasm/build_kernel_zip.py <out.zip>
 
 The list is not maintained by hand: a fresh interpreter exercises every route of agentic_os.dashboards.portable (all
-thirteen dashboards, a drill-down, a saved view, a JUnit import) and the agentic_os modules it ended up importing are the
+fourteen dashboards, a drill-down, a saved view, a JUnit import) and the agentic_os modules it ended up importing are the
 archive. The archive is reproducible (sorted entries, fixed timestamps), so its sha256 identifies its content. The script
 fails if a web framework or an HTTP client was imported, or if the archive would exceed 2 MB.
 """

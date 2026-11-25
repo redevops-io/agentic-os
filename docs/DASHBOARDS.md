@@ -123,6 +123,26 @@ A deployment that enables business sources should not be reachable anonymously a
 control-plane bearer on every request, 503 when none is configured. A public evaluation deployment keeps the gate off and
 enables no business source.
 
+## Self-improvement
+
+What a harness optimizer did, from the records it writes (`agent-harness.sim-run/1`, `agent-harness.sim/1`): every
+candidate edit with the root-cause hypothesis it addresses and the tasks it was **predicted** to fix before it was
+evaluated; the measured fixed, missed and broken tasks; whether it was accepted, rejected, refused or screened out; memory
+carried from another run, with each run's task and optimizer models; and rollbacks. Each figure drills into its records.
+
+Off until the operator lists it, because a run's text is written by a model reading task failures:
+
+```yaml
+sources:
+  sim_runs: {project: <project id>, dir: /path/to/the/runs}     # or SIM_RUNS_DIR
+```
+
+Run directories (a `state.json`, `sim.json` and `rounds/`) are looked for up to three levels down. Per-task replies and
+traces in the round records are not read. A run that cannot be read is named and the figures are marked a lower bound; if
+none can be read they are unknown, not zero. Links leading out of the directory are not followed. The records carry no
+time, so the date range does not filter them. The dashboard reports what runs did; it does not claim a system improves
+itself, and it says when nothing was accepted.
+
 ## From a finding to an action
 
 A drill-down returns actions. None executes anything by itself: *Ask Sidekick* answers from the evidence behind the

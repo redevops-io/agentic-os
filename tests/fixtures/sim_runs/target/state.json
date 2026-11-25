@@ -1,0 +1,23 @@
+{
+ "condition": "full",
+ "current": "29beae470c93ac0a73ebc9636ff032995e1c8a0abdfb07420808e0c0daaf36ea",
+ "promotions": [
+  {
+   "harness": "29beae470c93ac0a73ebc9636ff032995e1c8a0abdfb07420808e0c0daaf36ea",
+   "kind": "start",
+   "round": 0
+  }
+ ],
+ "provenance": {
+  "benchmark": "synthetic-bench",
+  "domain": "synthetic",
+  "evaluator": "scripted",
+  "harness_version": "",
+  "optimizer": "scripted",
+  "policy": "model-b@1",
+  "run": "target"
+ },
+ "round": 1,
+ "run": "target",
+ "schema": "agent-harness.sim-run/1"
+}

@@ -55,7 +55,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 SCHEMA = "aos.dashboards/v1"
 ENV = "AGENTIC_OS_DASHBOARDS"
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
-BUSINESS_SOURCES = ("twenty", "erpnext", "chatwoot", "lago", "umami", "metabase", "postiz", "listmonk", "mission_plane")
+BUSINESS_SOURCES = ("twenty", "erpnext", "chatwoot", "lago", "umami", "metabase", "postiz", "listmonk", "mission_plane", "sim_runs")
 _TOP = {"schema", "data_dir", "projects", "sources", "qa", "access"}
 _PROJECT = {"id", "name", "product", "environment", "match"}
 _MATCH = {"qa_targets", "qa_suites", "sentinel_assets", "missions", "products"}

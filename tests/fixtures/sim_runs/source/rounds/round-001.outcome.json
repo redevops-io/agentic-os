@@ -1,0 +1,95 @@
+{
+ "candidates": [
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "outcome": {
+    "cost_usd": 0.0,
+    "details": {
+     "e1": "NEVER-SHOW-THIS reply text for e1",
+     "e2": "NEVER-SHOW-THIS reply text for e2",
+     "e3": "NEVER-SHOW-THIS reply text for e3",
+     "e4": "NEVER-SHOW-THIS reply text for e4"
+    },
+    "failed": [
+     "e2",
+     "e3"
+    ],
+    "harness_id": "",
+    "passed": [
+     "e1",
+     "e4"
+    ],
+    "score": 0.5,
+    "seconds": 0.0
+   },
+   "predicted": [
+    "e1",
+    "e2"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "markers are missing",
+   "screened_in": true,
+   "what": "add one marker"
+  },
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "outcome": {
+    "cost_usd": 0.0,
+    "details": {
+     "e1": "NEVER-SHOW-THIS reply text for e1",
+     "e2": "NEVER-SHOW-THIS reply text for e2",
+     "e3": "NEVER-SHOW-THIS reply text for e3",
+     "e4": "NEVER-SHOW-THIS reply text for e4"
+    },
+    "failed": [
+     "e2",
+     "e3",
+     "e4"
+    ],
+    "harness_id": "",
+    "passed": [
+     "e1"
+    ],
+    "score": 0.25,
+    "seconds": 0.0
+   },
+   "predicted": [
+    "e1"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "markers are missing",
+   "screened_in": true,
+   "what": "add a marker and break e4"
+  }
+ ],
+ "chosen": 0,
+ "current": {
+  "cost_usd": 0.0,
+  "details": {
+   "e1": "NEVER-SHOW-THIS reply text for e1",
+   "e2": "NEVER-SHOW-THIS reply text for e2",
+   "e3": "NEVER-SHOW-THIS reply text for e3",
+   "e4": "NEVER-SHOW-THIS reply text for e4"
+  },
+  "failed": [
+   "e1",
+   "e2",
+   "e3"
+  ],
+  "harness_id": "",
+  "passed": [
+   "e4"
+  ],
+  "score": 0.25,
+  "seconds": 0.0
+ },
+ "note": "",
+ "promoted": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+ "round": 1
+}
