@@ -19,6 +19,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## v0.4.17 (one token per external agent, a real MCP server; Vault stays the authority on a deployed host)
 
+- `integrations/mcp-bridge`: a local stdio MCP server that forwards to the Governed Agent Gateway, with an MCPB manifest for Claude Desktop (not part of the Python package). Its test covers the handshake, tool list, a governed call and refusals against the mounted gateway on a socket, and packs the bundle. Installing it in Claude Desktop, use from an installed Artifact and other clients are **not** verified.
 - `agentic-os secrets`: on a host that records Vault as its secret authority (`/etc/redevops/secrets-authority`), `init` and `rotate` create or change no local secrets file or shell block. Such a block exported older values that Compose preferred to the Vault-rendered `.env`. Other hosts behave as before.
 
 - Agent gateway: **one token per external agent** (`AGENT_GATEWAY_AGENTS_FILE`) with its own read grants, expiry, revocation and audit identity; only hashes are stored and an untrustworthy file authenticates nobody.
