@@ -56,9 +56,10 @@ def test_the_members_are_exactly_the_recorded_files():
     for rel, want in REC["files"].items():
         assert got[rel] == want                                     # packaging/ui-bundle-source.json agrees with the artifact
     html = _members()["index.html"].decode()
+    scripts = "".join(_members()[rel].decode() for rel in REC["files"] if rel.endswith(".js") and "/" + rel in html)
     for rel in REC["files"]:
         if rel != "index.html":
-            assert "/" + rel in html
+            assert "/" + rel in html or rel.rsplit("/", 1)[-1] in scripts            # a code-split chunk is loaded by the entry script
 
 
 def test_the_artifact_carries_no_image_at_all():

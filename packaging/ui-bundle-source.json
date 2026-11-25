@@ -3,11 +3,11 @@
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "84f17fceddb84d1af909a5919b5efbb2956b2b22",
  "base_commit_public": true,
- "source_commit": "e6032e8ea31ce9f0024c4b77de61722da670be29",
- "source_tree": "974c0c40eb15fbaae8abdb17154b726e8358b7bc",
+ "source_commit": "33c1a3e096cb7c5e36a204f1f18fb39b95f3ffdd",
+ "source_tree": "204c8d9e404db5e3fb50bc521ba68371efd0dd5a",
  "source_commit_published": true,
- "source_status": "public commit on the redevops-projects repository's own main branch, reachable today at https://github.com/redevops-io/redevops-projects/commit/e6032e8ea31ce9f0024c4b77de61722da670be29 (\"today: don't offer Snooze on live signals (the server can only refuse it)\", #26); descends from the public v0.2.0 release (base_commit) via PR #24 (shared routing, restore-last-place and connection states), PR #25 (agent audit findings) and #26.",
- "previous_source_commit": "2bbb98113cf44f0bb97cb3fc61930ae4ff6b555c",
+ "source_status": "public commit on the redevops-projects repository's own main branch, reachable today at https://github.com/redevops-io/redevops-projects/commit/33c1a3e096cb7c5e36a204f1f18fb39b95f3ffdd (\"today: don't offer Snooze on live signals (the server can only refuse it)\", #26); descends from the public v0.2.0 release (base_commit) via PR #24 (shared routing, restore-last-place and connection states), PR #25 (agent audit findings) and #26.",
+ "previous_source_commit": "e6032e8ea31ce9f0024c4b77de61722da670be29",
  "previous_bundle": "the entire previous local-source lineage (assets/index-76LJRJ18.js sha256 828bb55cbbdbc60df8ecad9fffc76ec3c0d2ba918c9b072d0d1d92b3a728649c, built from the now-unrecoverable local commit ea9e53e5, and its own ancestor chain back through 9a1788b1/5751e9e5/312a811a/2f24719e/ee958a01/2fdef7f5) is superseded; see packaging/projects_ui.lock.json's previous_pin for the full chain, kept as history.",
  "package_json_git_blob": "1fae6a7db7899b5ef1a45d4a5c5a2a7a960204f8",
  "package_json_sha256": "7f5d60f109331d32b1e9c684203a815e1b641c09d41d3c75f74d9667d75c8c98",
@@ -22,16 +22,17 @@
    "npm ci",
    "VITE_PROJECTS_API=/ npm run build -- --base=/"
   ],
-  "reproduced": "built once on 2026-11-24 from a clean checkout of the source commit in a throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.3, npm 11.19.1); the 2bbb9811 pin was reproduced three times with the same recipe"
+  "reproduced": "built once on 2026-11-25 from a clean `git archive` of the source commit in a throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.3, npm 11.19.1); index.html, the JavaScript and the CSS are byte-identical to the files of the published v0.3.2 release asset."
  },
  "files": {
-  "index.html": "c54b3c5c86aed3482748eb5a8cc076f2b0e844f943d3c12166996ed9f6420409",
-  "assets/index-C1cDSXvA.js": "f8c576104ace9cbd9e976e5c68fcd18ae8b52278d51ad7c2bdf9ea70d9d70a35",
-  "assets/index-CFlj1zr2.css": "99573e01c3a70cf21533ac6b4b92bffba121da659b413fbb1a96f294c06d149d"
+  "index.html": "54a45139e2fec56fcb421a797c7cc8ce9abd1801f45dd79c2135e877cdf84b50",
+  "assets/index-B9zZyR22.js": "13b63b2edc3cd23d1205c17bd9d44715dfc57c6603094d21fffa0043e53228d1",
+  "assets/index-DrTLtYG2.css": "938d5feef0c4edc25e27ebbd6657ac87db304ab0eb6746b85996e4ba23e57d5d",
+  "assets/mockDashboards-Lw4QGbeP.js": "6959df5eb1bdc38bbd3eb77e354093ab5c9e11ae514ad1298d96f21215245e08"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-e6032e8e.tgz",
-  "sha256": "af481612d94a5879d6a87abba29c1a9dda61911a47695110723dcef4bd93a7d1",
+  "path": "packaging/ui-artifacts/projects-ui-root-33c1a3e0.tgz",
+  "sha256": "9ead221b939bb51f4e2fe69162cf450f658b78b7107de95bf6734c347bee0c80",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",

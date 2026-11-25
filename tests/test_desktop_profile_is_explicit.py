@@ -145,3 +145,20 @@ def test_a_real_serve_reports_production_with_durable_authority(tmp_path):
             p.wait(timeout=20)
         except subprocess.TimeoutExpired:
             p.kill()
+
+
+def test_the_dashboards_and_the_intake_get_durable_per_user_locations_and_a_configured_one_is_kept(tmp_path):
+    env = {"HOME": str(tmp_path)}
+    desktop_profile.apply(env, home=str(tmp_path), platform="linux")
+    d = desktop_profile.state_dir(env, str(tmp_path), "linux")
+    assert env["AGENTIC_OS_DASHBOARDS_DIR"] == d + "/dashboards" and os.path.isdir(env["AGENTIC_OS_DASHBOARDS_DIR"])
+    assert env["AGENTIC_OS_CAPTURE_DB"] == d + "/capture.db"
+    mine = {"HOME": str(tmp_path), "AGENTIC_OS_DASHBOARDS_DIR": "/srv/dash", "AGENTIC_OS_CAPTURE_DB": "/srv/capture.db"}
+    desktop_profile.apply(mine, home=str(tmp_path), platform="linux")
+    assert mine["AGENTIC_OS_DASHBOARDS_DIR"] == "/srv/dash" and mine["AGENTIC_OS_CAPTURE_DB"] == "/srv/capture.db"
+
+
+def test_a_stated_development_choice_gets_no_dashboard_or_intake_location(tmp_path):
+    env = {"HOME": str(tmp_path), "AGENTIC_OS_PROFILE": "development"}
+    desktop_profile.apply(env, home=str(tmp_path), platform="linux")
+    assert "AGENTIC_OS_DASHBOARDS_DIR" not in env and "AGENTIC_OS_CAPTURE_DB" not in env

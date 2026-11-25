@@ -15,7 +15,7 @@ To regenerate the raw diffs: `diff -u <frozen script> packaging/signing/<new scr
 | `SIDECAR_EXE="redevops-sidecar"` | `sidecar_binary_name` (unchanged value) |
 | `SIDECAR_ID="io.redevops.agentic-apps.sidecar"` | `sidecar_signing_identifier` = `io.redevops.agentic-apps.r0prime.sidecar` |
 | bundle identifier not checked | `bundle_identifier` = `io.redevops.agentic-apps.r0prime`: checked in Info.plist, on the launcher and the bundle after signing |
-| `VOLNAME="Agentic Apps"`, `--volname`, `--output-name` options | volume = product name; output name = `Agentic Apps R0-prime_0.1.3_aarch64.dmg`; both options removed (no override, so no collision with a frozen name) |
+| `VOLNAME="Agentic Apps"`, `--volname`, `--output-name` options | volume = product name; output name = `Agentic Apps R0-prime_0.1.4_aarch64.dmg`; both options removed (no override, so no collision with a frozen name) |
 | header "Agentic Apps 0.1.0 ... v0.3.2 ... run 35353188692" | header from identity.json; the script refuses an identity that equals the frozen line |
 | Info.plist not checked | identifier, executable, `CFBundleShortVersionString`, `CFBundleVersion`, `LSMinimumSystemVersion` 11.0, `RedevopsReleaseLine` must equal identity.json |
 | a frozen dmg would be accepted | a dmg that holds `Agentic Apps.app` is refused ("not found in the input dmg") |

@@ -9,6 +9,11 @@ No curated changelog is kept. History:
 - Release procedure and known drift between `pyproject.toml`, tags and release objects: [docs/RELEASING.md](docs/RELEASING.md).
 - Downstream pins: `mission-sdk` `COMPATIBILITY.md`.
 
+## Desktop 0.1.4 (dashboards)
+
+- The Dashboards section ships in the desktop app: the kernel side was ported from v0.4.9 (#793) and the Projects UI is re-pinned to release v0.3.2. The packaged sidecar keeps its explicit production profile, so the desktop serves no sample data: an empty workspace is the honest first state, and a dashboard appears when its application is connected or a run is reported.
+- The desktop profile gives the dashboards' saved views and history, and the intake behind "Track in Today", durable per-user locations next to the authority stores.
+
 ## Planned
 
 The release notes for the permissions and authorization work are in [RELEASE_NOTES_security.md](RELEASE_NOTES_security.md) (what the release claims and does not claim, the exact configuration for a reachable deployment, the privacy portal exception, known limitations).
