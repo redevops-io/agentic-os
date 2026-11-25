@@ -20,7 +20,7 @@ const check = async (name, fn) => { const t = Date.now(); try { const d = await 
   catch (e) { results.push({ name, status: 'FAIL', detail: String(e && e.message || e).slice(0, 400), ms: Date.now() - t }); console.log('FAIL  ' + name + '  | ' + String(e && e.message || e).slice(0, 300)); } };
 const assert = (c, m) => { if (!c) throw new Error(m); };
 const unsupported = (name, why) => { results.push({ name, status: 'UNSUPPORTED', detail: why, ms: 0 }); console.log('UNSUPPORTED  ' + name + '  | ' + why); };
-let sample = true;
+let sample = null;                                    // true: sample workspace; false: no sample data; null: the workspace never rendered
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-ui-'));
 const port = 28000 + Math.floor(Math.random() * 900);
@@ -54,15 +54,18 @@ if (!posture && process.env.KNOWN_NO_PROFILE === '1') {
   assert(/profile=production; authority and replay stores are durable/.test(posture), 'no posture line, or not production: "' + posture + '" (builds before launcher 0.1.2 start with no explicit profile)'); return posture; });
 if (url) {
   await check('the launch link opens the workspace, and the one-time code does not stay in the address bar', async () => {
-    await p.goto(url, { waitUntil: 'networkidle' }); await p.waitForTimeout(800);
-    const t = await body(); assert(/need your decision|nothing needs you/i.test(t), 'the Today view did not render: ' + t.slice(0, 200));
+    await p.goto(url, { waitUntil: 'networkidle' });
+    // Wait for Today to settle, not for a fixed time: on a slow machine the view still read "Loading…" after 800 ms, the check failed, and
+    // the kind of build (sample data or none) was never determined, so the sample-only checks ran against a build without sample data.
+    let t = ''; for (let i = 0; i < 60; i++) { t = await body(); if (/need your decision|nothing needs you/i.test(t)) break; await p.waitForTimeout(500); }
+    assert(/need your decision|nothing needs you/i.test(t), 'the Today view did not render within 30 s: ' + t.slice(0, 200));
     sample = /sample data/i.test(t);
     assert(!p.url().includes('#lc='), 'the launch code is still in the URL'); return p.url().replace(origin, ''); });
   await check('the keyboard reaches the content: "Skip to content" is the first stop and moves focus into the main region', async () => {
     await p.keyboard.press('Tab');
     const first = await p.evaluate(() => (document.activeElement && (document.activeElement.innerText || document.activeElement.getAttribute('aria-label')) || '').trim());
     assert(/skip to (main )?content/i.test(first), 'the first tab stop is "' + first + '"'); await p.keyboard.press('Enter'); return first; });
-  if (sample) {
+  if (sample !== false) {
     await check('Today lists what needs a decision and says the data is a sample', async () => {
       const t = await body(); const n = Number((t.match(/(\d+) things? need your decision/i) || [])[1] || 0);
       assert(n >= 1, 'no count of items'); assert(/sample data/i.test(t), 'no sample-data notice'); return n + ' items; sample-data notice present'; });
