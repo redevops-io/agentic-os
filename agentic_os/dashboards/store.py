@@ -248,6 +248,27 @@ class DashboardStore:
         return {"run_id": run_id, "project": project, "suite": suite, "platform": platform, "results": len(rows),
                 "duplicate": replaced, "pruned_runs": pruned}
 
+    def withdraw_qa(self, project: str, suite: str, platform: str, run_id: str) -> int:
+        """Remove ONE reported run that was filed under the wrong project, suite or platform (the reporter then reports it
+        again where it belongs). Returns how many results went with it; 0 results and no run = nothing matched."""
+        key = (str(project), str(suite), str(platform), str(run_id))
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                had = self._db.execute("SELECT 1 FROM qa_runs WHERE project=? AND suite=? AND platform=? AND run_id=?", key).fetchone()
+                if had is None:
+                    self._db.execute("ROLLBACK")
+                    raise StoreError(404, "not_found", "no such reported run")
+                n = self._db.execute("DELETE FROM qa_results WHERE project=? AND suite=? AND platform=? AND run_id=?", key).rowcount
+                self._db.execute("DELETE FROM qa_runs WHERE project=? AND suite=? AND platform=? AND run_id=?", key)
+                self._db.execute("COMMIT")
+            except StoreError:
+                raise
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return int(n)
+
     def _prune_qa(self, now: float) -> int:
         """Retention: drop runs older than the window, EXCEPT the latest run of each (project, suite, platform) — the current
         state of a lane that has gone quiet stays visible (and counts as stale), it does not silently disappear."""

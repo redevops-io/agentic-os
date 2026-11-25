@@ -129,3 +129,19 @@ A drill-down returns actions. None executes anything by itself: *Ask Sidekick* a
 number; *Track in Today* adds a note with the record references to the intake; *Review in Today* opens the approval;
 *Escalate to a security case* and *Request a re-test* call the registered product's existing human-only routes;
 *Plan a fix as a Mission* hands the finding to Sidekick, which creates a Mission when a runtime is bound.
+
+
+## Releases in the QA dashboard
+
+A reported run may name the `release` it qualifies. The state of a suite is then the state of the release its newest run
+names: for every platform the latest run **of that release** counts. A platform whose last run was for an earlier release
+reads "not executed" for the current one, and its drill-down says which release it last ran for. The suite's rows carry
+the release in their label. A suite whose runs name no release works as before (the latest run of each platform).
+Consequence for reporters: report one product per suite. Two products with their own version lines in one suite (a bundle
+and a desktop app, say) would make each other's platforms read "not executed".
+
+## Withdrawing a misfiled run
+
+`DELETE /api/dashboards/qa/results?project=&suite=&platform=&run_id=` removes exactly one reported run (all four are
+required). The callers are the ones that may report: a service identity holding `dashboards.ingest_qa`, or the operator.
+It exists to correct a run filed under the wrong suite or platform; report it again where it belongs.
