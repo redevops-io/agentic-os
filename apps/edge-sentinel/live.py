@@ -122,6 +122,7 @@ def _rehydrate_manual(st: CaseStore) -> None:
             if ev.artifact_id not in case.evidence_refs:
                 case.evidence_refs = tuple(case.evidence_refs) + (ev.artifact_id,)
             case.status = CaseStatus.RESOLVED
+            case.closure = str(doc.get("resolved_at") or "")   # empty for a record written before the time was kept: not known, never invented
     except (history_store.StoreUnavailable, ValueError, KeyError):
         pass
 
@@ -238,11 +239,14 @@ def resolve_finding_case(case_id: str, evidence: dict, *, actor: str, via: str, 
             raise NotResolvable("the re-test must be a new run, not the run that produced the finding")
         if clean["outcome"] not in RETEST_PASSED:
             raise NotResolvable(f"the re-test ended {clean['outcome']}; a case is closed only on a re-test that passed")
-        raw = canonical_json({"case_id": case_id, "evidence": clean, "resolved_by": actor, "via": via})
+        from .evidence import _now
+        resolved_at = _now()                                  # part of the record, so the closing time survives a restart with the case
+        raw = canonical_json({"case_id": case_id, "evidence": clean, "resolved_by": actor, "via": via, "resolved_at": resolved_at})
         ev = st.put_evidence(EvidenceArtifact.of_raw("case_resolution", "redevops-qa", raw), raw)
-        before_refs, before_status = case.evidence_refs, case.status
+        before_refs, before_status, before_closure = case.evidence_refs, case.status, case.closure
         case.evidence_refs = tuple(case.evidence_refs) + (ev.artifact_id,)
         case.status = CaseStatus.RESOLVED
+        case.closure = resolved_at
         try:
             hs = history_store.get()
             with hs.transaction():
@@ -250,9 +254,9 @@ def resolve_finding_case(case_id: str, evidence: dict, *, actor: str, via: str, 
                 hs.append("case.resolved", case_id=case_id, actor_user=actor, via=via,
                           detail={"retest_run": clean["run_id"], "outcome": clean["outcome"], "evidence": ev.artifact_id})
         except history_store.StoreUnavailable as e:
-            case.evidence_refs, case.status = before_refs, before_status
+            case.evidence_refs, case.status, case.closure = before_refs, before_status, before_closure
             raise ExecutionError(f"resolution not recorded: the history store could not be written ({e})") from None
-        return {"case_id": case_id, "status": case.status.value, "evidence_id": ev.artifact_id, "retest_run": clean["run_id"]}
+        return {"case_id": case_id, "status": case.status.value, "evidence_id": ev.artifact_id, "retest_run": clean["run_id"], "resolved_at": resolved_at}
 
 
 def stage_manual(kind: str, ip: str, *, reason: str, duration: str, actor: str, via: str, st: CaseStore | None = None) -> dict:
@@ -316,6 +320,7 @@ def case_summaries(st: CaseStore | None = None) -> list[dict]:
             "status": c.status.value,
             "title": c.title,
             "created_at": c.created_at,
+            "resolved_at": c.closure or None,                 # when a person closed it on a verified re-test; None while open, or for a case closed before 0.6.7
             "counts": {
                 "evidence": len(c.evidence_refs),
                 "findings": len(c.finding_refs),

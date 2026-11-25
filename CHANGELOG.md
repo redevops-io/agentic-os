@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.7; no version set)
 
+- **Edge Sentinel: a resolved case says when it was closed.** `GET /api/v1/cases` and the case summary carry `resolved_at`, the time a person closed the case on a verified re-test (`null` while the case is open, and for a case closed before this change: the time was not kept and is not invented). The time is part of the resolution record, so it survives a restart. The resolution answer returns it too.
+
 ## v0.4.7 (a platform nobody ran is not coverage)
 
 - **QA dashboards: a suite that names its platforms is expected on every one of them.** A test that reported on any platform of such a suite is planned on all of them, so a platform with no run reads "not executed" and counts against coverage instead of not appearing. A test declared for specific platforms keeps them.

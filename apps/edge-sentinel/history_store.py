@@ -248,6 +248,8 @@ class HistoryStore:
                        for a in acts if a["state"] in ("AWAITING_APPROVAL", "APPROVED", "FAILED")), None)
         return {"case_id": r["case_id"], "case_type": r["case_type"], "severity": r["severity"], "status": r["status"], "title": r["title"],
                 "created_at": r["created_at"], "first_seen": r["first_seen"], "last_seen": r["last_seen"],
+                # when a person closed the case on a verified re-test; None while it is open, and for a case closed before the time was kept
+                "resolved_at": (c.get("closure") or None) if r["status"] == "RESOLVED" else None,
                 "counts": {"evidence": len(c.get("evidence_refs", [])), "findings": len(c.get("finding_refs", [])),
                            "actions": len(c.get("action_refs", [])), "decisions": len(c.get("decision_refs", []))},
                 "open_action": open_a}
