@@ -151,13 +151,6 @@ jobs:
           esac
           mkdir -p packaging/dist/sbom-release && cp packaging/dist/sbom/sbom.cdx.json "packaging/dist/sbom-release/$n.cdx.json"
           echo "name=$n" >> "$GITHUB_OUTPUT"
-      - name: Upload the SBOM for publication
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: ${{ steps.sbomname.outputs.name }}
-          path: packaging/dist/sbom-release/*.cdx.json
-          if-no-files-found: error
-
       - name: Upload installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
@@ -173,6 +166,13 @@ jobs:
             deploy/launcher/src-tauri/target/release/bundle/**/*.exe
             deploy/launcher/src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: warn
+
+      - name: Upload the SBOM for publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: ${{ steps.sbomname.outputs.name }}
+          path: packaging/dist/sbom-release/*.cdx.json
+          if-no-files-found: error
 
   acceptance-ubuntu:
     needs: bundle
