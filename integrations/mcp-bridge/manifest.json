@@ -1,0 +1,42 @@
+{
+  "manifest_version": "0.3",
+  "name": "rails-gateway-bridge",
+  "display_name": "rAIls Apps (Governed Agent Gateway)",
+  "version": "0.1.0",
+  "description": "Use the capabilities one rAIls deployment grants you, from Claude Desktop. Every call is checked and recorded by that deployment.",
+  "long_description": "A local MCP server that forwards each tool call to the Governed Agent Gateway of a rAIls deployment (cloud, on-premises or this machine). The tools you see are the capabilities that deployment grants your token. Permission, budget, approval and egress policy are applied by the deployment, and each call is written to its audit log; this extension holds no business data and adds no authority.",
+  "author": { "name": "ReDevOps.io LLC", "url": "https://redevops.io" },
+  "homepage": "https://redevops.app",
+  "documentation": "https://github.com/redevops-io/agentic-os/blob/main/integrations/mcp-bridge/README.md",
+  "license": "AGPL-3.0-or-later",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "RAILS_URL": "${user_config.rails_url}",
+        "RAILS_TOKEN": "${user_config.rails_token}"
+      }
+    }
+  },
+  "user_config": {
+    "rails_url": {
+      "type": "string",
+      "title": "Deployment address",
+      "description": "The address of your rAIls deployment, for example https://apps.example.com. Plain http is accepted for this machine only (http://127.0.0.1:8787).",
+      "required": true
+    },
+    "rails_token": {
+      "type": "string",
+      "title": "Agent token",
+      "description": "The agent token issued by that deployment. It is stored in the operating system's secure storage and sent only to the address above.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "tools": [],
+  "tools_generated": true,
+  "compatibility": { "runtimes": { "node": ">=18.0.0" } }
+}
