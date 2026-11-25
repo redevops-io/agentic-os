@@ -7,7 +7,7 @@ Starts the installed control plane natively (no Docker), then exercises it as a 
 feed loads, a note is captured and turns up, an approval-gated item waits and is approved, the process stops cleanly, and unknown commands start
 nothing. Every check is recorded with its duration; a check that cannot run on this platform is recorded as `unsupported`, never as passed.
 """
-import json, os, platform, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import json, os, platform, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
 
 side, out_path = sys.argv[1], sys.argv[2]
 home = tempfile.mkdtemp(prefix="aa-home-")
@@ -175,6 +175,38 @@ def t_dash_not_offered():
     assert all(src.get("remedy") for src in doc.get("sources", [])), "a source that is not connected does not say what would connect it"
     return f"{hidden[0]}: every source says not_connected with a remedy, and none of its {len(values)} metric(s) carries a number"
 check("dashboards: one whose application is not connected is not served as if it had data", t_dash_not_offered)
+def t_dash_journey():
+    """A journey with data, not only an empty installation: a test run is reported to the installed app through its own intake, and the QA
+    dashboard must then be offered, show that run's numbers, list the failed test behind the "failed" number, and show the tests as
+    unexecuted in a time range that ends before the run. Without this, every number on a fresh installation is absent and the drill-down and range checks have
+    nothing to run on (they were recorded as unsupported for 0.1.4)."""
+    if not state.get("dash"): return "UNSUPPORTED on this build: it has no dashboards"
+    at = time.time()
+    run = {"project": state["pid"], "suite": "acceptance-journey", "run_id": f"journey-{int(at)}", "platform": platform.system().lower(), "environment": "installed build",
+           "release": os.environ.get("DASH_CHECK_RELEASE", "unknown"), "origin": "native_check", "at": at,
+           "results": [{"test_id": "journey.pass", "status": "passed", "detail": "reported by the acceptance run"},
+                       {"test_id": "journey.fail", "status": "failed", "detail": "a deliberately failed row: the dashboard must show it"},
+                       {"test_id": "journey.unsupported", "status": "unsupported", "detail": "a row that could not run here"}]}
+    sa, _ = http("POST", "/api/dashboards/qa/results", run, anonymous=True); assert sa in (401, 403), f"a caller without the session reported a run ({sa})"
+    s, raw = http("POST", "/api/dashboards/qa/results", run)
+    if s in (404, 405, 501): return "UNSUPPORTED on this build: it does not accept reported test results"
+    assert s == 200, (s, raw[:200]); d = J(raw); assert d.get("results") == 3 and d.get("duplicate") is False, d
+    s, raw = http("POST", "/api/dashboards/qa/results", run); assert s == 200 and J(raw).get("duplicate") is True, "the same run reported twice was counted twice"
+    offered = [x["id"] for x in J(http("GET", "/api/dashboards")[1]).get("dashboards", [])]
+    assert "qa" in offered, f"a run was reported and the QA dashboard is still not offered: {offered}"
+    state["dash"] = offered
+    s, raw = http("GET", "/api/dashboards/qa"); assert s == 200, s; doc = J(raw)
+    m = {x["id"]: x for pnl in doc["panels"] for x in pnl.get("metrics", [])}
+    got = {k: m[k]["value"] for k in ("planned", "failed", "unsupported")}
+    assert got == {"planned": 3, "failed": 1, "unsupported": 1}, f"the dashboard shows {got} for a run of 3 with 1 failed and 1 unsupported"
+    s, raw = http("GET", "/api/dashboards/qa/drill?key=" + urllib.parse.quote(m["failed"]["drill"])); assert s == 200, (s, raw[:160])
+    recs = json.dumps(J(raw)); assert "journey.fail" in recs and "journey.pass" not in recs, "the records behind 'failed' are not exactly the failed test"
+    s, raw = http("GET", f"/api/dashboards/qa?until={at - 3600}&since={at - 7200}"); assert s == 200, s
+    before = {x["id"]: x.get("value") for pnl in J(raw)["panels"] for x in pnl.get("metrics", [])}
+    # the three tests stay planned (they are in the inventory); what a range before the run must not show is their result
+    assert before.get("failed") == 0 and before.get("unexecuted") == 3, f"a range that ends an hour before the run still shows its result: {before}"
+    return "a reported run of 3 appears (planned 3, failed 1, unsupported 1); the failed test is the record behind 'failed'; in a range before the run the 3 are unexecuted; a repeat is not counted twice"
+check("dashboards: a reported test run appears with its numbers, its records and its time range", t_dash_journey)
 def t_dash_independent():
     """The dashboards session's own API-level checks (dashboards_check.py, standard library only, read-only), run against this installed
     build with this run's local session. Its JSON is kept next to the native result; checks named in DASH_KNOWN are known differences of
