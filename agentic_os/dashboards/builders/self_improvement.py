@@ -27,7 +27,7 @@ def self_improvement(b: Build) -> None:
     broke = [c for c in evaluated if c.get("regressed")]
     predicted = sum(int(c.get("predicted") or 0) for c in evaluated)
     fixed = sum(int(c.get("fixed") or 0) for c in evaluated)
-    b.drill("sim:runs", "Optimizer runs", runs, columns=("condition", "rounds", "memory_problems", "memory_attempts", "carried_from", "policy"))
+    b.drill("sim:runs", "Optimizer runs", runs, columns=("condition", "rounds", "memory_problems", "memory_attempts", "carried_from", "policy", "review"))
     b.drill("sim:evaluated", "Candidate edits that were evaluated", evaluated, columns=COLS)
     b.drill("sim:accepted", "Accepted edits", accepted, columns=COLS)
     b.drill("sim:rejected", "Edits not adopted", rejected, columns=COLS + ("refused",),
@@ -53,13 +53,27 @@ def self_improvement(b: Build) -> None:
                  tone="warn" if broke else "ok"),
         b.metric("rollbacks", "Rollbacks", needs=S, value=len(backs), drill="sim:rollbacks"),
     ]))
+    # What whoever read each run says about it, word for word, before any figure that sets runs side by side
+    reviews = b.group(runs, lambda r: (str(r.get("notes_scope")), str(r.get("review")), str(r.get("caveat"))))
+    d.panels.append(panel("run_notes", "Run notes", "table", sources=S, span=2,
+                          columns=[col("runs", "Runs"), col("review", "Review"), col("caveat", "What the reviewer wrote")],
+                          rows=[row({"runs": ", ".join(sorted(str(r.get("run")) for r in group)), "review": review,
+                                     "caveat": caveat or ("No one has written notes for these runs, so they are not compared." if review == "not yet reviewed"
+                                                          else "The notes file could not be shown in full, so these runs are not compared." if review == "notes unreadable" else "")},
+                                    tone="ok" if review == "comparable" else "warn")
+                                for (_scope, review, caveat), group in sorted(reviews.items())]))
+    # A chart by run IS a comparison of runs: drawn only for runs a reviewer marked comparable, and only among those under
+    # the same notes file - "comparable" in one experiment says nothing about another's runs.
     per_run = b.group(evaluated, lambda c: c.get("run"))
-    if per_run:
-        keys = sorted(per_run)
-        d.panels.append(panel("predicted_observed", "Predicted and observed, by run", "stacked", sources=S, span=2, x=keys,
-                              note="Of the tasks each run's evaluated edits predicted to fix: those that then passed, and those that did not.",
-                              series=[{"id": sid, "label": label, "tone": tone, "values": [sum(int(c.get(sid) or 0) for c in per_run[k]) for k in keys]}
-                                      for sid, label, tone in (("fixed", "Passed as predicted", "ok"), ("missed", "Predicted, did not pass", "warn"))]))
+    groups = sorted({str(r.get("notes_scope")) for r in runs if r.get("review") == "comparable"})
+    for n, scope in enumerate(groups):
+        keys = sorted(str(r.get("run")) for r in runs if r.get("review") == "comparable" and str(r.get("notes_scope")) == scope and r.get("run") in per_run)
+        if keys:
+            d.panels.append(panel("predicted_observed" if n == 0 else f"predicted_observed_{n + 1}",
+                                  "Predicted and observed, by run" + (f" ({scope})" if len(groups) > 1 else ""), "stacked", sources=S, span=2, x=keys,
+                                  note="Runs a reviewer marked comparable. Of the tasks each run's evaluated edits predicted to fix: those that then passed, and those that did not.",
+                                  series=[{"id": sid, "label": label, "tone": tone, "values": [sum(int(c.get(sid) or 0) for c in per_run[k]) for k in keys]}
+                                          for sid, label, tone in (("fixed", "Passed as predicted", "ok"), ("missed", "Predicted, did not pass", "warn"))]))
 
     def candidate_rows(items):
         return [row({"run": c.get("run"), "round": c.get("round"), "cause": c.get("root_cause"), "change": c.title, "decision": c.status,

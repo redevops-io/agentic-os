@@ -44,6 +44,18 @@ def service(directory=None, *, enabled=True, access=None):
     return DashboardService(Provider(), config=cfg, store=DashboardStore(""))
 
 
+def notes(directory, *, comparable=True, caveat="synthetic caveat", schema="agent-harness.sim-run-notes/1"):
+    (directory / "RUN_NOTES.json").write_text(json.dumps({"schema": schema, "comparable": comparable, "caveat": caveat, "reasons": []}))
+
+
+def charts(d):
+    return [p for p in d.panels if p.id.startswith("predicted_observed")]
+
+
+def noted(d):
+    return [r["cells"] for p in d.panels if p.id == "run_notes" for r in p.rows]
+
+
 def build(svc, principal="local-owner"):
     return svc.build("self_improvement", parse_filters({}, now=svc.clock()), svc.access(principal))
 
@@ -78,6 +90,7 @@ def test_every_figure_is_the_count_of_the_records_it_drills_into(runs):
 
 
 def test_causes_transfer_rollback_and_predictions_are_the_recorded_ones(runs):
+    notes(runs)
     svc = service(runs)
     d = build(svc)
     panels = {p.id: p for p in d.panels}
@@ -169,3 +182,57 @@ def test_a_link_out_of_the_runs_directory_is_not_followed(runs, tmp_path):
     d = build(svc)
     assert "OUTSIDE-THE-DIRECTORY" not in json.dumps(d.to_dict())
     assert next(s for s in d.sources if s.id == "sim_runs").state == "stale"
+
+
+# ── a chart by run compares runs: only a reviewer can allow that ─────────────────────────────────────────────────
+def test_runs_nobody_has_reviewed_are_not_compared(runs):
+    d = build(service(runs))
+    assert charts(d) == []
+    assert noted(d) == [{"runs": "source, target", "review": "not yet reviewed", "caveat": "No one has written notes for these runs, so they are not compared."}]
+
+
+def test_a_run_marked_not_comparable_shows_the_reviewers_words_exactly_and_no_comparison(runs):
+    words = "A source optimization run exists (model, task, 4 rounds). It accepted no edit, so its memory is empty. " + "The rest of the sentence. " * 12
+    notes(runs, comparable=False, caveat=words)
+    d = build(service(runs))
+    assert charts(d) == [] and len(words) > 300
+    (row,) = noted(d)
+    assert row["caveat"] == words.strip() and row["review"] == "not comparable"
+    assert metrics(d)["evaluated"].value == 4                              # the records themselves are still shown
+
+
+@pytest.mark.parametrize("broken", [dict(comparable="yes"), dict(schema="something/1"), dict(caveat="x" * 2001), dict(caveat=None), "not json"])
+def test_notes_that_cannot_be_shown_in_full_approve_nothing(runs, broken):
+    if broken == "not json":
+        (runs / "RUN_NOTES.json").write_text("{nope")
+    else:
+        notes(runs, **broken)
+    d = build(service(runs))
+    assert charts(d) == [] and [r["review"] for r in noted(d)] == ["notes unreadable"]
+
+
+def test_comparable_in_one_experiment_never_sets_its_runs_beside_another(runs):
+    for name in ("first", "second"):
+        (runs / name).mkdir()
+        for run in ("source", "target"):
+            shutil.copytree(runs / run, runs / name / run)
+        notes(runs / name, caveat=f"caveat of {name}")
+    shutil.rmtree(runs / "source")
+    shutil.rmtree(runs / "target")
+    d = build(service(runs))
+    assert [c.x for c in charts(d)] == [["first/source", "first/target"], ["second/source", "second/target"]]
+    assert sorted(r["caveat"] for r in noted(d)) == ["caveat of first", "caveat of second"]
+
+
+def test_the_nearest_notes_win_and_a_notes_link_out_of_the_directory_is_not_followed(runs, tmp_path):
+    notes(runs, comparable=True)
+    notes(runs / "target", comparable=False, caveat="only the target")
+    d = build(service(runs))
+    assert [c.x for c in charts(d)] == [["source"]]
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    notes(outside, comparable=True, caveat="FROM-OUTSIDE")
+    (runs / "target" / "RUN_NOTES.json").unlink()
+    (runs / "target" / "RUN_NOTES.json").symlink_to(outside / "RUN_NOTES.json")
+    d = build(service(runs))
+    assert "FROM-OUTSIDE" not in json.dumps(d.to_dict()) and [c.x for c in charts(d)] == [["source"]]

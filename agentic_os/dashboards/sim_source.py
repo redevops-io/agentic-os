@@ -19,6 +19,11 @@ from .contracts import Record
 
 RUN_SCHEMA = "agent-harness.sim-run/1"
 MEMORY_SCHEMA = "agent-harness.sim/1"
+NOTES_SCHEMA = "agent-harness.sim-run-notes/1"
+NOTES_FILE = "RUN_NOTES.json"
+MAX_CAVEAT = 2000
+#: review states. Only COMPARABLE lets runs be set side by side, and only with the runs under the same notes file.
+COMPARABLE, NOT_COMPARABLE, NOT_REVIEWED, NOTES_UNREADABLE = "comparable", "not comparable", "not yet reviewed", "notes unreadable"
 MAX_RUNS = 200
 MAX_DEPTH = 3
 MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -60,6 +65,27 @@ def run_directories(base: Path) -> Tuple[List[Path], bool]:
         if len(found) > MAX_RUNS:
             return found[:MAX_RUNS], True
     return found, False
+
+
+def review_of(path: Path, base: Path) -> Dict[str, str]:
+    """What whoever read the run wrote about it: the nearest ``RUN_NOTES.json`` at the run's directory or above it, up to
+    the runs directory. No file means nobody has reviewed the run, which is not the same as comparable. The caveat is kept
+    word for word; a file that cannot be understood, or whose caveat is too long to show whole, approves nothing."""
+    here = path
+    while True:
+        if (here / NOTES_FILE).exists() or (here / NOTES_FILE).is_symlink():
+            scope = here.relative_to(base).as_posix() if here != base else "."
+            try:
+                doc = _load(here / NOTES_FILE, base)
+                caveat = doc["caveat"]
+                if doc.get("schema") != NOTES_SCHEMA or not isinstance(doc.get("comparable"), bool) or not isinstance(caveat, str) or len(caveat) > MAX_CAVEAT:
+                    raise UnreadableRun("not a run-notes file this page can show in full")
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                return {"review": NOTES_UNREADABLE, "caveat": "", "notes_scope": scope}
+            return {"review": COMPARABLE if doc["comparable"] else NOT_COMPARABLE, "caveat": caveat.strip(), "notes_scope": scope}
+        if here == base or here == here.parent:
+            return {"review": NOT_REVIEWED, "caveat": "", "notes_scope": ""}
+        here = here.parent
 
 
 def _ids(v: Any) -> List[str]:
@@ -136,5 +162,5 @@ def read_run(path: Path, base: Path, *, project: str) -> List[Record]:
                                   "rollbacks": sum(p.get("kind") == "rollback" for p in promotions),
                                   "records_rejected": "yes" if state.get("record_rejected") else "no",
                                   "carried_from": _text((carried or {}).get("arm"), 80), "carried_domain": _text((carried or {}).get("domain"), 80),
-                                  **models}))
+                                  **review_of(path, base), **models}))
     return records
