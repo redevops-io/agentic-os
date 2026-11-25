@@ -859,3 +859,24 @@ def test_a_dashboard_is_built_once_while_nothing_changed_and_again_when_somethin
         assert len(built) == m + 1                                                        # exactly one rebuild, behind
     finally:
         object.__setattr__(SV.BY_ID["qa"], "builder", real)
+
+
+def test_the_source_cache_works_where_threads_cannot_be_started(monkeypatch):
+    """WebAssembly Python has no threads: the projection kernel must read one source after the other there, not fail."""
+    import threading
+    import time as _time
+
+    from agentic_os.dashboards import sources as S
+
+    def no_threads(self):
+        raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(threading.Thread, "start", no_threads)
+    calls = []
+    for sid in ("missions", "attention"):
+        monkeypatch.setitem(S.COLLECTORS, sid, lambda ctx, sid=sid: (calls.append(sid), S.SourceResult(S._status(sid, at=1.0, n=len(calls))))[1])
+    cache = S.SourceCache(type("Ctx", (), {"config": type("Cfg", (), {"sources": {}})()})(), ttl=0.01, stale_ok=30.0)
+    cache.warm(["missions", "attention"])
+    assert sorted(calls) == ["attention", "missions"]                       # both read, sequentially
+    _time.sleep(0.03)
+    n = len(calls)
+    assert cache.get("missions").status.state == "ok" and len(calls) == n + 1    # the "background" refresh ran in the caller's time
