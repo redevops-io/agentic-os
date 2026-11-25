@@ -1,7 +1,8 @@
 """QA, test coverage and release readiness — across projects.
 
 The unit is a CELL: one test of one suite on one platform of one project. The PLANNED inventory is every cell the
-catalog declares plus every cell that reported a result inside the inventory window; a test that once ran is expected
+catalog declares plus every cell that reported a result inside the inventory window, and, for a suite whose catalog entry
+names its platforms, every such test on every named platform; a test that once ran is expected
 to run again. For each (project, suite, platform) the LATEST run inside the selected range decides each cell:
 
     passed | failed          the run produced a verdict for the test
@@ -71,6 +72,16 @@ class QaModel:
                     self.planned.setdefault(cell, {})["declared"] = True
                     if t.requirements:
                         req_of.setdefault(cell, set()).update(t.requirements)
+            # A suite that names its platforms is expected on every one of them. A test that reported on any of them is therefore
+            # planned on all of them: a platform nobody ran reads "not executed" instead of silently not existing.
+            if s.platforms:
+                pinned = {t.id for t in s.tests if t.platforms}                 # a test declared for specific platforms keeps them
+                seen = {c[3] for c in self.planned if c[0] == s.project and c[1] == s.id} - pinned
+                for tid in seen:
+                    for p in s.platforms:
+                        if b.f.platform and p != b.f.platform:
+                            continue
+                        self.planned.setdefault((s.project, s.id, p, tid), {"declared": False})
         for h in self.history.values():
             h.sort(key=lambda r: r.at)
         # the latest run in range per (project, suite, platform)
