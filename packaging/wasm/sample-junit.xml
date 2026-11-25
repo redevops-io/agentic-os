@@ -1,0 +1,8 @@
+<testsuite name="sample" tests="6">
+  <testcase classname="checkout" name="adds an item" time="0.12"/>
+  <testcase classname="checkout" name="applies a discount once" time="0.20"><failure message="expected 90, got 80"/></testcase>
+  <testcase classname="checkout" name="pays by card" time="0.31"/>
+  <testcase classname="checkout" name="pays by wallet"><skipped message="not supported on this platform"/></testcase>
+  <testcase classname="checkout" name="sends a receipt"><skipped message="the mail sandbox was down"/></testcase>
+  <testcase classname="checkout" name="refunds an order" time="0.44"/>
+</testsuite>
