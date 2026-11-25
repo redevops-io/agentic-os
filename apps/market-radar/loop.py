@@ -290,10 +290,15 @@ def recommend(inp: dict) -> dict:
         items.insert(0, {"id": "REC-WATCH", "title": f"{changed} watched page(s) changed: re-read every claim that quotes them", "severity": "high",
                          "why": "a statement about another product is only as current as the page it quotes", "pages": [], "evidence_refs": ["market_brief"], "checks": []})
     items = items[:limit]
+    # An item with checks asks for a change to the site, which somebody has to make and which the loop then verifies: that is what a person
+    # approves. An item without checks is information (a watched page changed: re-read what quotes it). A list of only such items proposes
+    # nothing consequential, and the read-only research template ends with it.
+    kind = "changes" if any(it.get("checks") for it in items) else "read_only"
     # `plan_digest` at the top level is what the cockpit shows next to the approval and sends back with it (mission/api.py, _approval_binding).
     return {"status": "done", "action": "recommend", "plan_digest": plan_digest(items),
-            "recommendations": {"site": audit.get("site"), "items": items, "digest": plan_digest(items), "context": context},
-            "summary": f"{len(items)} recommendation(s) for {audit.get('site')}; digest {plan_digest(items)[:12]}"}
+            "recommendations": {"site": audit.get("site"), "items": items, "digest": plan_digest(items), "context": context, "plan_kind": kind,
+                                "changes": sum(1 for it in items if it.get("checks")), "information": sum(1 for it in items if not it.get("checks"))},
+            "summary": f"{len(items)} recommendation(s) for {audit.get('site')} ({'none proposes a change' if kind == 'read_only' else 'changes proposed: a person decides in the loop template'}); digest {plan_digest(items)[:12]}"}
 
 
 def approve_plan(inp: dict) -> dict:

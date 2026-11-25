@@ -153,3 +153,13 @@ https://example.com"):
 
 The audit fetches public pages of the one site named, follows no redirect, and writes nothing. It checks what can be checked from the
 pages themselves; it does not know search volume, rankings or conversion.
+
+### Research without waiting for a person
+
+The mission template `market_intelligence_research` runs the research half alone: `radar.brief`, `radar.site_audit`, `growth.analyze`,
+`radar.recommend`. Every step only reads (public pages, your analytics), none is consequential, so the template has no approval step
+and the mission finishes by itself. It decides nothing. The list it ends with says what it is: `recommendations.plan_kind` is `read_only`
+when no item asks for a change to the site (for example "three watched pages changed: re-read what quotes them") and `changes` when at
+least one does. A list that proposes changes goes through `market_intelligence_loop`, where a person approves it by its digest before
+anything is verified against it. In the production profile the mission still runs only inside the authority the deployment recorded
+for it: an envelope that grants the read capabilities and forbids the rest.
