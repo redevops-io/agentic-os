@@ -248,6 +248,7 @@ def test_an_mcp_client_reaches_the_running_app_through_the_shipped_bridge_with_t
     r = subprocess.run([NODE, *cfg["args"]], input="".join(json.dumps(m) + "\n" for m in msgs), capture_output=True, text=True, timeout=60,
                        env={"PATH": os.environ.get("PATH", ""), **cfg["env"]})
     replies = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
+    assert "result" in replies[1], (replies, r.stderr[-400:])                           # on failure, the bridge's own words
     names = sorted(t["name"] for t in replies[1]["result"]["tools"])
     assert names and all(n.startswith(("projects_", "missions_")) for n in names), names                         # its grants, nothing more
     assert replies[2]["result"]["isError"] is False and json.loads(replies[2]["result"]["content"][0]["text"])["status"] == "ok"

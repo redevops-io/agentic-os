@@ -191,11 +191,21 @@ def _alive(pid: int) -> bool:
         return False
     if os.name == "nt":
         import ctypes
-        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)             # PROCESS_QUERY_LIMITED_INFORMATION
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        k32.OpenProcess.restype = wintypes.HANDLE
+        handle = k32.OpenProcess(0x1000, False, pid)                                # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        try:
+            # OpenProcess succeeds for a process that has EXITED as long as anyone still holds a handle to it (its parent, for one):
+            # only an exit code of STILL_ACTIVE (259) means it is running.
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259
+        finally:
+            k32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
