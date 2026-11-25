@@ -168,6 +168,10 @@ class Build:
         self.d.facets = {k: sorted(v) for k, v in self._facets.items() if v}
         if not self.d.panels and not self.d.empty:
             self.d.empty = "There is nothing to show for these filters."
+        for p in self.d.panels:
+            # a panel with nothing to draw says so in words: an empty frame reads as "not loaded" or as zero
+            if not (p.metrics or p.series or p.items or p.rows) and not p.empty:
+                p.empty = "Nothing to show here for this range and these filters."
         return self.d
 
 
