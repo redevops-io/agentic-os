@@ -65,11 +65,28 @@ def _is_preflight(scope) -> bool:
     return scope.get("method") == "OPTIONS" and any(k.lower() == b"access-control-request-method" for k, _v in scope.get("headers", []))
 
 
+AGENT_PREFIX = "/api/agent-gateway/"
+
+
+def _agent_may_pass(rel: str, auth: str, agent_check) -> bool:
+    """An external agent's OWN credential opens the agent gateway and nothing else: the path is under the gateway (with no
+    traversal in it), the header is a bearer, and the per-agent token store accepts it. The gateway then authenticates and
+    authorizes it again for what it asks."""
+    if agent_check is None or not rel.startswith(AGENT_PREFIX) or ".." in rel.split("/"):
+        return False
+    from agentic_os.mission.control_auth import bearer_of  # noqa: PLC0415
+    try:
+        token = bearer_of(auth)
+        return bool(token) and bool(agent_check(token))
+    except Exception:  # noqa: BLE001  (a store that cannot answer admits nobody)
+        return False
+
+
 class OperatorGateMiddleware:
     """Pure ASGI, outermost: a refused request reaches no route, no static file and no other middleware."""
 
-    def __init__(self, app) -> None:
-        self.app = app
+    def __init__(self, app, agent_check=None) -> None:
+        self.app, self.agent_check = app, agent_check
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
@@ -88,6 +105,8 @@ class OperatorGateMiddleware:
             return await self.app(scope, receive, send)
         vals = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
         auth = vals[0].decode("latin-1") if len(vals) == 1 else ""          # a repeated header is refused, not guessed at
+        if scope["type"] == "http" and _agent_may_pass(rel, auth, self.agent_check):
+            return await self.app(scope, receive, send)
         if not _configured():
             return await self._refuse(scope, send, 503, "sign-in is required here but no credential is configured on this deployment", False, origin)
         if not _valid(auth):
