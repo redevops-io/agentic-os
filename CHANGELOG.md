@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.14; no version set)
 
+- **Pins: bundle 0.1.12.** Built from this tree (kernel 0.4.14 or later): the UI's hashed assets are `private` when the sign-in gate is on, so a CDN in front of a gated Projects no longer serves them to a caller who has not signed in; dashboards serve a recent read while they rebuild.
+
 ## v0.4.14 (nobody waits for a dashboard rebuild; the installer ships Projects; WebAssembly Python)
 
 - A dashboard is no longer rebuilt in front of a viewer because a source was re-read behind the page. With a large QA history one request in every ~20 seconds took about two seconds (measured through a CDN on the public demo); the previous build is now served for up to 120 seconds while one background build replaces it. A write (reported results) or a forced refresh still rebuilds at once.
