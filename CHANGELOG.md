@@ -15,7 +15,11 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.10; no version set)
+## Unreleased (after v0.4.11; no version set)
+
+## v0.4.11 (the first page load after a start does not fail)
+
+- The durable capture store and the per-tenant Today ledger are created once, under a lock, and the store waits for a busy file. Two requests arriving together on a fresh start each opened the SQLite file and collided on the journal-mode change ("database is locked"): the first page load answered 500 on some installs. Found by the desktop candidate acceptance on two of seven installer legs.
 
 ## v0.4.10 (a whole large test run is one report; a cut read says so)
 
