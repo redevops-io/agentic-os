@@ -150,8 +150,22 @@ class DashboardService:
                 shown.append({"id": df.id, "title": df.title, "priority": df.priority, "group": df.group, "about": df.about,
                               "sources": [{"id": sid, "label": SOURCE_META[sid][0], "state": st} for sid, st in states.items() if st != NOT_CONNECTED]})
             elif any(st == NOT_CONNECTED for st in states.values()) and UNAUTHORIZED not in states.values():
-                hidden.append({"id": df.id, "title": df.title, "priority": df.priority,
-                               "connect": sorted({SOURCE_META[sid][0] for sid in df.needs_any})})
+                # Not offered: say why, name every application it could be built on, and how each is enabled. A title alone
+                # ("3 more dashboards appear when their applications are connected") left a person with nothing to act on.
+                entry = {"id": df.id, "title": df.title, "priority": df.priority, "about": df.about,
+                         "connect": sorted({SOURCE_META[sid][0] for sid in df.needs_any})}
+                # How to enable a source (and what its connection reports) is said only to a caller who may read that source:
+                # for anyone else the entry stays what it was, a title and the applications it is built on.
+                needs = []
+                for sid in df.needs_any:
+                    if acc.source(sid):
+                        st = self.cache.get(sid).status
+                        needs.append({"id": sid, "label": SOURCE_META[sid][0], "state": st.state, "detail": st.detail, "remedy": st.remedy})
+                if needs:
+                    entry["why"] = ("The application this dashboard reads is not connected on this deployment." if len(df.needs_any) == 1 else
+                                    "None of the applications this dashboard reads is connected on this deployment; connecting any one of them makes it appear.")
+                    entry["needs"] = needs
+                hidden.append(entry)
         projects = [p for p in self.projects() if acc.project(str(p["id"]))]
         return {"dashboards": shown, "not_connected": hidden, "projects": projects,
                 "access": {"principal": acc.principal, "scoped": acc.scoped, "basis": acc.basis},
