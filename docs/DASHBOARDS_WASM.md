@@ -52,12 +52,17 @@ applications whose credentials are server-side secrets and whose APIs do not adm
 a page would hand them to anyone who opens it, so in B they stay unavailable unless a local service or relay holds the
 credentials — which is arrangement A.
 
-## What shipping it takes
+## What is shipped
 
-* A: a build of the UI with `VITE_PROJECTS_API`, a sign-in step that stores a bearer token, and the origin in
-  `PROJECTS_CORS_ORIGINS`. No kernel change.
-* B: an adapter in the page that answers the UI's `/api/dashboards/*` calls from the in-browser service (the UI and the
-  kernel exist; the adapter does not), and persistence for the store (the probe uses an in-memory database; a browser
-  needs OPFS or IndexedDB behind sqlite). Not built.
+* `agentic_os/dashboards/portable.py`: the dashboards' routes as one function (`PortableDashboards.handle(method, path, query,
+  body)`), for a host with no web framework. `GET /api/dashboards/_portable` lists what is available and, for each of the
+  nine application dashboards, what it needs and why it is not available in a page.
+* `packaging/wasm/build_kernel_zip.py`: the reproducible kernel archive (about 90 KB, 20 modules) a page loads into Pyodide.
+  It is a release asset (`dashboards-kernel.zip`) from v0.4.15.
+* `packaging/wasm/dashboards_probe.mjs`: runs that archive in Pyodide and checks the rules.
+* The page itself (the Projects dashboards UI with a remote mode and a standalone mode) is built in
+  `redevops-io/redevops-projects` (`npm run build:portable`) and published as the release asset
+  `projects-dashboards-portable.tgz`.
 
-Neither is in a published WASM artifact yet, so no public page should say dashboards are available there.
+In the page, a remote deployment is reached with a bearer token the person types; it is kept in the tab's session storage
+and sent only to the deployment whose address they entered. Standalone results are kept in the browser (IndexedDB).
