@@ -30,7 +30,7 @@ permissions:
 
 env:
   BUILD_COMMIT: d64d7b2ac95137e63bcd10474e1b822080b39f7b
-  PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.3"
+  PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.4"
 
 jobs:
   guard:

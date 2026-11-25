@@ -23,6 +23,8 @@ from .mission.profile import ENV_PACKAGED, ENV_PROFILE, PRODUCTION
 
 ENV_AUTHORITY_DB = "AGENTIC_OS_AUTHORITY_DB"
 ENV_REPLAY_DB = "AGENTIC_OS_REPLAY_DB"
+ENV_DASHBOARDS_DIR = "AGENTIC_OS_DASHBOARDS_DIR"
+ENV_CAPTURE_DB = "AGENTIC_OS_CAPTURE_DB"
 STATE_SUBDIR = "authority"
 _TRUE = ("1", "true", "yes", "on")
 
@@ -61,6 +63,16 @@ def apply(env: Optional[MutableMapping[str, str]] = None, home: Optional[str] = 
                 env[ENV_AUTHORITY_DB] = d + sep + "authority.db"
             if ENV_REPLAY_DB in missing:
                 env[ENV_REPLAY_DB] = d + sep + "replay.db"
+        # The dashboards' saved views and history, and the durable intake behind "Track in Today": the same per-user directory. Without these
+        # the dashboards keep both in memory and say so, and the intake answers 501; a desktop user would lose both at every restart.
+        dsep = "\\" if (sys.platform if platform is None else platform).startswith("win") else "/"
+        if not (env.get(ENV_DASHBOARDS_DIR) or "").strip() or not (env.get(ENV_CAPTURE_DB) or "").strip():
+            os.makedirs(d, mode=0o700, exist_ok=True)
+        if not (env.get(ENV_DASHBOARDS_DIR) or "").strip():
+            env[ENV_DASHBOARDS_DIR] = d + dsep + "dashboards"
+            os.makedirs(env[ENV_DASHBOARDS_DIR], mode=0o700, exist_ok=True)
+        if not (env.get(ENV_CAPTURE_DB) or "").strip():
+            env[ENV_CAPTURE_DB] = d + dsep + "capture.db"
     return {"profile": effective, "chosen_here": chosen_here,
             "authority_db": (env.get(ENV_AUTHORITY_DB) or ""), "replay_db": (env.get(ENV_REPLAY_DB) or "")}
 

@@ -31,9 +31,11 @@ def test_the_recorded_hashes_are_the_vendored_files_and_no_other_build_file_is_p
     built = {str(p.relative_to(UI)).replace("\\", "/") for p in UI.rglob("*") if p.is_file() and p.suffix in (".js", ".css", ".html")}
     assert built == set(REC["files"]), built ^ set(REC["files"])           # no stale bundle next to the recorded one
     html = (UI / "index.html").read_text(encoding="utf-8")
+    scripts = "".join((UI / rel).read_text(encoding="utf-8") for rel in REC["files"] if rel.endswith(".js") and "/" + rel in html)
     for rel in REC["files"]:
         if rel != "index.html":
-            assert "/" + rel in html, rel                                    # index.html loads exactly the recorded files
+            # loaded by index.html, or (a code-split chunk) by a script index.html loads: nothing recorded is left unreferenced
+            assert "/" + rel in html or rel.rsplit("/", 1)[-1] in scripts, rel
 
 
 def test_the_record_says_the_source_commit_is_published():
