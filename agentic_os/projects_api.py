@@ -16,6 +16,8 @@ use, and are they connected?" reflects the real Integration Plane when it's pres
 """
 from __future__ import annotations
 
+import re
+
 import html as _html
 
 from dataclasses import dataclass, field
@@ -1632,8 +1634,44 @@ class LiveProjectionProvider(RegisteredProducersProvider):
     def workflows(self, _pid: str) -> List[dict]:
         return []
 
+    #: A host check that has not reported for this long is itself a finding: silence must not read as health.
+    HOST_STATUS_MAX_AGE_S = 1800.0
+
+    def _host_status(self) -> List[dict]:
+        """What the deployment's own host checks last reported (``PROJECTS_STATUS_DIR``: one small JSON file per check, written
+        by the operator's timers, e.g. the Vault seal check). Read-only, bounded, and never trusted for more than display:
+        ``{"name", "state": ok|warn|bad, "detail", "observed_at": <epoch>, "remedy"?}``. A file that is unreadable, or whose
+        check has gone quiet, is reported as such."""
+        import json as _json
+        import os as _os
+        import time as _time
+        d = _os.environ.get("PROJECTS_STATUS_DIR", "").strip()
+        if not d or not _os.path.isdir(d):
+            return []
+        out, now = [], _time.time()
+        for fn in sorted(_os.listdir(d))[:50]:
+            if not fn.endswith(".json"):
+                continue
+            name = fn[:-5]
+            try:
+                with open(_os.path.join(d, fn), "rb") as fh:
+                    doc = _json.loads(fh.read(8192))
+                state = doc.get("state") if doc.get("state") in ("ok", "warn", "bad") else "bad"
+                at = float(doc.get("observed_at") or 0)
+                row = {"id": name, "name": str(doc.get("name") or name)[:80], "state": state, "detail": str(doc.get("detail") or "")[:300],
+                       "observed_at": at, "remedy": str(doc.get("remedy") or "")[:300]}
+                if now - at > self.HOST_STATUS_MAX_AGE_S:
+                    row.update(state="bad", detail=f"this check has not reported since {_time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(at))}; "
+                                                   f"its last word was: {row['detail'] or state}")
+            except Exception:  # noqa: BLE001  (a broken status file is a finding, not a crash)
+                row = {"id": name, "name": name, "state": "bad", "detail": "the status file could not be read", "observed_at": 0.0, "remedy": ""}
+            out.append(row)
+        return out
+
     def attention(self, _pid: str) -> List[dict]:
-        return []
+        return [{"id": f"host:{r['id']}", "kind": "reconnect", "title": f"{r['name']}: {r['detail']}"[:200], "reason": "reported by this deployment's host check",
+                 "consequence": r["remedy"] or "this part of the deployment is not working until someone acts", "available_actions": ["Review"], "priority": 95,
+                 **_prov("project", f"host-status:{r['id']}")} for r in self._host_status() if r["state"] == "bad"]
 
     def discovery(self, _pid: str) -> List[dict]:
         return []
@@ -1685,6 +1723,8 @@ class LiveProjectionProvider(RegisteredProducersProvider):
         name = _os.environ.get("SIDEKICK_MODEL_NAME", "").strip()
         if name and _os.environ.get("SIDEKICK_MODEL_BASE_URL", "").strip():
             models.append({"name": name, "role": "primary", "state": "mut"})
+        for r in self._host_status():
+            units.append({"name": r["name"], "state": r["state"], "detail": r["detail"]})
         return {"runtimes": units, "models": models, "security": {}, "apps": [], "sources": [], **_prov("project", "runtime:health")}
 
     def overview(self, project_id: str) -> dict:
@@ -2143,7 +2183,20 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     ui = _ui_dir()
     if ui is not None:
         from fastapi.staticfiles import StaticFiles
-        app.mount("/", StaticFiles(directory=str(ui), html=True), name="projects-ui")
+
+        class _UiFiles(StaticFiles):
+            """The UI bundle with the cache lifetimes its files can honestly have. A build names its scripts and styles by content
+            hash (``assets/index-<hash>.js``): the same name is the same bytes forever, so a browser and an edge keep them for a
+            year without asking. The page itself names those files, so it is revalidated on every visit and a new build shows at
+            once. Without this every visit re-asked for each file through the whole network path before drawing anything."""
+
+            async def get_response(self, path, scope):
+                resp = await super().get_response(path, scope)
+                if resp.status_code == 200:
+                    hashed = path.replace("\\", "/").startswith("assets/") and re.search(r"-[A-Za-z0-9_-]{8,}\.(?:js|css|woff2?|png|jpg|svg)$", path)
+                    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable" if hashed else "no-cache"
+                return resp
+        app.mount("/", _UiFiles(directory=str(ui), html=True), name="projects-ui")
 
     # F22: the same enforcement layer the apps use. In the production profile a write route with no policy, or without an authenticated
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).

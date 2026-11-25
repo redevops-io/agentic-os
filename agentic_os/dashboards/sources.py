@@ -25,6 +25,8 @@ from .contracts import GATED, NOT_CONNECTED, OK, STALE, UNAVAILABLE, Record, Sou
 from .store import DAY, DashboardStore
 
 CACHE_TTL_S = 20.0
+#: how old a read may be and still be SERVED (with its age shown) while a background read replaces it
+STALE_OK_S = 300.0
 #: sources whose application rate-limits its API are read less often
 SOURCE_TTL_S = {"postiz": 300.0}
 EVIDENCE_TTL_S = 3600.0          # a finished run's evidence does not change
@@ -907,26 +909,29 @@ COLLECTORS: Dict[str, Callable[[Context], SourceResult]] = {
 
 class SourceCache:
     """One read of each source per ``CACHE_TTL_S``, shared by every dashboard and drill-down that needs it, so a number
-    and the records behind it come from the same read."""
+    and the records behind it come from the same read.
 
-    def __init__(self, ctx: Context, ttl: float = CACHE_TTL_S) -> None:
-        self.ctx, self.ttl = ctx, ttl
+    A page load never waits for the connected applications when a recent read exists: a read older than the TTL but younger
+    than ``STALE_OK_S`` is SERVED as it is (its status carries when it was observed, and the page says so) while one
+    background read replaces it. Only a first read, a read older than that, or an explicit ``fresh`` waits for the source.
+    Before this, every page opened after 20 idle seconds waited for all of them (about half a second on a LAN, more when one
+    application is slow), in front of the first number on the page."""
+
+    def __init__(self, ctx: Context, ttl: float = CACHE_TTL_S, stale_ok: float = STALE_OK_S) -> None:
+        self.ctx, self.ttl, self.stale_ok = ctx, ttl, stale_ok
         self._lock = threading.Lock()
         self._hit: Dict[str, Tuple[float, SourceResult]] = {}
+        self._refreshing: set = set()
 
     def enabled(self, sid: str) -> bool:
         key = SOURCE_META[sid][2]
         return not key or key in self.ctx.config.sources
 
-    def get(self, sid: str, *, fresh: bool = False) -> SourceResult:
-        if not self.enabled(sid):
-            return SourceResult(_status(sid, NOT_CONNECTED, detail="this source is not enabled on this deployment",
-                                        remedy=f"list `{SOURCE_META[sid][2]}` under `sources` in the dashboards file"))
+    def _ttl(self, sid: str) -> float:
+        return max(self.ttl, SOURCE_TTL_S.get(sid, 0.0))
+
+    def _read(self, sid: str) -> SourceResult:
         now = time.monotonic()
-        with self._lock:
-            hit = self._hit.get(sid)
-            if hit and not fresh and now - hit[0] < max(self.ttl, SOURCE_TTL_S.get(sid, 0.0)):
-                return hit[1]
         try:
             res = COLLECTORS[sid](self.ctx)
         except Exception as e:  # noqa: BLE001  (a source must never take the dashboards down with it)
@@ -935,17 +940,58 @@ class SourceCache:
             self._hit[sid] = (now, res)
         return res
 
-    def warm(self, sids: Sequence[str]) -> None:
-        """Read several sources at once. A person waits for the slowest application, not for the sum of them."""
-        todo = [sid for sid in dict.fromkeys(sids) if sid in COLLECTORS and self.enabled(sid)]
+    def _refresh_behind(self, sid: str) -> None:
+        """Replace a served-but-old read without making anybody wait. One refresh per source at a time."""
+        with self._lock:
+            if sid in self._refreshing:
+                return
+            self._refreshing.add(sid)
+
+        def run() -> None:
+            try:
+                self._read(sid)
+            finally:
+                with self._lock:
+                    self._refreshing.discard(sid)
+        threading.Thread(target=run, name=f"dash-src-{sid}", daemon=True).start()
+
+    def get(self, sid: str, *, fresh: bool = False) -> SourceResult:
+        if not self.enabled(sid):
+            return SourceResult(_status(sid, NOT_CONNECTED, detail="this source is not enabled on this deployment",
+                                        remedy=f"list `{SOURCE_META[sid][2]}` under `sources` in the dashboards file"))
         now = time.monotonic()
         with self._lock:
-            todo = [sid for sid in todo if not (self._hit.get(sid) and now - self._hit[sid][0] < max(self.ttl, SOURCE_TTL_S.get(sid, 0.0)))]
-        if len(todo) < 2:
+            hit = self._hit.get(sid)
+        if hit and not fresh:
+            age = now - hit[0]
+            if age < self._ttl(sid):
+                return hit[1]
+            if age < max(self.stale_ok, self._ttl(sid)):
+                self._refresh_behind(sid)
+                return hit[1]
+        return self._read(sid)
+
+    def warm(self, sids: Sequence[str]) -> None:
+        """Read several sources at once. A person waits for the slowest application, not for the sum of them, and only for
+        sources that have no recent read at all: the others are served and refreshed behind the response."""
+        todo = [sid for sid in dict.fromkeys(sids) if sid in COLLECTORS and self.enabled(sid)]
+        now = time.monotonic()
+        wait, behind = [], []
+        with self._lock:
+            for sid in todo:
+                hit = self._hit.get(sid)
+                age = (now - hit[0]) if hit else None
+                if age is None or age >= max(self.stale_ok, self._ttl(sid)):
+                    wait.append(sid)
+                elif age >= self._ttl(sid):
+                    behind.append(sid)
+        for sid in behind:
+            self._refresh_behind(sid)
+        if len(wait) < 2:
             return
         from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
-        with ThreadPoolExecutor(max_workers=min(8, len(todo)), thread_name_prefix="dash-src") as pool:
-            list(pool.map(self.get, todo))
+        with ThreadPoolExecutor(max_workers=min(8, len(wait)), thread_name_prefix="dash-src") as pool:
+            list(pool.map(self._read, wait))
 
     def invalidate(self) -> None:
         """Forget what was read, except from a rate-limited source: a forced refresh must not spend its quota."""
@@ -955,4 +1001,4 @@ class SourceCache:
             self._hit = {sid: h for sid, h in self._hit.items() if sid in SOURCE_TTL_S and now - h[0] < SOURCE_TTL_S[sid]}
 
 
-__all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S"]
+__all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S", "STALE_OK_S"]
