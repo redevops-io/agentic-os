@@ -30,7 +30,7 @@ def test_a_stale_bundle_pin_two_current_entries_and_a_tag_under_the_wrong_url_ar
     d["desktop"][1]["status"] = "current"
     assert any("exactly one entry must be current" in b for b in cc.offline(d))
     d = copy.deepcopy(DOC)
-    d["desktop"][0]["release_url"] = d["desktop"][0]["release_url"].replace("r0prime-v0.1.5", "r0prime-v0.1.4")
+    d["desktop"][0]["release_url"] = d["desktop"][0]["release_url"].rsplit("/", 1)[0] + "/r0prime-v0.0.0"      # another tag's page
     assert any("release_url" in b for b in cc.offline(d))
 
 
