@@ -144,8 +144,18 @@ class DashboardService:
                 shown.append({"id": df.id, "title": df.title, "priority": df.priority, "group": df.group, "about": df.about,
                               "sources": [{"id": sid, "label": SOURCE_META[sid][0], "state": st} for sid, st in states.items() if st != NOT_CONNECTED]})
             elif any(st == NOT_CONNECTED for st in states.values()) and UNAUTHORIZED not in states.values():
-                hidden.append({"id": df.id, "title": df.title, "priority": df.priority,
-                               "connect": sorted({SOURCE_META[sid][0] for sid in df.needs_any})})
+                # Not offered: say why, name every application it could be built on, and how each is enabled. A title alone
+                # ("3 more dashboards appear when their applications are connected") left a person with nothing to act on.
+                needs = []
+                for sid in df.needs_any:
+                    st = self.cache.get(sid).status
+                    needs.append({"id": sid, "label": SOURCE_META[sid][0], "state": st.state, "detail": st.detail, "remedy": st.remedy})
+                one = len(needs) == 1
+                hidden.append({"id": df.id, "title": df.title, "priority": df.priority, "about": df.about,
+                               "connect": sorted({SOURCE_META[sid][0] for sid in df.needs_any}),
+                               "why": ("The application this dashboard reads is not connected on this deployment." if one else
+                                       "None of the applications this dashboard reads is connected on this deployment; connecting any one of them makes it appear."),
+                               "needs": needs})
         projects = [p for p in self.projects() if acc.project(str(p["id"]))]
         return {"dashboards": shown, "not_connected": hidden, "projects": projects,
                 "access": {"principal": acc.principal, "scoped": acc.scoped, "basis": acc.basis},
@@ -172,6 +182,11 @@ class DashboardService:
         b = Build(dashboard=d, cache=self.cache, access=acc, store=self.store, filters=filters, projects=self.projects(), now=self.clock())
         df.builder(b)
         b.finish()
+        if not states and not d.empty:
+            # None of the applications this dashboard is built on is connected, so it is not offered; asked for directly it may
+            # still show figures from a secondary source. It must then say what is missing, or half a dashboard reads as a whole.
+            need = ", ".join(sorted({SOURCE_META[sid][0] for sid in df.needs_any}))
+            d.empty = f"This dashboard needs {need}, which is not connected on this deployment. What is shown comes from other connected applications only."
         connected = [s for s in d.sources if s.state != NOT_CONNECTED]
         d.sources = connected or d.sources          # a source that was never connected is not listed next to ones that are
         return d

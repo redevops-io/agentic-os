@@ -24,6 +24,8 @@ from .mission.profile import ENV_PACKAGED, ENV_PROFILE, PRODUCTION
 ENV_AUTHORITY_DB = "AGENTIC_OS_AUTHORITY_DB"
 ENV_REPLAY_DB = "AGENTIC_OS_REPLAY_DB"
 ENV_DASHBOARDS_DIR = "AGENTIC_OS_DASHBOARDS_DIR"
+ENV_DASHBOARDS_FILE = "AGENTIC_OS_DASHBOARDS"
+ENV_DASHBOARDS_DEFAULT_FILE = "AGENTIC_OS_DASHBOARDS_DEFAULT_FILE"
 ENV_CAPTURE_DB = "AGENTIC_OS_CAPTURE_DB"
 STATE_SUBDIR = "authority"
 _TRUE = ("1", "true", "yes", "on")
@@ -73,6 +75,14 @@ def apply(env: Optional[MutableMapping[str, str]] = None, home: Optional[str] = 
             os.makedirs(env[ENV_DASHBOARDS_DIR], mode=0o700, exist_ok=True)
         if not (env.get(ENV_CAPTURE_DB) or "").strip():
             env[ENV_CAPTURE_DB] = d + dsep + "capture.db"
+        # The dashboards file of the desktop app lives next to its data. It is read only when a person has created it (an unreadable
+        # file grants nothing, so a path to a missing file must never be set); its place is always published, so a dashboard that is
+        # not offered can name the exact file that enables it.
+        if not (env.get(ENV_DASHBOARDS_FILE) or "").strip():
+            default_file = env[ENV_DASHBOARDS_DIR] + dsep + "dashboards.yaml"
+            env[ENV_DASHBOARDS_DEFAULT_FILE] = default_file
+            if os.path.isfile(default_file):
+                env[ENV_DASHBOARDS_FILE] = default_file
     return {"profile": effective, "chosen_here": chosen_here,
             "authority_db": (env.get(ENV_AUTHORITY_DB) or ""), "replay_db": (env.get(ENV_REPLAY_DB) or "")}
 

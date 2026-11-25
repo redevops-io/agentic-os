@@ -158,6 +158,21 @@ def test_the_dashboards_and_the_intake_get_durable_per_user_locations_and_a_conf
     assert mine["AGENTIC_OS_DASHBOARDS_DIR"] == "/srv/dash" and mine["AGENTIC_OS_CAPTURE_DB"] == "/srv/capture.db"
 
 
+def test_the_dashboards_file_is_read_only_once_it_exists_and_its_place_is_always_published(tmp_path):
+    env = {"HOME": str(tmp_path)}
+    desktop_profile.apply(env, home=str(tmp_path), platform="linux")
+    f = env["AGENTIC_OS_DASHBOARDS_DIR"] + "/dashboards.yaml"
+    # a path to a missing file would be read as "unreadable file: grant nothing" and hide every dashboard
+    assert env["AGENTIC_OS_DASHBOARDS_DEFAULT_FILE"] == f and "AGENTIC_OS_DASHBOARDS" not in env
+    open(f, "w").write("schema: aos.dashboards/v1\nsources: [twenty]\n")
+    env2 = {"HOME": str(tmp_path)}
+    desktop_profile.apply(env2, home=str(tmp_path), platform="linux")
+    assert env2["AGENTIC_OS_DASHBOARDS"] == f
+    mine = {"HOME": str(tmp_path), "AGENTIC_OS_DASHBOARDS": "/etc/dash.yaml"}
+    desktop_profile.apply(mine, home=str(tmp_path), platform="linux")
+    assert mine["AGENTIC_OS_DASHBOARDS"] == "/etc/dash.yaml" and "AGENTIC_OS_DASHBOARDS_DEFAULT_FILE" not in mine
+
+
 def test_a_stated_development_choice_gets_no_dashboard_or_intake_location(tmp_path):
     env = {"HOME": str(tmp_path), "AGENTIC_OS_PROFILE": "development"}
     desktop_profile.apply(env, home=str(tmp_path), platform="linux")
