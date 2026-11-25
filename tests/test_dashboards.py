@@ -894,3 +894,42 @@ def test_a_panel_with_nothing_to_draw_says_so():
     b.d, b._facets = d, {}
     b.finish()
     assert [bool(p.empty) for p in d.panels] == [True, True, True] and d.panels[2].empty == "no source is connected"
+
+
+def test_a_platform_last_run_on_an_earlier_release_is_not_executed_for_the_current_one(qa):
+    """Bundle 0.1.10 passed on Windows; 0.1.11 ran on macOS only. Windows must read 'not executed' for 0.1.11, with the reason."""
+    c, svc, *_ = qa
+    for plat in ("macos", "windows"):
+        assert _report(c, project="billing", suite="bundle", run=f"r10-{plat}", platform=plat, release="0.1.10", results={"a": "passed", "b": "passed"}, at=T0 - 500).status_code == 200
+    assert _report(c, project="billing", suite="bundle", run="r11-macos", platform="macos", release="0.1.11", results={"a": "passed", "b": "passed"}, at=T0 - 100).status_code == 200
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    matrix = next(p for p in d["panels"] if p["kind"] == "matrix")
+    row = next(r for r in matrix["rows"] if "bundle" in r["label"])
+    assert "0.1.11" in row["label"]                                                    # the row says which release it is about
+    cols = [col["label"] for col in matrix["columns"]]
+    cell = {cols[i]: x for i, x in enumerate(row["cells"])}
+    assert cell["macos"]["status"] == "passed" and cell["windows"]["status"] == "unexecuted", cell
+    recs = c.get("/api/dashboards/qa/drill", params={"key": cell["windows"]["drill"], "project": "billing"}).json()["records"]
+    assert len(recs) == 2 and all("not executed for release 0.1.11; last executed for 0.1.10" in r["fields"]["reason"] for r in recs)
+    # a suite whose runs name no release behaves as before: the latest run of each platform counts
+    for plat, at in (("macos", T0 - 90), ("windows", T0 - 400)):
+        assert _report(c, project="billing", suite="plain", run=f"p-{plat}", platform=plat, results={"a": "passed"}, at=at).status_code == 200
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    matrix = next(p for p in d["panels"] if p["kind"] == "matrix")
+    row = next(r for r in matrix["rows"] if "plain" in r["label"])
+    cols = [col["label"] for col in matrix["columns"]]
+    assert {cols[i]: x["status"] for i, x in enumerate(row["cells"]) if cols[i] in ("macos", "windows")} == {"macos": "passed", "windows": "passed"}
+
+
+def test_a_misfiled_run_can_be_withdrawn_by_who_may_report_and_by_nobody_else(qa):
+    c, svc, *_ = qa
+    assert _report(c, project="billing", suite="wrong-suite", run="w1", results={"a": "passed", "b": "failed"}, at=T0 - 50).status_code == 200
+    key = {"project": "billing", "suite": "wrong-suite", "platform": "chromium", "run_id": "w1"}
+    assert c.delete("/api/dashboards/qa/results", params=key, headers={"X-Service-Token": "not-a-token"}).status_code == 401
+    assert c.delete("/api/dashboards/qa/results", params={**key, "run_id": ""}, headers={"X-Service-Token": SVC}).status_code == 422
+    assert c.delete("/api/dashboards/qa/results", params={**key, "run_id": "other"}, headers={"X-Service-Token": SVC}).status_code == 404
+    out = c.delete("/api/dashboards/qa/results", params=key, headers={"X-Service-Token": SVC})
+    assert out.status_code == 200 and out.json()["results"] == 2 and out.json()["withdrawn_by"].startswith("service:")
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    assert not any("wrong-suite" in r["label"] for p in d["panels"] if p["kind"] == "matrix" for r in p["rows"])      # gone at once, not after a cache expiry
+    assert c.delete("/api/dashboards/qa/results", params=key, headers={"X-Service-Token": SVC}).status_code == 404
