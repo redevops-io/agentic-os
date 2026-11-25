@@ -26,6 +26,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 - Security dashboard: a case the product reports as resolved counts as closed (new `Closed in range` tile) even when the product gives no closing time; only the time-to-close is then "not known". Found by running the real QA → Edge Sentinel → Projects → CrowdSec remediation: Edge Sentinel 0.6.6 marks a case RESOLVED without a closing time.
 - Dashboards label the sample provider's own rows (context sources, runtime units) as sample even when a products registry is configured.
 
+- **Edge Sentinel: a resolved case says when it was closed.** `GET /api/v1/cases` and the case summary carry `resolved_at`, the time a person closed the case on a verified re-test (`null` while the case is open, and for a case closed before this change: the time was not kept and is not invented). The time is part of the resolution record, so it survives a restart. The resolution answer returns it too.
+
 ## v0.4.7 (a platform nobody ran is not coverage)
 
 - **QA dashboards: a suite that names its platforms is expected on every one of them.** A test that reported on any platform of such a suite is planned on all of them, so a platform with no run reads "not executed" and counts against coverage instead of not appearing. A test declared for specific platforms keeps them.

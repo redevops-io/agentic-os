@@ -740,3 +740,22 @@ def test_manual_and_agent_event_cases_have_their_own_replay_proof_and_source(env
     ev = s.post("/api/v1/agent-events", json={"kind": "k", "severity": "high"}).json()
     got = s.get(f"/api/v1/cases/{ev['case_id']}").json()
     assert got["replay"]["deterministic"] is True and [h["via"] for h in got["history"] if h["type"] == "case.opened"] == ["agent-runtime"]
+
+
+def test_a_resolved_case_says_when_it_was_closed_in_the_list_and_the_detail_and_still_does_after_a_restart(env):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    row = next(c for c in s.get("/api/v1/cases").json()["items"] if c["case_id"] == cid)
+    assert row["resolved_at"] is None                                                     # open: no closing time, and none invented
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST))
+    assert r.status_code == 200, r.text
+    at = r.json()["resolved_at"]
+    assert at and at >= row["created_at"]
+    row = next(c for c in s.get("/api/v1/cases").json()["items"] if c["case_id"] == cid)
+    assert row["status"] == "RESOLVED" and row["resolved_at"] == at
+    assert s.get(f"/api/v1/cases/{cid}").json()["summary"]["resolved_at"] == at
+    assert s.get(f"/api/v1/cases/{cid}/evidence/{r.json()['evidence_id']}").json()["resolved_at"] == at    # the record itself carries the time
+    _restart(env)
+    s2 = session(ADMIN)
+    assert next(c for c in s2.get("/api/v1/cases").json()["items"] if c["case_id"] == cid)["resolved_at"] == at
+    assert s2.get(f"/api/v1/cases/{cid}").json()["summary"]["resolved_at"] == at
