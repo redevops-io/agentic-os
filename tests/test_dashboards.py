@@ -880,3 +880,17 @@ def test_the_source_cache_works_where_threads_cannot_be_started(monkeypatch):
     _time.sleep(0.03)
     n = len(calls)
     assert cache.get("missions").status.state == "ok" and len(calls) == n + 1    # the "background" refresh ran in the caller's time
+
+
+def test_a_panel_with_nothing_to_draw_says_so():
+    """Found by packaging/acceptance/dashboards_check.py on a deployment with no knowledge source: a table and a bar chart
+    came back empty with no reason."""
+    from agentic_os.dashboards.build import Build, panel
+    from agentic_os.dashboards.contracts import Dashboard, Filters
+    d = Dashboard(id="x", title="X", priority="P2")
+    d.panels = [panel("t", "Table", "table", columns=[{"id": "a", "label": "A"}]), panel("b", "Bars", "bars"),
+                panel("e", "Explained", "bars", empty="no source is connected")]
+    b = Build.__new__(Build)
+    b.d, b._facets = d, {}
+    b.finish()
+    assert [bool(p.empty) for p in d.panels] == [True, True, True] and d.panels[2].empty == "no source is connected"
