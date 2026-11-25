@@ -172,6 +172,11 @@ class DashboardService:
         b = Build(dashboard=d, cache=self.cache, access=acc, store=self.store, filters=filters, projects=self.projects(), now=self.clock())
         df.builder(b)
         b.finish()
+        if not states and not d.empty:
+            # None of the applications this dashboard is built on is connected, so it is not offered; asked for directly it may
+            # still show figures from a secondary source. It must then say what is missing, or half a dashboard reads as a whole.
+            need = ", ".join(sorted({SOURCE_META[sid][0] for sid in df.needs_any}))
+            d.empty = f"This dashboard needs {need}, which is not connected on this deployment. What is shown comes from other connected applications only."
         connected = [s for s in d.sources if s.state != NOT_CONNECTED]
         d.sources = connected or d.sources          # a source that was never connected is not listed next to ones that are
         return d

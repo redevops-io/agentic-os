@@ -367,6 +367,8 @@ def test_a_dashboard_is_offered_only_when_its_application_is_connected(monkeypat
     assert ids == ["portfolio", "missions", "infrastructure", "knowledge"]                # no QA, no security, no business app
     hidden = {d["id"]: d["connect"] for d in cat["not_connected"]}
     assert hidden["qa"] == ["QA runs", "Reported test results"] and hidden["revenue"] == ["Control Tower (Metabase)", "Twenty CRM"]
+    for hid in hidden:                                                                    # every dashboard that is not offered explains itself
+        assert c.get(f"/api/dashboards/{hid}").json()["empty"], hid
     d = c.get("/api/dashboards/qa").json()                                                # asked for directly: an explanation, no fabricated zero
     assert d["empty"] and all(m["value"] is None for p in d["panels"] for m in p["metrics"])
     assert c.get("/api/dashboards/nope").status_code == 404
