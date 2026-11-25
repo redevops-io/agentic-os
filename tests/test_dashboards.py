@@ -238,6 +238,19 @@ def test_a_run_reported_twice_is_one_run_and_says_so(qa):
     assert {r["fields"]["release"] for r in runs if r["fields"]["suite"] == "ledger-ci"} == {"v1.2.0"}
 
 
+def test_a_whole_large_suite_is_one_report_and_an_oversize_body_is_refused_not_truncated(qa):
+    """The kernel's own suite (about 9,000 tests, 2 MB of JSON) was cut at 1 MB on the way in and answered "invalid JSON"."""
+    c, *_ = qa
+    big = {f"tests/test_module_{i // 50}.py :: test_case_number_{i} with a reasonably long descriptive name to make the body realistic": "passed" for i in range(9000)}
+    r = _report(c, project="billing", suite="kernel-size", run="big-1", results=big, at=T0 - 30)
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["results"] == 9000
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    assert _metric(d, "planned")["value"] >= 9000
+    huge = c.post("/api/dashboards/qa/results", content=b"{" + b" " * 16_000_001 + b"}", headers={"X-Service-Token": SVC, "Content-Type": "application/json"})
+    assert huge.status_code == 413 and huge.json()["error"] == "too_large"
+
+
 def test_old_runs_are_pruned_but_the_latest_of_a_quiet_lane_is_kept(monkeypatch, tmp_path):
     from agentic_os.dashboards.store import DAY, DashboardStore
     monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS", "30")

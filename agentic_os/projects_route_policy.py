@@ -40,6 +40,7 @@ PROJECTS_ROUTE_POLICIES = {
     "PUT /api/dashboards/views": P("dashboards.save_view", "authority_required"),
     "DELETE /api/dashboards/views/{view_id}": P("dashboards.delete_view", "authority_required"),
     "POST /api/dashboards/{dashboard_id}/track": P("dashboards.track", "authority_required"),
-    "POST /api/dashboards/qa/results": P("dashboards.ingest_qa", "authority_required"),
+    # one run of a large suite is one request (a run replaces itself, so it cannot be split): 20,000 results fit in 16 MB
+    "POST /api/dashboards/qa/results": P("dashboards.ingest_qa", "authority_required", max_body=16_000_000),
     f"POST {PREFIX}/today/{{item_id}}/simulate-outcome": P("projects.today_simulate_outcome", "human_only", rationale="a demo-only simulation of an outcome; never an agent's call"),
 }
