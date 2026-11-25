@@ -134,6 +134,41 @@ if (url) {
       await p.setViewportSize({ width: 390, height: 800 }); await p.waitForTimeout(600);
       const m = await p.evaluate(() => ({ w: window.innerWidth, sw: document.documentElement.scrollWidth })); await p.setViewportSize({ width: 1280, height: 860 });
       assert(m.sw <= m.w + 1, 'the page is ' + m.sw + ' px wide in a ' + m.w + ' px window'); return '390 px'; });
+    // ---- A journey with data. A fresh installation has no number to click: a test run is reported through the app's own intake, from
+    // the page (so with the page's own session), and the person's path is then walked in the window: the QA dashboard appears, shows
+    // the run, and the failed test is one click behind the "failed" number.
+    const at = Date.now() / 1000; const runId = 'ui-journey-' + Math.round(at);
+    const posted = await p.evaluate(async ([at, runId]) => {
+      const r = await fetch('/api/dashboards/qa/results', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        project: 'main', suite: 'ui-journey', run_id: runId, platform: 'browser', environment: 'installed build', release: 'under-test', origin: 'ui_workflow', at,
+        results: [{ test_id: 'uijourney.pass', status: 'passed', detail: 'reported by the acceptance run' }, { test_id: 'uijourney.fail', status: 'failed', detail: 'a deliberately failed row' }] }) });
+      return r.status; }, [at, runId]).catch((e) => 'error ' + String(e).slice(0, 80));
+    const journeys = ['after a test run is reported, the QA dashboard appears and shows it', 'the failed test is one click behind the failed number', 'the QA dashboard with data passes WCAG 2 A/AA (axe)'];
+    if (posted === 404 || posted === 405 || posted === 501) for (const n of journeys) unsupported(n, 'this build does not accept reported test results (HTTP ' + posted + ')');
+    else {
+      await check(journeys[0], async () => {
+        assert(posted === 200, 'reporting a run from the page answered ' + posted);
+        const [resp] = await Promise.all([
+          p.waitForResponse((r) => new URL(r.url()).pathname === '/api/dashboards' && r.status() === 200, { timeout: 20000 }),
+          p.reload({ waitUntil: 'networkidle' }).then(async () => { const b = p.getByRole('button', { name: /^Dashboards/i }).first(); if (await b.count()) await b.click(); })]);
+        const qa = ((await resp.json()).dashboards || []).find((d) => d.id === 'qa'); assert(qa, 'the catalogue still does not offer the QA dashboard');
+        const rx = new RegExp(qa.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        const link = p.getByRole('button', { name: rx }).or(p.getByRole('link', { name: rx })).or(p.getByRole('tab', { name: rx })).first();
+        assert(await link.count(), 'no control opens "' + qa.title + '"');
+        const [dresp] = await Promise.all([p.waitForResponse((r) => new URL(r.url()).pathname === '/api/dashboards/qa' && r.status() === 200, { timeout: 20000 }), link.click()]);
+        const doc = await dresp.json(); const m = {}; for (const pnl of doc.panels || []) for (const x of pnl.metrics || []) m[x.id] = x.value;
+        await p.waitForTimeout(1200); const t = await body();
+        assert(m.failed >= 1 && m.planned >= 2, 'the dashboard does not count the reported run: ' + JSON.stringify({ planned: m.planned, failed: m.failed }));
+        assert(/ui-journey/i.test(t), 'the page does not name the reported suite'); assert(/not ready|failed/i.test(t), 'the page does not say that a test failed');
+        return qa.title + ': planned ' + m.planned + ', failed ' + m.failed + '; the suite is named on the page'; });
+      await check(journeys[1], async () => {
+        const failed = p.getByRole('button', { name: /failed/i }).first(); assert(await failed.count(), 'no control on the "failed" number');
+        const [dr] = await Promise.all([p.waitForResponse((r) => new URL(r.url()).pathname === '/api/dashboards/qa/drill' && r.status() === 200, { timeout: 20000 }), failed.click()]);
+        const recs = JSON.stringify(await dr.json()); await p.waitForTimeout(900); const t = await body();
+        assert(recs.includes('uijourney.fail') && !recs.includes('uijourney.pass'), 'the records behind "failed" are not exactly the failed test');
+        assert(t.includes('uijourney.fail'), 'the failed test is not shown on the page after the click'); return 'uijourney.fail listed; uijourney.pass not'; });
+      await check(journeys[2], async () => { const v = await axe(); assert(v.length === 0, v.join(', ')); await p.keyboard.press('Escape'); return 'no violations'; });
+    }
     const today = p.getByRole('button', { name: /^Today/i }).first(); if (await today.count()) { await today.click(); await p.waitForTimeout(600); }
   }
   await check('a phone-width window does not scroll sideways', async () => {
