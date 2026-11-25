@@ -46,7 +46,8 @@ Neither is computed from the executed tests alone.
 redevops-qa run records carry a target and a profile, not a project, suite or requirement. Those identities live in the
 dashboards file (`qa.suites`, `qa.requirements`): a suite maps targets/profiles to a project, and a test to the
 requirements it covers. A requirement counts as covered only when every linked test passed; one with no test is
-`untested` and counts against coverage.
+`untested` and counts against coverage. A suite that names its `platforms` is expected on each of them: any test it reported is planned on
+every named platform, and a platform with no run shows as not executed.
 
 A CI lane that does not run through redevops-qa reports its results:
 

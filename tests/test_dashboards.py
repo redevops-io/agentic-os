@@ -211,6 +211,20 @@ def test_reporting_results_needs_an_identity_and_valid_statuses(qa):
     assert _report(c, project="storefront", suite="checkout", run="x", results={"t1": "passed"}, at=T0 + 9 * DAY).status_code == 422
 
 
+def test_a_reported_test_is_planned_on_every_platform_its_suite_names(qa):
+    """A green run on one platform is not cross-platform coverage: the platforms nobody ran count as not executed."""
+    c, *_ = qa
+    before = _metric(c.get("/api/dashboards/qa", params={"project": "storefront"}).json(), "planned")["value"]
+    # an undeclared test reports on chromium; the suite names chromium AND android, so it is expected on both
+    assert _report(c, project="storefront", suite="checkout", run="extra", results={"t1": "passed", "t2": "failed", "new": "passed"}, at=T0 - 60).status_code == 200
+    d = c.get("/api/dashboards/qa", params={"project": "storefront"}).json()
+    assert _metric(d, "planned")["value"] == before + 2
+    missing = c.get("/api/dashboards/qa/drill", params={"key": "cells:unexecuted", "project": "storefront"}).json()["records"]
+    assert ("new", "android") in {(r["fields"]["test_id"], r["fields"]["platform"]) for r in missing}
+    # t5 is declared for chromium only and stays that way
+    assert ("t5", "android") not in {(r["fields"]["test_id"], r["fields"]["platform"]) for r in missing}
+
+
 # ── history ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 def test_history_is_recorded_per_project_and_aggregated_as_sums(qa):
     c, svc, clock = qa
