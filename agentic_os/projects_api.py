@@ -1477,8 +1477,13 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     """
     import hmac
     import os
+    from agentic_os.local_agents import LocalAgentStore
     token = os.environ.get("AGENT_GATEWAY_TOKEN", "").strip()
-    if not token:
+    # A locally installed app mounts the gateway for the agents its user has connected (agentic_os/local_agents.py): each has its own
+    # token and its own grants, read from the store on every call, so a revocation holds from the next request. With no agent
+    # connected the routes exist and admit nobody.
+    local_agents = LocalAgentStore.from_env()
+    if not token and local_agents is None:
         return False
     token_bytes = token.encode("utf-8")
     from fastapi import Body, Header, HTTPException
@@ -1505,13 +1510,26 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         def search(self, query, limit=10): return prov.sources(default_pid)[: int(limit)]
 
     class _StaticVerifier:
-        """Maps the configured bearer to a read-only principal; anything else → None (deny)."""
+        """Maps the configured bearer to a read-only principal, or a connected local agent's token to that agent; anything else →
+        None (deny)."""
         def verify(self, t):
-            if t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
+            if token and t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
                 return GatewayPrincipal(Principal("external-agent", "service", (), "demo"),
                                         client_id="external-agent", workspace="demo",
                                         scopes=tuple(_GRANTS))
+            if local_agents is not None and t:
+                rec = local_agents.verify(t)
+                if rec is not None:
+                    return GatewayPrincipal(Principal(rec.id, "service", (), "local"), client_id=rec.id, workspace="local",
+                                            scopes=tuple(g for g in rec.grants if g in _GRANTS))
             return None
+
+    def _authorize(principal, perm):
+        if perm not in _GRANTS:
+            return False
+        if principal.id == "external-agent":
+            return True
+        return local_agents is not None and perm in local_agents.grants_of(principal.id)
 
     registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources())
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
@@ -1520,8 +1538,15 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         audit = EventStoreAuditSink.from_path(audit_path)
     else:
         audit = InMemoryAuditSink()
-    gateway = AgentGateway(registry=registry, authorize=lambda p, perm: perm in _GRANTS,
-                           egress=PolicyEgressEngine(), audit=audit)
+    # A local agent acts inside its own authority envelope (issued when the user connected it: read grants at tier 0, an action budget,
+    # an expiry). The guard is the installation's durable one; with it the gateway is fail-closed, so an agent whose envelope is
+    # missing, expired or revoked is denied even with a valid token.
+    authority = None
+    if local_agents is not None:
+        from agentic_os.mission.authority import authority_from_env
+        authority = authority_from_env()
+    gateway = AgentGateway(registry=registry, authorize=_authorize,
+                           egress=PolicyEgressEngine(), audit=audit, authority=authority)
     verifier = _StaticVerifier()
     rest = RestGatewayAdapter(gateway, verifier)
     endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))

@@ -67,6 +67,9 @@ commands:
   serve [--exit-on-stdin-eof]   run the Projects control plane (UI + API) on 127.0.0.1
                                 (--exit-on-stdin-eof: stop cleanly when standard input reaches end of file)
   bootstrap                     print the device-readiness report (exit 0 = verified)
+  agent connect|list|disconnect|status
+                                connect an external agent (Claude Desktop, Gemini CLI, a local model) to this installation with
+                                its own scoped, expiring credential; list or revoke them (agent --help for the options)
   help, -h, --help              print this text and exit 0
 
 Any other command or option prints this text on standard error and exits 2; nothing is started.
@@ -87,6 +90,10 @@ def parse_args(argv):
         allowed = SERVE_FLAGS
     elif cmd == "bootstrap":
         allowed = ()
+    elif cmd == "agent":
+        # connect, list or disconnect an external agent (agentic_os/local_agents.py). Its own arguments are parsed there; like the
+        # other commands it starts no server and prints no launch code.
+        return "agent", tuple(rest)
     else:
         return "error", ()
     if any(a not in allowed + HELP_FLAGS for a in rest):
@@ -115,6 +122,9 @@ def main(argv=None) -> int:
     # replay stores in the per-user state directory.
     from agentic_os.desktop_profile import apply as _explicit_profile
     _explicit_profile()
+    if action == "agent":
+        from agentic_os.local_agents import cli as _agent_cli
+        return _agent_cli(list(flags))
     if action == "bootstrap":
         sys.argv = ["agentic_os.mission.bootstrap"]
         runpy.run_module("agentic_os.mission.bootstrap", run_name="__main__")
