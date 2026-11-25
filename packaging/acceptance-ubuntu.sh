@@ -13,6 +13,10 @@ DEB="${1:?usage: acceptance-ubuntu.sh <path-to-.deb>}"
 # hidden, and the run silently fell back to dpkg -i plus `apt-get -f install`, a different install path).
 DEB="$(cd "$(dirname "$DEB")" && pwd)/$(basename "$DEB")"
 
+# The package index of a machine image goes stale: on the CI image apt asked security.ubuntu.com for a libegl-mesa0 build that had been
+# superseded, got 404, and this script failed before the installer was ever tried (every native-packaging run of 0.1.3 and 0.1.4).
+echo "== refresh the package index =="
+sudo apt-get update
 echo "== install the suite from the .deb (apt resolves the dependencies; its errors stay visible) =="
 sudo apt-get install -y "$DEB" || sudo dpkg -i "$DEB" || { sudo apt-get -f install -y; sudo dpkg -i "$DEB"; }
 
