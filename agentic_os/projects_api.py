@@ -71,6 +71,9 @@ def validate_outcome_numbers(*, observed_reward, reward_dimensions, delay, attri
 
 
 
+#: Serialises the first use of a provider's per-tenant ledger and of its capture store (requests are served from a thread pool).
+_FIRST_USE = __import__("threading").RLock()
+
 class BodyLimitMiddleware:
     """Pure-ASGI request-body cap for the outcome / promotion routes. Counts bytes as they stream in and
     aborts with 413 at ``limit`` (Content-Length is only a fast path), so a chunked body without a length
@@ -399,7 +402,9 @@ class SampleProjectionProvider:
             if not path:
                 return None
             from agentic_os.capture import CaptureStore
-            self._cstore = CaptureStore(path)
+            with _FIRST_USE:                              # one store per provider, whichever request gets here first
+                if getattr(self, "_cstore", None) is None:
+                    self._cstore = CaptureStore(path)
         return self._cstore
 
     def _today(self, pid: str, session: str):
@@ -408,13 +413,15 @@ class SampleProjectionProvider:
         if actor and not self.today_sample_cases:
             # An authenticated caller on a real deployment: ONE ledger per tenant and project (not a per-browser sandbox), kept for
             # the life of the process, with a durable intake when a capture store is configured.
-            if getattr(self, "_tenant_today", None) is None:
-                self._tenant_today = {}
-            t = self._tenant_today.get((tenant, pid))
-            if t is None:
-                t = Today(tenant=tenant, project=pid, sample_cases=False)
-                t.capture_store = self._capture_store()
-                self._tenant_today[(tenant, pid)] = t
+            store = self._capture_store()
+            with _FIRST_USE:                              # ONE ledger per tenant and project, also when two requests arrive together
+                if getattr(self, "_tenant_today", None) is None:
+                    self._tenant_today = {}
+                t = self._tenant_today.get((tenant, pid))
+                if t is None:
+                    t = Today(tenant=tenant, project=pid, sample_cases=False)
+                    t.capture_store = store
+                    self._tenant_today[(tenant, pid)] = t
             return t
         if getattr(self, "_today_sessions", None) is None:
             self._today_sessions = TodaySessions()
