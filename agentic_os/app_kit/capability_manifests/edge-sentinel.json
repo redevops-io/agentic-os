@@ -1,0 +1,1086 @@
+{
+ "app": "edge-sentinel",
+ "digest": "sha256:5399fc1c4adf2a3dbd0bfbad1afc2330adbb1c4b098bd0be712263e7b4d3757d",
+ "operations": [
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/api/backups/status"
+    },
+    {
+     "method": "GET",
+     "path": "/api/backups/ui"
+    }
+   ],
+   "id": "backup_status",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "approve_block",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "action": "block_ip",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "method": "POST",
+     "path": "/api/cases/{case_id}/execute"
+    },
+    {
+     "method": "POST",
+     "path": "/api/cases/{case_id}/respond"
+    }
+   ],
+   "id": "ban_ip",
+   "route_access": [
+    "human_only",
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "explain_alert",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "explain_vulnerability",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "list_bans",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "list_scannable_apps",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "list_vulnerabilities",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "malware_scan",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/api/network/review"
+    },
+    {
+     "method": "GET",
+     "path": "/api/network/ui"
+    }
+   ],
+   "id": "network_access_review",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "network_posture",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "approve_network_policy",
+     "method": "POST",
+     "path": "/agent/run"
+    },
+    {
+     "action": "propose_network_policy",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "propose_network_policy",
+   "route_access": [
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "sbom",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "scan_app",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "scan_apps",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "scan_deployment",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "scan_results",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "scan_status",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "scanner_status",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "sentinel.block_ip",
+   "inputs": {},
+   "outputs": {
+    "ip_blocked": "True ONLY if a read-back of the LAPI decisions for the IP (parsed IP equality) shows an active ban; a 2xx POST alone is not enough"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "triage",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "sentinel.triage",
+   "inputs": {},
+   "outputs": {
+    "threat_posture": "active decisions + alerts triage from the live CrowdSec core"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "sentinel.unblock_ip",
+   "inputs": {},
+   "outputs": {
+    "ip_unblocked": "ban decision lifted (saga compensation)"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "supply_chain_scan",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/"
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity"
+    },
+    {
+     "method": "GET",
+     "path": "/api/cases"
+    },
+    {
+     "method": "GET",
+     "path": "/api/cases/{case_id}"
+    }
+   ],
+   "id": "threat_summary",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "vuln_db_lookup",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/api/permissions/ui"
+    },
+    {
+     "method": "POST",
+     "path": "/api/permissions/query"
+    }
+   ],
+   "id": "vuln_db_permissions",
+   "route_access": [
+    "read_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "wazuh_status",
+   "typed": false
+  }
+ ],
+ "problems": [],
+ "routes": [
+  {
+   "gate": "operator_authenticated",
+   "method": "DELETE",
+   "path": "/api/v1/actor-links/{external_actor}",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_actor_links",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "DELETE",
+   "path": "/api/v1/session",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_logout",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/",
+   "tools": [
+    {
+     "tool": "threat_summary"
+    }
+   ]
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/_security"
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/activity",
+   "tools": [
+    {
+     "tool": "threat_summary"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/backups/status",
+   "tools": [
+    {
+     "tool": "backup_status"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/backups/ui",
+   "tools": [
+    {
+     "tool": "backup_status"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/cases",
+   "tools": [
+    {
+     "tool": "threat_summary"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/cases/{case_id}",
+   "tools": [
+    {
+     "tool": "threat_summary"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/network/review",
+   "tools": [
+    {
+     "tool": "network_access_review"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/network/ui",
+   "tools": [
+    {
+     "tool": "network_access_review"
+    }
+   ]
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/permissions/ui",
+   "tools": [
+    {
+     "tool": "vuln_db_permissions"
+    }
+   ]
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/actions"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/actions/{request_id}"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/actions/{request_id}/verification"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/actor-links"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/attack/map"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/cases"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/cases/{case_id}"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/cases/{case_id}/evidence/{artifact_id}"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/changes"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/decisions"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/events"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/history"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/info"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/posture"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/session"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/soc2/controls"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "GET",
+   "path": "/api/v1/users"
+  },
+  {
+   "gate": "operator_credential",
+   "method": "GET",
+   "path": "/capabilities"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs/oauth2-redirect"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/enforcement/{address}"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/health"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/openapi.json"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/readyz"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/redoc"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/ui"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/ui/{path:path}"
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "PATCH",
+   "path": "/api/v1/users/{name}",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_users",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/agent/run",
+   "tools": [
+    {
+     "action": "approve_block",
+     "tool": "ban_ip"
+    },
+    {
+     "action": "block_ip",
+     "tool": "ban_ip"
+    },
+    {
+     "action": "approve_network_policy",
+     "tool": "propose_network_policy"
+    },
+    {
+     "action": "propose_network_policy",
+     "tool": "propose_network_policy"
+    },
+    {
+     "action": "triage",
+     "tool": "sentinel.triage"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.agent_run",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "assistant_console",
+   "method": "POST",
+   "path": "/api/agent",
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.agent",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/cases/{case_id}/execute",
+   "tools": [
+    {
+     "tool": "ban_ip"
+    }
+   ],
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.case_execute",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/cases/{case_id}/respond",
+   "tools": [
+    {
+     "tool": "ban_ip"
+    }
+   ],
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.case_respond",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/permissions/query",
+   "tools": [
+    {
+     "tool": "vuln_db_permissions"
+    }
+   ],
+   "write_policy": {
+    "access": "read_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.permissions_query",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/actor-links",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_actor_links",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/agent-events",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_agent_events",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/cases",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_open_case",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/cases/{case_id}/actions/{request_id}/decision",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_decide",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/cases/{case_id}/actions/{request_id}/execute",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_execute",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/cases/{case_id}/resolution",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_resolve_case",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/detections/validate",
+   "write_policy": {
+    "access": "read_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_detections_validate",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/hunt/validate",
+   "write_policy": {
+    "access": "read_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_hunt_validate",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/ioc/normalize",
+   "write_policy": {
+    "access": "read_only",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_ioc_normalize",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/session",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_login",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/session/password",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_password",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/users",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_users",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/v1/users/{name}/password",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_users",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_credential",
+   "method": "POST",
+   "path": "/invoke",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.invoke",
+    "permission": "edge-sentinel:write"
+   }
+  }
+ ],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "operations": 26,
+  "reachable_by_external_agents": 0,
+  "routes": 59,
+  "routes_without_a_gate_decision": 0,
+  "typed": 3,
+  "ui_calls": 16,
+  "ui_calls_not_matched": 2,
+  "writes_or_deletes": 11
+ },
+ "ui_calls": [
+  {
+   "call": "/api/cases/",
+   "route": "/api/cases"
+  },
+  {
+   "call": "/api/v1/actions",
+   "route": "/api/v1/actions"
+  },
+  {
+   "call": "/api/v1/actions/",
+   "route": "/api/v1/actions"
+  },
+  {
+   "call": "/api/v1/actor-links",
+   "route": "/api/v1/actor-links"
+  },
+  {
+   "call": "/api/v1/actor-links/",
+   "route": "/api/v1/actor-links/{external_actor}"
+  },
+  {
+   "call": "/api/v1/cases",
+   "route": "/api/v1/cases"
+  },
+  {
+   "call": "/api/v1/cases/",
+   "route": "/api/v1/cases"
+  },
+  {
+   "call": "/api/v1/changes",
+   "route": "/api/v1/changes"
+  },
+  {
+   "call": "/api/v1/events",
+   "route": "/api/v1/events"
+  },
+  {
+   "call": "/api/v1/history",
+   "route": "/api/v1/history"
+  },
+  {
+   "call": "/api/v1/info",
+   "route": "/api/v1/info"
+  },
+  {
+   "call": "/api/v1/posture",
+   "route": "/api/v1/posture"
+  },
+  {
+   "call": "/api/v1/session",
+   "route": "/api/v1/session"
+  },
+  {
+   "call": "/api/v1/users",
+   "route": "/api/v1/users"
+  },
+  {
+   "call": "/decision",
+   "route": null
+  },
+  {
+   "call": "/execute",
+   "route": null
+  }
+ ]
+}

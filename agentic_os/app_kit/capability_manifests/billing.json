@@ -1,0 +1,434 @@
+{
+ "app": "billing",
+ "digest": "sha256:233b8a9dc17a05ee5d1fe72dd7f5f6db725bfae6428b59117b0c637bbbc02e90",
+ "operations": [
+  {
+   "action": "delete",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "cancel_subscription",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "billing.cancel_subscription",
+   "inputs": {},
+   "outputs": {
+    "subscription_cancelled": "subscription terminated (saga compensation)"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "create_subscription",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "billing.create_subscription",
+   "inputs": {},
+   "outputs": {
+    "subscription": "paid subscription created on the live Lago core"
+   },
+   "reversibility": {
+    "kind": "compensable",
+    "with": "billing.cancel_subscription"
+   },
+   "route_access": [
+    "stages_only"
+   ],
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "billing.dunning",
+   "inputs": {},
+   "outputs": {
+    "dunning_attempted": "retry_payment issued on the in-scope overdue invoices",
+    "dunning_verified": "bool: every chased invoice read back as settled (and >=1 chased)",
+    "failed_count": "chased invoices rejected or not settled on read-back",
+    "settled_count": "invoices read back as paid after the retry"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "billing.refund",
+   "inputs": {},
+   "outputs": {
+    "refund_staged": "refund credit-note staged for human approval"
+   },
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator",
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "billing.summary",
+   "inputs": {},
+   "outputs": {
+    "billing_activity": "KPIs + overdue invoices from the live Lago core"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "GET",
+     "path": "/"
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity"
+    }
+   ],
+   "id": "billing_summary",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "chase_overdue",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "chase_overdue",
+   "route_access": [
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [],
+   "id": "find_customer",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/agent"
+    }
+   ],
+   "id": "list_overdue",
+   "route_access": [
+    "stages_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gate",
+   "declared_by": [
+    "gate"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "http": [
+    {
+     "action": "refund",
+     "method": "POST",
+     "path": "/agent/run"
+    }
+   ],
+   "id": "refund",
+   "route_access": [
+    "stages_only"
+   ],
+   "typed": false
+  }
+ ],
+ "problems": [],
+ "routes": [
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/",
+   "tools": [
+    {
+     "tool": "billing_summary"
+    }
+   ]
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/_security"
+  },
+  {
+   "gate": "tool",
+   "method": "GET",
+   "path": "/api/activity",
+   "tools": [
+    {
+     "tool": "billing_summary"
+    }
+   ]
+  },
+  {
+   "gate": "operator_credential",
+   "method": "GET",
+   "path": "/capabilities"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/docs/oauth2-redirect"
+  },
+  {
+   "gate": "public_by_design",
+   "method": "GET",
+   "path": "/health"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/openapi.json"
+  },
+  {
+   "gate": "framework",
+   "method": "GET",
+   "path": "/redoc"
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/agent/run",
+   "tools": [
+    {
+     "action": "cancel_subscription",
+     "tool": "billing.cancel_subscription"
+    },
+    {
+     "action": "create_subscription",
+     "tool": "billing.create_subscription"
+    },
+    {
+     "action": "chase_overdue",
+     "tool": "chase_overdue"
+    },
+    {
+     "action": "refund",
+     "tool": "refund"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "billing.agent_run",
+    "permission": "billing:write"
+   }
+  },
+  {
+   "gate": "tool",
+   "method": "POST",
+   "path": "/api/agent",
+   "tools": [
+    {
+     "tool": "list_overdue"
+    }
+   ],
+   "write_policy": {
+    "access": "stages_only",
+    "agent_actions": [],
+    "capability": "billing.agent",
+    "permission": "billing:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/decide",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "billing.decide",
+    "permission": "billing:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/decide/{mission_id}/approve",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "billing.decide_approve",
+    "permission": "billing:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/outcomes/observe",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "billing.outcomes_observe",
+    "permission": "billing:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
+   "path": "/api/policy/refit",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "billing.policy_refit",
+    "permission": "billing:write"
+   }
+  },
+  {
+   "gate": "operator_credential",
+   "method": "POST",
+   "path": "/invoke",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "billing.invoke",
+    "permission": "billing:write"
+   }
+  }
+ ],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "operations": 10,
+  "reachable_by_external_agents": 0,
+  "routes": 16,
+  "routes_without_a_gate_decision": 0,
+  "typed": 5,
+  "ui_calls": 1,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 6
+ },
+ "ui_calls": [
+  {
+   "call": "/api/agent",
+   "route": "/api/agent"
+  }
+ ]
+}
