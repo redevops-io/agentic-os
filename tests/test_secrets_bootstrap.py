@@ -587,3 +587,51 @@ def test_operator_startup_warns_once_without_secret(monkeypatch, caplog, tmp_pat
     monkeypatch.setenv(APPROVAL, "b" * 40)
     operator_sdk.Operator("o", []).router()
     assert not caplog.records
+
+
+# ── a host whose secrets are rendered from Vault never gets a second store back ──
+def _authority(tmp_path, text="vault\nrendered_env=/srv/stack/.env\n"):
+    p = tmp_path / "secrets-authority"
+    p.write_text(text)
+    return {"REDEVOPS_SECRETS_AUTHORITY_FILE": str(p)}
+
+
+@pytest.mark.parametrize("backend", ["auto", "file"])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_init_creates_no_local_store_or_shell_block_where_vault_is_the_authority(tmp_path, backend, dry_run):
+    (tmp_path / ".bashrc").write_text("alias ll=ls\n")
+    b = mk(tmp_path, _authority(tmp_path))
+    with pytest.raises(bs.SecretsError, match="rendered from Vault"):
+        b.init(backend, dry_run=dry_run)
+    assert not b.file.exists() and (tmp_path / ".bashrc").read_text() == "alias ll=ls\n"
+
+
+def test_rotate_changes_no_local_store_where_vault_is_the_authority(tmp_path):
+    b = mk(tmp_path, _authority(tmp_path))
+    b.file.parent.mkdir(parents=True)
+    b.file.write_text(f"{APPROVAL}=" + "a" * 64 + "\n")
+    with pytest.raises(bs.SecretsError, match="rendered from Vault"):
+        b.rotate(APPROVAL)
+    assert b.file.read_text() == f"{APPROVAL}=" + "a" * 64 + "\n"
+
+
+def test_an_unreadable_record_counts_and_another_record_does_not(tmp_path):
+    record = tmp_path / "secrets-authority"
+    record.mkdir()                                                    # exists, cannot be read as a file
+    assert mk(tmp_path, {"REDEVOPS_SECRETS_AUTHORITY_FILE": str(record)}).vault_authority() == str(record)
+    assert mk(tmp_path, _authority(tmp_path / "..", "local\n")).vault_authority() is None
+    assert mk(tmp_path, {"REDEVOPS_SECRETS_AUTHORITY_FILE": str(tmp_path / "absent")}).vault_authority() is None
+
+
+def test_the_entrypoint_hook_stays_non_fatal_and_creates_nothing_there(tmp_path, monkeypatch):
+    monkeypatch.delenv("REDEVOPS_SECRETS_AUTO", raising=False)
+    env = {"HOME": str(tmp_path), **_authority(tmp_path)}
+    assert bs.ensure_secrets(environ=env, platform="linux", home=tmp_path, keyring=None) is None
+    assert not (tmp_path / ".config").exists() and not (tmp_path / ".bashrc").exists()
+
+
+def test_the_command_says_why_and_exits_nonzero(tmp_path, capsys):
+    import argparse
+    args = argparse.Namespace(scmd="init", backend="auto", dry_run=False, no_shell_profile=False)
+    assert cli._secrets_cmd(args, b=mk(tmp_path, _authority(tmp_path))) != 0
+    assert "rendered from Vault" in capsys.readouterr().err
