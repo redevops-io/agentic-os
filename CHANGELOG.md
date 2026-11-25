@@ -15,7 +15,18 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.14; no version set)
+## Unreleased (after v0.4.15; no version set)
+
+## v0.4.15 (dashboards with no server; a page on another origin can connect; Sidekick explains a sealed Vault)
+
+- `agentic_os/dashboards/portable.py`: the dashboards' routes as one function for a host with no web framework (a browser tab running WebAssembly Python). Four dashboards work with no application; the nine application dashboards say what they need and that a credential is never placed in a page. The release carries `dashboards-kernel.zip` (built by `packaging/wasm/build_kernel_zip.py`, about 90 KB).
+- Sign-in gate: a CORS preflight from an origin listed in `PROJECTS_CORS_ORIGINS` is answered (by specification it carries no credential), and that origin can read a refusal. Before this no page on another origin could reach a gated deployment at all. Nothing else passes without a credential.
+- `deploy/apps`: optional `PROJECTS_CORS_ORIGINS`, `PROJECTS_VIEWER_TOKENS`, `PROJECTS_VIEWER_LIMITS` for the portable dashboards page.
+- A panel with nothing to draw says so in words (found on the Knowledge dashboard of a deployment with no knowledge source).
+- `packaging/acceptance/dashboards_check.py`: a dependency-free, read-only dashboards check for an installed build.
+- QA dashboard: a suite's state is the state of the release its newest run names. A platform last run for an earlier release reads "not executed" for the current one, with the release it last ran for in the drill-down (before, an old pass on one platform stood beside newer results of another and read as one qualified release). Report one product per suite.
+- `DELETE /api/dashboards/qa/results?project=&suite=&platform=&run_id=` withdraws exactly one misfiled run; the callers are the ones that may report.
+- Sidekick's stack knowledge explains a sealed Vault: what stops, how to recover, never to paste a key, and auto-unseal.
 
 - **Market Intelligence: read-only research needs no approval.** New mission template `market_intelligence_research` (watch brief, site audit, analytics, recommendations): every step only reads, so it has no approval step and finishes without a person. `radar.recommend` says whether its list proposes a change to the site (`plan_kind`: `changes` or `read_only`). The approval in `market_intelligence_loop` is unchanged: a list is approved by a person, by its digest, before anything is verified against it.
 - **Pins: bundle 0.1.12.** Built from this tree (kernel 0.4.14 or later): the UI's hashed assets are `private` when the sign-in gate is on, so a CDN in front of a gated Projects no longer serves them to a caller who has not signed in; dashboards serve a recent read while they rebuild.
