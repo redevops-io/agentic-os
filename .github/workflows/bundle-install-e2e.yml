@@ -38,6 +38,16 @@ jobs:
           chmod +x ~/.docker/cli-plugins/docker-compose
           docker compose version
           uname -m
+      # Which checks this bundle version has. Compared as VERSIONS: the conditions here used to be "the tag does not start with 0.1.0 ... 0.1.6",
+      # and bundle 0.1.10 starts with "0.1.1", so its finding loop and its remediation were skipped while the job reported success.
+      - name: What this bundle version supports
+        id: has
+        run: |
+          case "$BUNDLE_TAG" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "bundle_tag must look like 0.1.4"; exit 1;; esac
+          at_least() { [ "$(printf '%s\n' "$BUNDLE_TAG" "$1" | sort -V | head -1)" = "$1" ]; }
+          at_least 0.1.7 && echo "loop=true" >> "$GITHUB_OUTPUT" || echo "loop=false" >> "$GITHUB_OUTPUT"
+          at_least 0.1.8 && echo "remediation=true" >> "$GITHUB_OUTPUT" || echo "remediation=false" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
       - name: Install the bundle with the documented script
         working-directory: deploy/combined
         run: |
@@ -57,15 +67,23 @@ jobs:
       # A failed QA run -> an Edge Sentinel case -> the decision and the re-test in Projects -> the case closed on a verified pass, with
       # every refusal on the way. Bundles before 0.1.7 do not have the whole chain (0.1.6 was published with Edge Sentinel 0.6.3, which has no resolution endpoint): the script would fail at its first check there.
       - name: Finding loop (QA finding, Sentinel case, Projects decision, re-test, resolution)
-        if: ${{ !startsWith(env.BUNDLE_TAG, '0.1.0') && !startsWith(env.BUNDLE_TAG, '0.1.1') && !startsWith(env.BUNDLE_TAG, '0.1.2') && !startsWith(env.BUNDLE_TAG, '0.1.3') && !startsWith(env.BUNDLE_TAG, '0.1.4') && !startsWith(env.BUNDLE_TAG, '0.1.5') && !startsWith(env.BUNDLE_TAG, '0.1.6') }}
+        id: loop
+        if: steps.has.outputs.loop == 'true'
         working-directory: deploy/combined
         run: ./bundle-loop.sh
       # A REAL remediation, not a change of fixture: the same QA plan fails against the live Edge Sentinel, the edge block is proposed, approved and
       # executed through Projects (a real CrowdSec decision, read back), and the same plan then passes. From bundle 0.1.8 (Edge Sentinel 0.6.6, redevops-qa 0.6.5).
       - name: Real remediation (QA finding, approved edge block, the same plan re-tested against the live edge)
-        if: ${{ !startsWith(env.BUNDLE_TAG, '0.1.0') && !startsWith(env.BUNDLE_TAG, '0.1.1') && !startsWith(env.BUNDLE_TAG, '0.1.2') && !startsWith(env.BUNDLE_TAG, '0.1.3') && !startsWith(env.BUNDLE_TAG, '0.1.4') && !startsWith(env.BUNDLE_TAG, '0.1.5') && !startsWith(env.BUNDLE_TAG, '0.1.6') && !startsWith(env.BUNDLE_TAG, '0.1.7') }}
+        id: remediation
+        if: steps.has.outputs.remediation == 'true'
         working-directory: deploy/combined
         run: ./bundle-remediation.sh
+      - name: Both loops ran (a bundle that has them must not finish without them)
+        if: steps.has.outputs.loop == 'true'
+        working-directory: deploy/combined
+        run: |
+          test "${{ steps.loop.outcome }}" = success || { echo "the finding loop did not run to success: ${{ steps.loop.outcome }}"; exit 1; }
+          if [ "${{ steps.has.outputs.remediation }}" = true ]; then test "${{ steps.remediation.outcome }}" = success || { echo "the remediation did not run to success: ${{ steps.remediation.outcome }}"; exit 1; }; fi
       - name: On failure, keep the evidence (no secret values)
         if: failure()
         working-directory: deploy/combined
