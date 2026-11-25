@@ -948,6 +948,7 @@ class SourceCache:
         self._refreshing: set = set()
         #: bumped whenever a read is replaced or forgotten: "nothing a dashboard is built from has changed since N"
         self.generation = 0
+        self.epoch = 0                       # counts explicit invalidations (a write, a forced refresh): nothing older may be served after one
 
     def enabled(self, sid: str) -> bool:
         key = SOURCE_META[sid][2]
@@ -1027,6 +1028,7 @@ class SourceCache:
             # kept whether it answered or refused: asking a rate-limited API again straight away only extends the refusal
             self._hit = {sid: h for sid, h in self._hit.items() if sid in SOURCE_TTL_S and now - h[0] < SOURCE_TTL_S[sid]}
             self.generation += 1
+            self.epoch += 1
 
 
 __all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S", "STALE_OK_S"]

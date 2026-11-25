@@ -840,5 +840,22 @@ def test_a_dashboard_is_built_once_while_nothing_changed_and_again_when_somethin
         assert _report(c, project="billing", suite="memo", run="m1", results={"x": "failed"}, at=T0 - 5).status_code == 200
         after = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
         assert len(built) == n + 2 and _metric(after, "failed")["value"] == (_metric(first, "failed")["value"] or 0) + 1   # new data: rebuilt at once
+        # A source re-read behind the page (not a write) must not make the next viewer wait for the model: the build it had is
+        # served as it is, and one background build replaces it.
+        import threading, time as _t
+        m = len(built)
+        gate = threading.Event()
+        object.__setattr__(SV.BY_ID["qa"], "builder", lambda b: (gate.wait(5), built.append(1), real(b))[2])
+        svc.cache.generation += 1
+        t0 = _t.monotonic()
+        served = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        c.get("/api/dashboards/qa", params={"project": "billing"})
+        assert _t.monotonic() - t0 < 2 and served["generated_at"] == after["generated_at"] and len(built) == m    # nobody waited
+        gate.set()
+        for _ in range(100):
+            if len(built) > m:
+                break
+            _t.sleep(0.02)
+        assert len(built) == m + 1                                                        # exactly one rebuild, behind
     finally:
         object.__setattr__(SV.BY_ID["qa"], "builder", real)
