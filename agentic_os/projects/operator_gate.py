@@ -50,6 +50,21 @@ def _valid(auth: str) -> bool:
         return False
 
 
+def _cors_origin(scope) -> str:
+    """The request's Origin when the operator allowed that origin to call this deployment from a browser page
+    (``PROJECTS_CORS_ORIGINS``); otherwise ``""``. The same list the CORS middleware is configured with."""
+    allowed = [o.strip() for o in os.environ.get("PROJECTS_CORS_ORIGINS", "").split(",") if o.strip()]
+    if not allowed:
+        return ""
+    vals = [v for k, v in scope.get("headers", []) if k.lower() == b"origin"]
+    origin = vals[0].decode("latin-1") if len(vals) == 1 else ""
+    return origin if origin and ("*" in allowed or origin in allowed) else ""
+
+
+def _is_preflight(scope) -> bool:
+    return scope.get("method") == "OPTIONS" and any(k.lower() == b"access-control-request-method" for k, _v in scope.get("headers", []))
+
+
 class OperatorGateMiddleware:
     """Pure ASGI, outermost: a refused request reaches no route, no static file and no other middleware."""
 
@@ -64,22 +79,33 @@ class OperatorGateMiddleware:
         rel = path[len(root):] if root and path.startswith(root) else path
         if scope["type"] == "http" and scope.get("method") in ("GET", "HEAD") and rel in EXEMPT:
             return await self.app(scope, receive, send)
+        # A browser asks permission (a CORS preflight) before it sends a cross-origin request with an Authorization header, and
+        # by specification that question carries no credential. From an origin the operator allowed it goes to the CORS
+        # middleware, which answers it and reaches no route; the real request that follows is gated like any other. From any
+        # other origin it is refused here like everything else.
+        origin = _cors_origin(scope) if scope["type"] == "http" else ""
+        if origin and _is_preflight(scope):
+            return await self.app(scope, receive, send)
         vals = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
         auth = vals[0].decode("latin-1") if len(vals) == 1 else ""          # a repeated header is refused, not guessed at
         if not _configured():
-            return await self._refuse(scope, send, 503, "sign-in is required here but no credential is configured on this deployment", False)
+            return await self._refuse(scope, send, 503, "sign-in is required here but no credential is configured on this deployment", False, origin)
         if not _valid(auth):
-            return await self._refuse(scope, send, 401, "sign in to use this deployment", True)
+            return await self._refuse(scope, send, 401, "sign in to use this deployment", True, origin)
         return await self.app(scope, receive, send)
 
     @staticmethod
-    async def _refuse(scope, send, status: int, detail: str, challenge: bool) -> None:
+    async def _refuse(scope, send, status: int, detail: str, challenge: bool, origin: str = "") -> None:
         if scope["type"] == "websocket":
             await send({"type": "websocket.close", "code": 1008})
             return
         body = json.dumps({"detail": {"error": "unauthenticated" if status == 401 else "unavailable", "detail": detail}}).encode()
         headers = [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()), (b"cache-control", b"no-store")]
-        if challenge:
+        if origin:
+            # an allowed page may READ the refusal (so it can say "the token was not accepted" instead of "cannot connect");
+            # it is not asked for the operator's password: a browser's Basic prompt belongs to this deployment's own pages
+            headers += [(b"access-control-allow-origin", origin.encode("latin-1")), (b"vary", b"Origin")]
+        elif challenge:
             headers.append((b"www-authenticate", f'Basic realm="{REALM}", charset="UTF-8"'.encode()))
         await send({"type": "http.response.start", "status": status, "headers": headers})
         await send({"type": "http.response.body", "body": body})

@@ -76,6 +76,11 @@ services:
       - AGENTIC_OS_AUTHORITY_DB=/state/authority.db
       - AGENTIC_OS_REPLAY_DB=/state/replay.db
       - AGENTIC_OS_DASHBOARDS=/config/dashboards.yaml
+      # optional: let the portable dashboards page (another origin) read this deployment with a bearer. Both come from .env:
+      # the page's origin, and read-only viewer tokens ("name=token[,name=token]") with what each may see.
+      - PROJECTS_CORS_ORIGINS=${PROJECTS_CORS_ORIGINS:-}
+      - AGENTIC_OS_TENANT_TOKENS=${PROJECTS_VIEWER_TOKENS:-}
+      - AGENTIC_OS_TENANT_LIMITS=${PROJECTS_VIEWER_LIMITS:-}
       - AGENTIC_OS_DASHBOARDS_DIR=/state/dashboards
       # the applications of this stack, by service name; each key is optional and comes from .env
       - TWENTY_BASE_URL=http://twenty:3000
