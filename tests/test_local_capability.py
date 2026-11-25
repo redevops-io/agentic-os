@@ -1355,3 +1355,12 @@ def test_sr06_many_stalled_connections_do_not_exhaust_a_256_fd_sidecar():
             p.wait()
         p.stdout.close()
         p.stderr.close()
+
+
+def test_the_sign_in_panel_controls_meet_the_24px_target_size():
+    """WCAG 2.2 AA 2.5.8. Measured in Chromium before this rule: the About link was 126x17 CSS px, the summary 276x24;
+    with it both are 36 px tall. The static check keeps the padding from being dropped again."""
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[1] / "agentic_os" / "local_capability_shim.js").read_text()
+    assert '.ao-card summary{cursor:pointer;font-weight:600;color:#0a6d62;padding:6px 0}' in js
+    assert '.ao-card .ao-foot a{display:inline-block;min-height:24px;padding:6px 0;box-sizing:content-box}' in js

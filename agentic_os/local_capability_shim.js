@@ -55,7 +55,9 @@
     ".ao-card h1:focus{outline:none}" +
     ".ao-card p{margin:0 0 12px}" +
     ".ao-card details{margin:16px 0 0;padding-top:12px;border-top:1px solid #dde5e6}" +
-    ".ao-card summary{cursor:pointer;font-weight:600;color:#0a6d62}" +
+    // WCAG 2.2 AA 2.5.8: every control on the panel is at least 24 CSS px tall (the About link measured 17 px).
+    ".ao-card summary{cursor:pointer;font-weight:600;color:#0a6d62;padding:6px 0}" +
+    ".ao-card .ao-foot a{display:inline-block;min-height:24px;padding:6px 0;box-sizing:content-box}" +
     ".ao-card details p{margin:8px 0 0;color:#3f5457}" +
     ".ao-card a{color:#0a6d62}" +
     ".ao-card .ao-foot{margin:16px 0 0;font-size:.9rem}" +
