@@ -61,6 +61,21 @@ class StoreError(ValueError):
         return {"error": self.code, "detail": self.detail}
 
 
+QA_RETENTION_ENV = "AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS"
+QA_RETENTION_DEFAULT = 400
+
+
+def _retention_days() -> int:
+    """How long a reported run is kept. Default 400 days (a year of history plus a comparison window); 0 keeps everything."""
+    import os  # noqa: PLC0415
+    raw = os.environ.get(QA_RETENTION_ENV, "").strip()
+    try:
+        v = int(raw) if raw else QA_RETENTION_DEFAULT
+    except ValueError:
+        v = QA_RETENTION_DEFAULT
+    return max(0, v)
+
+
 class DashboardStore:
     def __init__(self, data_dir: str = "") -> None:
         self.durable = bool(data_dir)
@@ -77,6 +92,10 @@ class DashboardStore:
             if self.durable:
                 self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(_DDL)
+            cols = {r[1] for r in self._db.execute("PRAGMA table_info(qa_runs)")}
+            if "release" not in cols:                          # added in 0.4.8: the release a run qualified
+                self._db.execute("ALTER TABLE qa_runs ADD COLUMN release TEXT NOT NULL DEFAULT ''")
+        self.qa_retention_days = _retention_days()
 
     def close(self) -> None:
         with self._lock:
@@ -175,6 +194,7 @@ class DashboardStore:
         product = s("product", required=False, default="")
         origin = s("origin", 60, required=False, default="ci")
         ref, url = s("ref", 300, required=False, default=""), s("url", 500, required=False, default="")
+        release = s("release", 80, required=False, default="")
         if url and not re.match(r"^https?://[^\s]+$", url):
             raise StoreError(422, "invalid", "url must be an http(s) link")
         at = batch.get("at", now)
@@ -209,18 +229,38 @@ class DashboardStore:
         with self._lock:
             self._db.execute("BEGIN")
             try:
+                # One run is one row: the same (project, suite, platform, run_id) reported again REPLACES it (a retried CI step, a
+                # re-run of the reporter), so a run is never counted twice. The answer says which happened.
+                replaced = self._db.execute("SELECT 1 FROM qa_runs WHERE project=? AND suite=? AND platform=? AND run_id=?",
+                                            (project, suite, platform, run_id)).fetchone() is not None
                 self._db.execute("DELETE FROM qa_results WHERE project=? AND suite=? AND platform=? AND run_id=?", (project, suite, platform, run_id))
                 self._db.execute(
-                    "INSERT OR REPLACE INTO qa_runs(run_id,project,suite,environment,platform,product,at,origin,ref,url,evidence_verified,ingested_at,ingested_by) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO qa_runs(run_id,project,suite,environment,platform,product,at,origin,ref,url,evidence_verified,ingested_at,ingested_by,release) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (run_id, project, suite, environment, platform, product, float(at), origin, ref, url,
-                     None if ev is None else int(ev), now, by))
+                     None if ev is None else int(ev), now, by, release))
                 self._db.executemany("INSERT INTO qa_results VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+                pruned = self._prune_qa(now)
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
-        return {"run_id": run_id, "project": project, "suite": suite, "platform": platform, "results": len(rows)}
+        return {"run_id": run_id, "project": project, "suite": suite, "platform": platform, "results": len(rows),
+                "duplicate": replaced, "pruned_runs": pruned}
+
+    def _prune_qa(self, now: float) -> int:
+        """Retention: drop runs older than the window, EXCEPT the latest run of each (project, suite, platform) — the current
+        state of a lane that has gone quiet stays visible (and counts as stale), it does not silently disappear."""
+        if not self.qa_retention_days:
+            return 0
+        cut = now - self.qa_retention_days * DAY
+        old = self._db.execute(
+            "SELECT r.project, r.suite, r.platform, r.run_id FROM qa_runs r WHERE r.at < ? AND r.at < "
+            "(SELECT MAX(x.at) FROM qa_runs x WHERE x.project=r.project AND x.suite=r.suite AND x.platform=r.platform)", (cut,)).fetchall()
+        for row in old:
+            self._db.execute("DELETE FROM qa_results WHERE project=? AND suite=? AND platform=? AND run_id=?", tuple(row))
+            self._db.execute("DELETE FROM qa_runs WHERE project=? AND suite=? AND platform=? AND run_id=?", tuple(row))
+        return len(old)
 
     def qa_runs(self, *, since: float = 0.0) -> List[Dict[str, Any]]:
         with self._lock:

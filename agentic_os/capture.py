@@ -17,11 +17,18 @@ the system *understood* is an annotation on the capture, never a replacement for
 
 Nothing here sends, approves, executes or creates a Mission. A capture reaches Today only when a real next
 action exists and enough evidence ties it to a case.
+
+WHO: every capture, and every event in its history, names the actor that the server authenticated for that call
+(``actor_id`` on the item, ``actor`` on each event) and belongs to that actor's tenant. An intake never falls back to
+another identity for an authenticated caller; the built-in ``user:operator`` is only the anonymous sample sandbox's.
+With a :class:`CaptureStore` the intake is durable: items and their histories survive a restart.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -166,17 +173,66 @@ class CaptureItem:
         return d
 
 
-class Intake:
-    """One tenant's capture store, routing into a :class:`agentic_os.today.Today`. In memory (sample), bounded."""
+class CaptureStore:
+    """Durable captures: one row per item, keyed by tenant and project, holding the whole item with its event history.
+    A tenant only ever reads its own rows. SQLite, one file; safe for the threads of one process."""
 
-    def __init__(self, today: Any, *, actor: str = "user:operator", clock: Callable[[], float] = time.time) -> None:
-        self.today, self.actor, self.clock = today, actor, clock
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("CREATE TABLE IF NOT EXISTS captures (tenant TEXT NOT NULL, project TEXT NOT NULL, id TEXT NOT NULL, "
+                         "actor TEXT NOT NULL, updated REAL NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (tenant, project, id))")
+
+    def load(self, tenant: str, project: str) -> List[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT doc FROM captures WHERE tenant=? AND project=? ORDER BY updated", (tenant, project)).fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def save(self, tenant: str, project: str, doc: dict, at: float) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO captures (tenant, project, id, actor, updated, doc) VALUES (?,?,?,?,?,?)",
+                             (tenant, project, doc["id"], doc["actor_id"], at, json.dumps(doc, sort_keys=True)))
+
+
+_FIELDS = ("id", "tenant_id", "actor_id", "source", "content", "captured_at", "observed_at", "dedup_key", "status", "classification",
+           "suggested_action", "question", "linked_entity_refs", "linked_project_id", "linked_mission_id", "evidence_refs", "routing",
+           "version", "events")
+
+
+class Intake:
+    """One tenant's capture store, routing into a :class:`agentic_os.today.Today`. In memory and bounded for the sample
+    sandbox; durable when given a :class:`CaptureStore`. ``actor`` is only the default for a caller nobody authenticated
+    (the anonymous sandbox): every method takes the authenticated ``actor`` of that call and records it."""
+
+    def __init__(self, today: Any, *, actor: str = "user:operator", clock: Callable[[], float] = time.time,
+                 store: Optional[CaptureStore] = None) -> None:
+        self.today, self.actor, self.clock, self.store = today, actor, clock, store
         self._items: Dict[str, CaptureItem] = {}
         self._lock = threading.RLock()
+        for doc in (store.load(today.tenant, today.project) if store is not None else []):
+            if doc.get("tenant_id") != today.tenant:           # never adopt another tenant's row, whatever the key said
+                continue
+            item = CaptureItem(**{k: doc[k] for k in _FIELDS if k in doc}, attachments=(), source_refs=tuple(doc.get("source_refs") or ()))
+            self._items[item.id] = item
+            r = item.routing or {}
+            if r.get("kind") == "reminder" and item.status != "archived" and r.get("due") is not None:
+                cl = item.classification or {}
+                today.add_reminder(capture_id=item.id, text=cl.get("reminder_text") or item.content, due=r["due"])
 
-    def _event(self, item: CaptureItem, kind: str, text: str) -> None:
-        item.events.append({"at": self.clock(), "kind": kind, "text": text, "version": item.version})
+    def _who(self, actor: Optional[str]) -> str:
+        return (actor or "").strip() or self.actor
+
+    def _event(self, item: CaptureItem, kind: str, text: str, actor: Optional[str] = None) -> None:
+        item.events.append({"at": self.clock(), "kind": kind, "text": text, "version": item.version, "actor": self._who(actor)})
         item.version += 1
+
+    def _save(self, item: CaptureItem) -> None:
+        if self.store is not None:
+            doc = {k: getattr(item, k) for k in _FIELDS}
+            doc["source_refs"] = list(item.source_refs)
+            self.store.save(self.today.tenant, self.today.project, doc, self.clock())
 
     def _entities(self) -> List[str]:
         names = set()
@@ -188,7 +244,8 @@ class Intake:
         return sorted(names)
 
     def capture(self, content: str, *, source: str = "manual", observed_at: Optional[float] = None,
-                attachments: Sequence[Any] = (), source_refs: Sequence[str] = ()) -> dict:
+                attachments: Sequence[Any] = (), source_refs: Sequence[str] = (), actor: Optional[str] = None) -> dict:
+        who = self._who(actor)
         text = (content or "").strip()
         if not text:
             raise CaptureError(422, "empty", "write something to capture")
@@ -200,66 +257,68 @@ class Intake:
             raise CaptureError(422, "attachments_unsupported", "attachments are not supported yet")
         with self._lock:
             now = self.clock()
-            key = hashlib.sha256(f"{self.today.tenant}|{self.actor}|{source}|{_norm_text(text)}".encode()).hexdigest()[:24]
+            key = hashlib.sha256(f"{self.today.tenant}|{who}|{source}|{_norm_text(text)}".encode()).hexdigest()[:24]
             prior = next((i for i in self._items.values() if i.dedup_key == key and now - i.captured_at < DEDUP_WINDOW_S
                           and i.status != "archived"), None)
             if prior is not None:                              # same words, same place, same day: not a second capture
-                self._event(prior, "duplicate", "Captured again — kept the original")
+                self._event(prior, "duplicate", "Captured again — kept the original", who)
+                self._save(prior)
                 return {**prior.view(), "duplicate": True}
             if len(self._items) >= MAX_PER_SESSION:
                 raise CaptureError(429, "too_many", "too many captures in this session")
             item = CaptureItem(id="cap_" + hashlib.sha256(f"{key}|{now}|{len(self._items)}".encode()).hexdigest()[:14],
-                               tenant_id=self.today.tenant, actor_id=self.actor, source=source, content=text,
+                               tenant_id=self.today.tenant, actor_id=who, source=source, content=text,
                                captured_at=now, observed_at=observed_at if observed_at is not None else now,
                                dedup_key=key, attachments=(), source_refs=tuple(source_refs),
                                linked_project_id=self.today.project)
             self._items[item.id] = item
-            self._event(item, "captured", f"Captured from {source}")
+            self._event(item, "captured", f"Captured from {source}", who)
             item.classification = classify(text, now=now, known_entities=self._entities())
             self._event(item, "classified", f"Understood as {item.classification['intent']} "
-                                            f"({item.classification['method']})")
-            self._route(item)
+                                            f"({item.classification['method']})", who)
+            self._route(item, who)
+            self._save(item)
             return {**item.view(), "duplicate": False}
 
     # ── routing ─────────────────────────────────────────────────────────────────────────
-    def _route(self, item: CaptureItem) -> None:
+    def _route(self, item: CaptureItem, who: Optional[str] = None) -> None:
         cl = item.classification or {}
         intent = cl.get("intent")
         now = self.clock()
         if intent == "reminder":
             if cl.get("due") is None:
-                return self._ask(item, "When should I remind you?", [], "reminder")
+                return self._ask(item, "When should I remind you?", [], "reminder", who)
             r = self.today.add_reminder(capture_id=item.id, text=cl.get("reminder_text") or item.content, due=cl["due"])
             item.status, item.linked_entity_refs = "classified", [r["item_id"]]
             item.suggested_action = {"kind": "reminder", "due": cl["due"]}
             item.routing = {"kind": "reminder", "item_id": r["item_id"], "due": cl["due"], "in_today_now": cl["due"] <= now}
-            self._event(item, "routed", "Scheduled a reminder")
+            self._event(item, "routed", "Scheduled a reminder", who)
         elif intent == "investigation":
             item.status = "classified"
             item.suggested_action = {"kind": "investigate", "label": "Investigate: " + item.content}
             item.routing = {"kind": "investigation_candidate", "in_today_now": False}
-            self._event(item, "routed", "Kept as an investigation candidate (not in Today)")
+            self._event(item, "routed", "Kept as an investigation candidate (not in Today)", who)
         elif intent in ("case_update", "draft_action"):
             matches = match_cases(item.content, self.today.known_cases(), cl)
             good = [m for m in matches if m["score"] >= MATCH_THRESHOLD]
             if not good:
                 return self._ask(item, "Which case is this about?" if matches else
                                  "I couldn't tie this to an existing case. Who or what is it about?",
-                                 matches[:4], "match")
+                                 matches[:4], "match", who)
             if len(good) > 1 and good[0]["score"] - good[1]["score"] <= AMBIGUITY_MARGIN:
-                return self._ask(item, "This could be more than one case — which one?", good[:4], "match")
-            self._link(item, good[0]["case_id"])
+                return self._ask(item, "This could be more than one case — which one?", good[:4], "match", who)
+            self._link(item, good[0]["case_id"], who)
         else:
             self._ask(item, "I wasn't sure what to do with this. Is it a reminder, an update on a case, or something to send?",
-                      [], "unclear")
+                      [], "unclear", who)
 
-    def _ask(self, item: CaptureItem, text: str, options: Sequence[dict], why: str) -> None:
+    def _ask(self, item: CaptureItem, text: str, options: Sequence[dict], why: str, who: Optional[str] = None) -> None:
         item.status = "needs_clarification"
         item.question = {"text": text, "why": why, "options": [{"case_id": o["case_id"], "label": o["label"]} for o in options]}
         item.routing = {"kind": "intake", "in_today_now": False}
-        self._event(item, "needs_clarification", text)
+        self._event(item, "needs_clarification", text, who)
 
-    def _link(self, item: CaptureItem, case_id: str) -> None:
+    def _link(self, item: CaptureItem, case_id: str, who: Optional[str] = None) -> None:
         got = self.today.attach_evidence(case_id, capture_id=item.id, text=item.content, observed_at=item.observed_at)
         item.status, item.question = "classified", None
         item.linked_entity_refs = [case_id]
@@ -268,25 +327,28 @@ class Intake:
         item.suggested_action = {"kind": "review_case", "label": "Review the draft and approve it" if intent == "draft_action"
                                  else "Review the suggested follow-up", "approval_required": True}
         item.routing = {"kind": "case", "item_id": case_id, "title": got["title"], "in_today_now": True}
-        self._event(item, "routed", f"Linked to “{got['title']}” as evidence")
+        self._event(item, "routed", f"Linked to “{got['title']}” as evidence", who)
 
     # ── clarification / housekeeping ────────────────────────────────────────────────────
-    def resolve(self, capture_id: str, case_id: str) -> dict:
+    def resolve(self, capture_id: str, case_id: str, *, actor: Optional[str] = None) -> dict:
+        who = self._who(actor)
         with self._lock:
             item = self._get(capture_id)
             if item.status != "needs_clarification" or not item.question or not item.question["options"]:
                 raise CaptureError(409, "nothing_to_resolve", "this capture is not waiting on a case choice")
             if case_id not in {o["case_id"] for o in item.question["options"]}:
                 raise CaptureError(422, "not_an_option", "choose one of the suggested cases")
-            self._event(item, "resolved", "You chose the case")
-            self._link(item, case_id)
+            self._event(item, "resolved", "You chose the case", who)
+            self._link(item, case_id, who)
+            self._save(item)
             return item.view()
 
-    def archive(self, capture_id: str) -> dict:
+    def archive(self, capture_id: str, *, actor: Optional[str] = None) -> dict:
         with self._lock:
             item = self._get(capture_id)
             item.status = "archived"
-            self._event(item, "archived", "Archived")
+            self._event(item, "archived", "Archived", actor)
+            self._save(item)
             return item.view()
 
     def _get(self, capture_id: str) -> CaptureItem:

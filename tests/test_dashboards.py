@@ -225,6 +225,37 @@ def test_a_reported_test_is_planned_on_every_platform_its_suite_names(qa):
     assert ("t5", "android") not in {(r["fields"]["test_id"], r["fields"]["platform"]) for r in missing}
 
 
+def test_a_run_reported_twice_is_one_run_and_says_so(qa):
+    c, *_ = qa
+    before = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    p0, f0 = _metric(before, "planned")["value"] or 0, _metric(before, "failed")["value"] or 0
+    first = _report(c, project="billing", suite="ledger-ci", run="ci-77", results={"a": "passed", "b": "failed"}, at=T0 - 120, release="v1.2.0").json()
+    again = _report(c, project="billing", suite="ledger-ci", run="ci-77", results={"a": "passed", "b": "passed"}, at=T0 - 100, release="v1.2.0").json()
+    assert first["duplicate"] is False and again["duplicate"] is True
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    assert _metric(d, "planned")["value"] == p0 + 2 and _metric(d, "failed")["value"] == f0     # the retry replaced the run, it did not add one
+    runs = [r for r in c.get("/api/dashboards/qa/drill", params={"key": "cells:planned", "project": "billing"}).json()["records"]]
+    assert {r["fields"]["release"] for r in runs if r["fields"]["suite"] == "ledger-ci"} == {"v1.2.0"}
+
+
+def test_old_runs_are_pruned_but_the_latest_of_a_quiet_lane_is_kept(monkeypatch, tmp_path):
+    from agentic_os.dashboards.store import DAY, DashboardStore
+    monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS", "30")
+    st = DashboardStore(str(tmp_path))
+    now = 2_000_000_000.0
+
+    def run(suite, rid, age):
+        return st.ingest_qa({"project": "p", "suite": suite, "run_id": rid, "at": now - age * DAY, "results": [{"test_id": "t", "status": "passed"}]}, by="ci", now=now)
+    run("busy", "old-1", 90); run("busy", "old-2", 60); run("quiet", "only", 200)
+    out = run("busy", "new", 1)
+    assert out["pruned_runs"] == 1                       # old-1 went when old-2 arrived, old-2 goes now
+    left = {(r["suite"], r["run_id"]) for r in st.qa_runs()}
+    assert left == {("busy", "new"), ("quiet", "only")}
+    assert st.qa_results([("p", "busy", "default", "old-1")]) == {("p", "busy", "default", "old-1"): []} or not st.qa_results([("p", "busy", "default", "old-1")]).get(("p", "busy", "default", "old-1"))
+    monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS", "0")
+    assert DashboardStore(str(tmp_path / "keep")).qa_retention_days == 0
+
+
 # ── history ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 def test_history_is_recorded_per_project_and_aggregated_as_sums(qa):
     c, svc, clock = qa

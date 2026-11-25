@@ -1,0 +1,109 @@
+name: Report test results to the QA portfolio dashboard
+description: >
+  Reports JUnit result files to a Projects deployment's QA dashboard, by project, release, suite, environment and platform.
+  A run reported twice (a retried job, a re-run) replaces itself: it is never counted twice. A test that is not in the file is
+  not reported and the dashboard counts it as not executed; a skipped test is "unsupported" or "blocked", never "passed".
+inputs:
+  junit:
+    description: One or more JUnit XML files (newline or space separated; globs allowed). Missing files are an error unless allow-missing is true.
+    required: true
+  project:
+    description: The project id on the dashboard (must exist in that deployment's dashboards file).
+    required: true
+  suite:
+    description: The suite id, e.g. unit, integration, e2e.
+    required: true
+  platform:
+    description: Where the tests ran. Default "<runner os>-<runner arch>" in lower case, e.g. linux-x64.
+    required: false
+    default: ""
+  environment:
+    description: The environment the run exercised.
+    required: false
+    default: ci
+  release:
+    description: The release the run qualifies. Default the tag name on a tag build, else empty.
+    required: false
+    default: ""
+  url:
+    description: Base URL of the Projects deployment (no trailing slash). Empty = nothing is reported and the step says so.
+    required: false
+    default: ""
+  token:
+    description: A service identity holding dashboards.ingest_qa on that deployment. Pass a secret; empty = nothing is reported.
+    required: false
+    default: ""
+  authorization:
+    description: Only for a deployment behind the sign-in gate, the whole Authorization header value the gate accepts. Pass a secret.
+    required: false
+    default: ""
+  only:
+    description: Report only test ids matching this regular expression (one file, several platforms).
+    required: false
+    default: ""
+  exclude:
+    description: Leave out test ids matching this regular expression.
+    required: false
+    default: ""
+  allow-missing:
+    description: "true = a result file that does not exist is skipped with a warning (the tests did not run: nothing is reported for them)."
+    required: false
+    default: "false"
+  fail-on-error:
+    description: "true = fail the job when reporting fails. Default false: a dashboard outage must not fail a build, but it is always printed as a warning."
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DASHBOARDS_SERVICE_TOKEN: ${{ inputs.token }}
+        DASHBOARDS_AUTHORIZATION: ${{ inputs.authorization }}
+        QA_URL: ${{ inputs.url }}
+        QA_JUNIT: ${{ inputs.junit }}
+        QA_PROJECT: ${{ inputs.project }}
+        QA_SUITE: ${{ inputs.suite }}
+        QA_PLATFORM: ${{ inputs.platform }}
+        QA_ENVIRONMENT: ${{ inputs.environment }}
+        QA_RELEASE: ${{ inputs.release }}
+        QA_ONLY: ${{ inputs.only }}
+        QA_EXCLUDE: ${{ inputs.exclude }}
+        QA_ALLOW_MISSING: ${{ inputs.allow-missing }}
+        QA_FAIL: ${{ inputs.fail-on-error }}
+        QA_REPORTER: ${{ github.action_path }}/../../../agentic_os/dashboards/report_junit.py
+      run: |
+        set -uo pipefail
+        fail() { if [ "$QA_FAIL" = "true" ]; then echo "::error::$1"; exit 1; else echo "::warning::$1"; exit 0; fi; }
+        if [ -z "$QA_URL" ] || [ -z "$DASHBOARDS_SERVICE_TOKEN" ]; then
+          echo "::notice::QA reporting is not configured for this repository (url or token empty): nothing was reported."; exit 0
+        fi
+        py="$(command -v python3 || command -v python)" || fail "no python on this runner: nothing was reported"
+        platform="${QA_PLATFORM:-}"
+        [ -n "$platform" ] || platform="$(printf '%s-%s' "${RUNNER_OS:-unknown}" "${RUNNER_ARCH:-unknown}" | tr '[:upper:]' '[:lower:]')"
+        release="${QA_RELEASE:-}"
+        [ -n "$release" ] || { [ "${GITHUB_REF_TYPE:-}" = "tag" ] && release="${GITHUB_REF_NAME:-}"; } || true
+        # One id per workflow run and job: a re-run of the same job replaces its own report instead of adding a second run.
+        run_id="gh-${GITHUB_RUN_ID:-local}-${GITHUB_JOB:-job}"
+        link="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}"
+        shopt -s nullglob
+        files=(); missing=0
+        for pat in $QA_JUNIT; do
+          got=( $pat )
+          if [ ${#got[@]} -eq 0 ]; then echo "::warning::no result file matches $pat"; missing=1; else files+=( "${got[@]}" ); fi
+        done
+        if [ "$missing" = 1 ] && [ "$QA_ALLOW_MISSING" != "true" ]; then fail "a result file is missing: the tests did not produce it, so nothing is reported as passed"; fi
+        [ ${#files[@]} -gt 0 ] || { echo "::notice::no result file to report"; exit 0; }
+        rc=0; n=0
+        for f in "${files[@]}"; do
+          n=$((n+1)); rid="$run_id"; [ ${#files[@]} -gt 1 ] && rid="$run_id-$n"
+          args=( "$f" --url "$QA_URL" --project "$QA_PROJECT" --suite "$QA_SUITE" --platform "$platform" --environment "$QA_ENVIRONMENT"
+                 --run-id "$rid" --origin github-actions --ref "${GITHUB_SHA:-}" --link "$link" )
+          [ -n "$release" ] && args+=( --release "$release" )
+          [ -n "$QA_ONLY" ] && args+=( --only "$QA_ONLY" )
+          [ -n "$QA_EXCLUDE" ] && args+=( --exclude "$QA_EXCLUDE" )
+          out="$("$py" "$QA_REPORTER" "${args[@]}" 2>&1)" || { rc=1; echo "::warning::reporting $f failed: $out"; continue; }
+          echo "reported $f: $out"
+          echo "- \`$QA_PROJECT\` / \`$QA_SUITE\` on \`$platform\`${release:+ for \`$release\`}: $out" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        done
+        [ "$rc" = 0 ] || fail "one or more result files could not be reported"

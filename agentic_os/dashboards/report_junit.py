@@ -59,7 +59,7 @@ def main(argv: "List[str] | None" = None) -> int:
     ap.add_argument("junit")
     for a in ("url", "project", "suite", "run-id"):
         ap.add_argument(f"--{a}", required=True)
-    for a, d in (("platform", "default"), ("environment", ""), ("product", ""), ("origin", "ci"), ("ref", ""), ("link", "")):
+    for a, d in (("platform", "default"), ("environment", ""), ("product", ""), ("origin", "ci"), ("ref", ""), ("link", ""), ("release", "")):
         ap.add_argument(f"--{a}", default=d)
     ap.add_argument("--at", type=float, default=0.0, help="epoch seconds the run finished (default: now)")
     ap.add_argument("--only", default="", help="report only test ids matching this regular expression")
@@ -73,6 +73,8 @@ def main(argv: "List[str] | None" = None) -> int:
         return 2
     body = {"project": a.project, "suite": a.suite, "run_id": a.run_id, "platform": a.platform, "environment": a.environment, "product": a.product,
             "origin": a.origin, "ref": a.ref, "url": a.link, "at": a.at or time.time(), "results": results}
+    if a.release:
+        body["release"] = a.release
     if a.evidence_verified:
         body["evidence_verified"] = a.evidence_verified == "yes"
     counts: Dict[str, int] = {}

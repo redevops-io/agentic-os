@@ -49,6 +49,25 @@ requirements it covers. A requirement counts as covered only when every linked t
 `untested` and counts against coverage. A suite that names its `platforms` is expected on each of them: any test it reported is planned on
 every named platform, and a platform with no run shows as not executed.
 
+In GitHub Actions, the reusable action does it in one step (it never fails the build on a dashboard outage unless asked to,
+and reports nothing, with a notice, when the URL or token is not configured):
+
+```yaml
+- run: pytest --junitxml=results.xml
+- if: always()                       # report failures too; a missing results.xml is an error, not a pass
+  uses: redevops-io/agentic-os/.github/actions/report-qa@v0.4.8
+  with:
+    junit: results.xml
+    project: storefront
+    suite: unit
+    url: ${{ vars.QA_DASHBOARD_URL }}
+    token: ${{ secrets.QA_DASHBOARD_TOKEN }}
+```
+
+`platform` defaults to the runner (`linux-x64`), `release` to the tag on a tag build, and the run id to the workflow run and
+job, so a re-run replaces its own report (`duplicate: true` in the answer) instead of adding a second run. Runs are kept for
+`AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS` (default 400; `0` keeps everything); the latest run of every lane is always kept.
+
 A CI lane that does not run through redevops-qa reports its results:
 
 ```bash

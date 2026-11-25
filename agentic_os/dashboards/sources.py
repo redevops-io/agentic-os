@@ -140,13 +140,17 @@ _MISSION_STATE = {"succeeded": "completed", "completed": "completed", "failed": 
                   "waiting_human": "needs", "planning": "running", "running": "running", "scheduled": "scheduled"}
 
 
-def _basis(ctx: Context) -> str:
-    """Whether the provider's own rows are a demo sample (labelled so on every panel that uses them)."""
-    name = type(ctx.provider).__name__
-    return "sample" if "Sample" in name and getattr(ctx.provider, "today_sample_cases", False) and ctx.hub is None else "live"
+def _basis(ctx: Context, *, product_rows: bool = False) -> str:
+    """Whether the provider's own rows are fixtures, labelled so on every panel that uses them. A provider says so itself
+    (``serves_fixtures``); a products registry replaces the fixture rows of the views it feeds (missions, attention, activity)
+    unless the operator kept them, and it never replaces the provider's own sources or runtime units."""
+    if not getattr(ctx.provider, "serves_fixtures", False):
+        return "live"
+    if product_rows and ctx.hub is not None and not getattr(ctx.hub.registry, "keep_sample_rows", False):
+        return "live"
+    return "sample"
 
 
-# ── the runtime's own projections ───────────────────────────────────────────────────────────────────────────────────
 def missions(ctx: Context) -> SourceResult:
     now = ctx.now()
     rows: List[Record] = []
@@ -194,7 +198,7 @@ def missions(ctx: Context) -> SourceResult:
             ref=refs[0] if refs else f"mission:{m.get('id', '')}"))
     if rt_error:
         return SourceResult(_status("missions", STALE if rows else UNAVAILABLE, detail=rt_error, at=now if rows else 0.0, n=len(rows)), rows)
-    return SourceResult(_status("missions", at=now, n=len(rows), basis="live" if rt is not None else _basis(ctx)), rows)
+    return SourceResult(_status("missions", at=now, n=len(rows), basis="live" if rt is not None else _basis(ctx, product_rows=True)), rows)
 
 
 def attention(ctx: Context) -> SourceResult:
@@ -213,7 +217,7 @@ def attention(ctx: Context) -> SourceResult:
             fields={"reason": str(a.get("reason", "")), "consequence": str(a.get("consequence", "")), "priority": a.get("priority", 0),
                     "runtime": str(a.get("source_runtime", ""))},
             ref=refs[0] if refs else f"attention:{a.get('id', '')}"))
-    return SourceResult(_status("attention", at=now, n=len(rows), basis=_basis(ctx)), rows)
+    return SourceResult(_status("attention", at=now, n=len(rows), basis=_basis(ctx, product_rows=True)), rows)
 
 
 def runtime(ctx: Context) -> SourceResult:
@@ -241,7 +245,7 @@ def runtime(ctx: Context) -> SourceResult:
                                fields={"detail": h.get("detail", ""), "version": st.get("version", ""), "group": "product",
                                        "platform": str((st.get("info") or {}).get("platform") or "")},
                                ref=f"product:{spec.id}", url=spec.ui_url))
-    return SourceResult(_status("runtime", at=now, n=len(rows), basis=_basis(ctx) if hub is None else "live"), rows)
+    return SourceResult(_status("runtime", at=now, n=len(rows), basis=_basis(ctx)), rows)
 
 
 def context_sources(ctx: Context) -> SourceResult:
@@ -280,6 +284,8 @@ def deployment(ctx: Context) -> SourceResult:
         view = fn(ctx.default_project) or {}
     except Exception as e:  # noqa: BLE001
         return SourceResult(_status("deployment", UNAVAILABLE, detail=f"the inspection could not be read ({type(e).__name__})"))
+    if (view.get("boundary") or {}).get("inspection") == "unavailable":
+        return SourceResult(_status("deployment", NOT_CONNECTED, detail="no deployment is named for inspection (PROJECTS_INSPECTION_TARGET)"))
     live = bool(view.get("connected"))
     rows = [Record(source="deployment", kind="deployment_finding", id=f"{f.get('source', '')}:{f.get('kind', '')}:{i}", title=str(f.get("detail") or f.get("kind") or ""),
                    status=str(f.get("severity") or "unknown").lower(), project=ctx.default_project, at=now,
@@ -451,7 +457,8 @@ def qa_ingest(ctx: Context) -> SourceResult:
         spec = ctx.config.suites.get(r["suite"])
         base = {"suite": r["suite"], "suite_name": spec.name if spec else r["suite"], "environment": r["environment"] or (spec.environment if spec else ""),
                 "product": r["product"] or (spec.product if spec else ""), "platform": r["platform"], "origin": r["origin"],
-                "evidence_verified": None if r["evidence_verified"] is None else bool(r["evidence_verified"])}
+                "evidence_verified": None if r["evidence_verified"] is None else bool(r["evidence_verified"]),
+                "release": r["release"] if "release" in r.keys() else ""}
         res = results.get(key, [])
         failed = sum(1 for x in res if x["status"] == "failed")
         ref = r["ref"] or f"{r['origin']}:{r['run_id']}"
