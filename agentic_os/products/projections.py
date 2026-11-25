@@ -348,6 +348,11 @@ class ProductProjectionsMixin:
 
     # -- the four existing views ---------------------------------------------------------------
     def _keep(self) -> bool:
+        """Whether the provider's own rows stay next to the product rows. The rule exists to keep demo rows away from real
+        approvals, so it applies to a provider that serves fixtures; a provider whose rows are real (a production deployment
+        reading its Mission Plane) always keeps them: dropping those would hide real missions."""
+        if not getattr(self, "serves_fixtures", True):
+            return True
         return bool(self.products_hub.registry.keep_sample_rows)
 
     def missions(self, project_id: str) -> List[dict]:

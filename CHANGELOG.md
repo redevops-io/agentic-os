@@ -15,7 +15,13 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.8; no version set)
+## Unreleased (after v0.4.9; no version set)
+
+## v0.4.9 (real rows stay; the kernel reports its own test runs)
+
+- With a products registry configured, a production deployment's own real rows (Mission Plane missions, activity) are kept next to the product rows. The rule that drops demo rows beside real approvals also dropped real ones.
+- Projects UI v0.3.2: the first paint no longer waits for the deployment answer (v0.3.1 pushed the dashboards' largest paint past 2.5 s).
+- The merge gate reports the kernel's test run on `main` to the QA portfolio dashboard through `.github/actions/report-qa`.
 
 - **Pins: Edge Sentinel 0.6.7, bundle 0.1.10.** The bundle's Projects image is built from this tree (kernel 0.4.8 and later: the dashboards, no sample data in the production profile).
 
