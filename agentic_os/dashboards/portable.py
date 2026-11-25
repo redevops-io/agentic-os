@@ -94,6 +94,21 @@ class PortableDashboards:
                            "page; connect to a Projects deployment that holds it to see this dashboard."})
         return out
 
+    def _not_offered_here(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """The served catalogue tells an operator which setting to change and to restart. A page has no settings and no
+        server: it says what THIS page can do about it instead."""
+        out = {k: entry[k] for k in ("id", "title", "priority", "about", "connect") if k in entry}
+        if entry["id"] == "qa":
+            out["why"] = "No test results have been added in this browser yet."
+            out["needs"] = [{"id": "qa_ingest", "label": SOURCE_META["qa_ingest"][0], "state": "not_connected", "detail": "",
+                             "remedy": "use \"Add test results\" on this page with a JUnit XML file"}]
+            return out
+        df = BY_ID[entry["id"]]
+        out["why"] = "This page cannot read it: that takes the application's credential, and a credential is never placed in a web page."
+        out["needs"] = [{"id": sid, "label": SOURCE_META[sid][0], "state": "not_connected", "detail": "",
+                         "remedy": "connect this page to a Projects deployment that holds this connection"} for sid in df.needs_any]
+        return out
+
     # ── one entry point ─────────────────────────────────────────────────────────────────────────
     def handle(self, method: str, path: str, query: Optional[Mapping[str, Any]] = None, body: Any = None) -> Tuple[int, Dict[str, Any]]:
         method, q = method.upper(), {str(k): str(v) for k, v in (query or {}).items() if v is not None}
@@ -115,6 +130,7 @@ class PortableDashboards:
         if not rest and method == "GET":
             out = svc.catalog(acc)
             out["access"]["can_save"] = True
+            out["not_connected"] = [self._not_offered_here(e) for e in out["not_connected"]]
             return 200, out
         if rest == ["_portable"] and method == "GET":
             return 200, self.describe()
