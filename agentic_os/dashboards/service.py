@@ -22,6 +22,8 @@ from .store import DAY, DashboardStore, open_store
 
 MAX_DRILL = 200
 FRESH_MIN_INTERVAL_S = 5.0
+#: how long a built dashboard may be handed out again while nothing it was built from has changed
+BUILD_MEMO_S = 30.0
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,8 @@ class DashboardService:
                            clients=dict(clients or {}))
         self.cache = SourceCache(self.ctx)
         self._last_fresh = -1e9
+        self._memo: Dict[Any, Any] = {}
+        self._memo_lock = __import__("threading").Lock()
 
     # ── projects ──────────────────────────────────────────────────────────────────────────────────
     def _provider_projects(self) -> List[Dict[str, Any]]:
@@ -168,6 +172,15 @@ class DashboardService:
             self._last_fresh = time.monotonic()
             self.cache.invalidate()
         self.cache.warm([sid for sid in WARM.get(df.id, df.needs_any) if acc.source(sid)])
+        # A dashboard already built from exactly these reads, for exactly this caller and these filters, is the same dashboard:
+        # it is handed out again instead of being rebuilt (the QA model walks every result of every loaded run). It is dropped
+        # as soon as any read is replaced, and after BUILD_MEMO_S regardless, because some figures depend on the time of day.
+        memo_key = (df.id, filters, acc.principal, acc.grant, acc.basis)
+        gen, now_m = self.cache.generation, time.monotonic()
+        with self._memo_lock:
+            hit = self._memo.get(memo_key)
+            if hit and hit[0] == gen and now_m - hit[1] < BUILD_MEMO_S:
+                return hit[2]
         d = Dashboard(id=df.id, title=df.title, priority=df.priority)
         b = Build(dashboard=d, cache=self.cache, access=acc, store=self.store, filters=filters, projects=self.projects(), now=self.clock())
         df.builder(b)
@@ -179,6 +192,11 @@ class DashboardService:
             d.empty = f"This dashboard needs {need}, which is not connected on this deployment. What is shown comes from other connected applications only."
         connected = [s for s in d.sources if s.state != NOT_CONNECTED]
         d.sources = connected or d.sources          # a source that was never connected is not listed next to ones that are
+        if self.cache.generation == gen:            # nothing was re-read while this was being built: it is a faithful snapshot
+            with self._memo_lock:
+                if len(self._memo) >= 64:
+                    self._memo.pop(min(self._memo, key=lambda k: self._memo[k][1]))
+                self._memo[memo_key] = (gen, now_m, d)
         return d
 
     def drill(self, dashboard_id: str, key: str, filters: Filters, acc: Access, *, limit: int = MAX_DRILL) -> Dict[str, Any]:

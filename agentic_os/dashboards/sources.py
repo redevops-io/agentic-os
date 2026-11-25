@@ -25,6 +25,8 @@ from .contracts import GATED, NOT_CONNECTED, OK, STALE, UNAVAILABLE, Record, Sou
 from .store import DAY, DashboardStore
 
 CACHE_TTL_S = 20.0
+#: runs of each (project, suite, platform) whose individual results are loaded; older runs contribute counts only
+QA_RUNS_IN_FULL = 8
 #: how old a read may be and still be SERVED (with its age shown) while a background read replaces it
 STALE_OK_S = 300.0
 #: sources whose application rate-limits its API are read less often
@@ -463,11 +465,33 @@ def qa_ingest(ctx: Context) -> SourceResult:
     if not runs:
         return SourceResult(_status("qa_ingest", NOT_CONNECTED, detail="no test results have been reported to this deployment",
                                     remedy="report a run with POST /api/dashboards/qa/results (see docs/DASHBOARDS.md)", basis="ingested"))
-    keys = [(r["project"], r["suite"], r["platform"], r["run_id"]) for r in runs]
-    results = ctx.store.qa_results(keys)
+    # Every result of the latest runs of each lane (what the current state, regressions and flakiness are read from); of older
+    # runs only the counts per status, taken by the database. A lane that reports a 9,000-test run on every merge would otherwise
+    # put millions of rows through every dashboard build within weeks.
+    by_lane: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+    for r in runs:
+        by_lane.setdefault((r["project"], r["suite"], r["platform"]), []).append(r)
+    full = set()
+    for lane in by_lane.values():
+        for r in sorted(lane, key=lambda x: -x["at"])[:QA_RUNS_IN_FULL]:
+            full.add((r["project"], r["suite"], r["platform"], r["run_id"]))
+    results = ctx.store.qa_results(sorted(full))
+    counts = ctx.store.qa_run_counts(since=now - max(ctx.config.inventory_days, 90) * DAY) if len(full) < len(runs) else {}
     rows: List[Record] = []
     for r in runs:
         key = (r["project"], r["suite"], r["platform"], r["run_id"])
+        if key not in full:
+            c = counts.get(key, {})
+            spec = ctx.config.suites.get(r["suite"])
+            rows.append(Record(source="qa_ingest", kind="qa_run", id=f"{r['suite']}/{r['platform']}/{r['run_id']}", title=f"{r['suite']} on {r['platform']}",
+                               at=r["at"], project=r["project"], status="failed" if c.get("failed") else "passed" if c.get("passed") else "blocked",
+                               fields={"suite": r["suite"], "suite_name": spec.name if spec else r["suite"], "environment": r["environment"] or (spec.environment if spec else ""),
+                                       "product": r["product"] or (spec.product if spec else ""), "platform": r["platform"], "origin": r["origin"],
+                                       "evidence_verified": None if r["evidence_verified"] is None else bool(r["evidence_verified"]),
+                                       "release": r["release"] if "release" in r.keys() else "", "run_id": r["run_id"], "platforms": [r["platform"]],
+                                       "counts": dict(c), "results_loaded": False},
+                               ref=r["ref"] or f"{r['origin']}:{r['run_id']}", url=r["url"]))
+            continue
         spec = ctx.config.suites.get(r["suite"])
         base = {"suite": r["suite"], "suite_name": spec.name if spec else r["suite"], "environment": r["environment"] or (spec.environment if spec else ""),
                 "product": r["product"] or (spec.product if spec else ""), "platform": r["platform"], "origin": r["origin"],
@@ -922,6 +946,8 @@ class SourceCache:
         self._lock = threading.Lock()
         self._hit: Dict[str, Tuple[float, SourceResult]] = {}
         self._refreshing: set = set()
+        #: bumped whenever a read is replaced or forgotten: "nothing a dashboard is built from has changed since N"
+        self.generation = 0
 
     def enabled(self, sid: str) -> bool:
         key = SOURCE_META[sid][2]
@@ -938,6 +964,7 @@ class SourceCache:
             res = SourceResult(_status(sid, UNAVAILABLE, detail=f"reading this source failed ({type(e).__name__})"))
         with self._lock:
             self._hit[sid] = (now, res)
+            self.generation += 1
         return res
 
     def _refresh_behind(self, sid: str) -> None:
@@ -999,6 +1026,7 @@ class SourceCache:
         with self._lock:
             # kept whether it answered or refused: asking a rate-limited API again straight away only extends the refusal
             self._hit = {sid: h for sid, h in self._hit.items() if sid in SOURCE_TTL_S and now - h[0] < SOURCE_TTL_S[sid]}
+            self.generation += 1
 
 
 __all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S", "STALE_OK_S"]

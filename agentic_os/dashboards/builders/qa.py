@@ -330,10 +330,22 @@ def build(b: Build) -> None:
             dd = day_of(r.at)
             if dd in by_day and r.status in by_day[dd] and (not b.f.platform or str(r.get("platform")) == b.f.platform):
                 by_day[dd][r.status] += 1
+    # runs older than the ones loaded in full contribute their counts (taken by the database), so the chart keeps its whole range
+    older = 0
+    for r in m.runs_in_range:
+        rc = r.get("counts", None)
+        if r.get("results_loaded", True) is False and isinstance(rc, dict) and (not b.f.platform or str(r.get("platform")) == b.f.platform):
+            dd = day_of(r.at)
+            if dd in by_day:
+                older += 1
+                for st, n in rc.items():
+                    if st in by_day[dd]:
+                        by_day[dd][st] += int(n)
     any_hist = any(sum(v.values()) for v in by_day.values())
     d.panels.append(panel("history", "Regression history", "timeseries", sources=SRC, x=days, unit="results",
                           series=[{"id": s, "label": LABEL[s], "tone": TONE[s], "values": [by_day[dd][s] for dd in days]} for s in STATUSES[:4]],
-                          note="Results reported per day. A day with no run has no bar; it is not a day of passes.",
+                          note="Results reported per day. A day with no run has no bar; it is not a day of passes."
+                               + (f" {older} older run(s) are counted here in total only; regressions and flakiness are read from the latest runs of each lane." if older else ""),
                           empty="" if any_hist else "No run reported a result in this range."))
 
     # ── defects by severity, remediation ────────────────────────────────────────────────────────────
