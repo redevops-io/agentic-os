@@ -73,13 +73,24 @@ jobs:
           for d in apps/*/; do
             ls "$d" | grep -q '^test_.*\.py$' || continue
             echo "::group::pytest $d"
-            pytest -q -p no:cacheprovider "$d" && rc=0 || rc=$?
+            pytest -q -p no:cacheprovider "$d" --junitxml="$RUNNER_TEMP/apps/$(basename "$d").xml" && rc=0 || rc=$?
             # exit 5 = "no tests collected": an import-level skip (e.g. video-ad needs the external `reel`
             # package) is not a failure; any other non-zero exit is.
             [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ] || fail=1
             echo "::endgroup::"
           done
           exit $fail
+      - name: Report Edge Sentinel's suite to the QA portfolio dashboard
+        # Edge Sentinel has no repository of its own: its tests are apps/edge-sentinel, run by the loop above
+        if: ${{ always() && github.event_name == 'push' }}
+        uses: ./.github/actions/report-qa
+        with:
+          junit: ${{ runner.temp }}/apps/edge-sentinel.xml
+          allow-missing: "true"
+          project: edge-sentinel
+          suite: unit
+          url: ${{ vars.QA_DASHBOARD_URL }}
+          token: ${{ secrets.QA_DASHBOARD_TOKEN }}
       - name: Tests must not dirty the working tree
         # Guards test hygiene: no test/fixture may rewrite tracked files (e.g. the vendored agentic_os/projects_ui)
         # or leave stray untracked files behind.
