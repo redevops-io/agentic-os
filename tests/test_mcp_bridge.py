@@ -145,3 +145,29 @@ def test_with_an_agents_directory_and_a_token_file_the_bridge_finds_the_running_
     gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": f"http://127.0.0.1:{port}", "pid": os.getpid()}), encoding="utf-8")
     token_file.unlink()
     assert "not connected to the rAIls app any more" in run()[1]["error"]["message"]       # the credential was removed
+
+
+def test_a_local_agent_gets_its_tools_from_the_bridge_and_cannot_call_one_it_was_not_offered(deployment):
+    """integrations/local-agent: model -> tool call -> bridge -> real gateway. The model is scripted here; nothing else is."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rails_agent", ROOT / "integrations" / "local-agent" / "rails_agent.py")
+    agent = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(agent)
+    mcp = agent.McpStdio([NODE, str(BRIDGE)], {"PATH": os.environ.get("PATH", ""), "RAILS_URL": deployment, "RAILS_TOKEN": TOKEN})
+    script = [{"content": None, "tool_calls": [{"id": "1", "function": {"name": "projects_list", "arguments": "{}"}},
+                                               {"id": "2", "function": {"name": "sandbox_execute", "arguments": "{\"cmd\": \"id\"}"}}]},
+              {"content": "There are projects; the sandbox tool was refused.", "tool_calls": None}]
+    seen = []
+
+    def complete(messages, tools):
+        seen.append((messages, tools))
+        return script.pop(0)
+    try:
+        out = agent.run("which projects exist?", mcp=mcp, complete=complete)
+    finally:
+        mcp.close()
+    assert out["answer"].startswith("There are projects") and "projects_list" in out["tools_offered"] and "sandbox_execute" not in out["tools_offered"]
+    assert out["calls"] == [{"tool": "projects_list", "arguments": {}, "refused": False}, {"tool": "sandbox_execute", "arguments": {"cmd": "id"}, "refused": True}]
+    tool_msgs = [m for m in seen[1][0] if m["role"] == "tool"]
+    assert json.loads(tool_msgs[0]["content"])["status"] == "ok" and json.loads(tool_msgs[1]["content"])["status"] == "denied"
+    assert all(t["function"]["parameters"]["type"] == "object" for t in seen[0][1])
