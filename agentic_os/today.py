@@ -567,9 +567,10 @@ class Today:
     @property
     def intake(self):
         from agentic_os.capture import Intake
-        if self._intake is None:
-            self._intake = Intake(self, clock=self.clock, store=self.capture_store)
-        return self._intake
+        with self._lock:                          # one intake per ledger, also when two requests ask for it together
+            if self._intake is None:
+                self._intake = Intake(self, clock=self.clock, store=self.capture_store)
+            return self._intake
 
     # ── intake hooks (agentic_os.capture routes into these; Today stays a projection) ──
     def known_cases(self) -> List[tuple]:
