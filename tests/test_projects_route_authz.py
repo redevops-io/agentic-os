@@ -55,7 +55,8 @@ def basic():
 
 def concrete(route: str) -> tuple:
     method, path = route.split(" ", 1)
-    return method, re.sub(r"\{(\w+)\}", lambda m: {"provider": "twenty", "project_id": "p1", "item_id": "i1", "capture_id": "c1"}[m.group(1)], path)
+    return method, re.sub(r"\{(\w+)\}", lambda m: {"provider": "twenty", "project_id": "p1", "item_id": "i1", "capture_id": "c1",
+                                                 "dashboard_id": "qa", "view_id": "view-0123456789abcdef"}[m.group(1)], path)
 
 
 def client(env, *, production=True, provider=None, **kw):

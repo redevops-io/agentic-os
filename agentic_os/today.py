@@ -262,6 +262,7 @@ class Today:
         self._cases: Dict[str, _Case] = {}
         self._reminders: Dict[str, _Reminder] = {}
         self._intake: Any = None
+        self.capture_store: Any = None                   # an agentic_os.capture.CaptureStore makes the intake durable
         self._undo: Dict[str, dict] = {}                 # batch undo tokens (single use, expiring)
         self._seen: Dict[str, float] = {}                # notification keys already acknowledged
         self._prefs: Dict[str, Any] = {"enabled": True, "quiet_start": None, "quiet_end": None, "tz_offset_minutes": 0}
@@ -567,7 +568,7 @@ class Today:
     def intake(self):
         from agentic_os.capture import Intake
         if self._intake is None:
-            self._intake = Intake(self, clock=self.clock)
+            self._intake = Intake(self, clock=self.clock, store=self.capture_store)
         return self._intake
 
     # ── intake hooks (agentic_os.capture routes into these; Today stays a projection) ──
