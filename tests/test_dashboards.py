@@ -238,6 +238,19 @@ def test_a_run_reported_twice_is_one_run_and_says_so(qa):
     assert {r["fields"]["release"] for r in runs if r["fields"]["suite"] == "ledger-ci"} == {"v1.2.0"}
 
 
+def test_a_whole_large_suite_is_one_report_and_an_oversize_body_is_refused_not_truncated(qa):
+    """The kernel's own suite (about 9,000 tests, 2 MB of JSON) was cut at 1 MB on the way in and answered "invalid JSON"."""
+    c, *_ = qa
+    big = {f"tests/test_module_{i // 50}.py :: test_case_number_{i} with a reasonably long descriptive name to make the body realistic": "passed" for i in range(9000)}
+    r = _report(c, project="billing", suite="kernel-size", run="big-1", results=big, at=T0 - 30)
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["results"] == 9000
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    assert _metric(d, "planned")["value"] >= 9000
+    huge = c.post("/api/dashboards/qa/results", content=b"{" + b" " * 16_000_001 + b"}", headers={"X-Service-Token": SVC, "Content-Type": "application/json"})
+    assert huge.status_code == 413 and huge.json()["error"] == "too_large"
+
+
 def test_old_runs_are_pruned_but_the_latest_of_a_quiet_lane_is_kept(monkeypatch, tmp_path):
     from agentic_os.dashboards.store import DAY, DashboardStore
     monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS", "30")
@@ -678,3 +691,45 @@ def test_metabase_must_prove_its_sign_in_even_with_no_card_configured(monkeypatc
     mb.code = 200
     d = c.get("/api/dashboards/revenue", params={"fresh": "true"}).json()
     assert _panel(d, "revenue_month")["series"][0]["values"] == [10, 12]
+
+
+# ── a read that stops early must not look like the whole application ───────────────────────────────────────────────────
+def test_the_crm_is_read_page_by_page_and_a_cut_read_says_so(monkeypatch):
+    """Found against a seeded CRM: 599 companies read as 200, because only the first page was fetched."""
+    import http.server
+    import json as _json
+    import threading
+    from urllib.parse import parse_qs, urlparse
+
+    from agentic_os.dashboards import sources as S
+
+    total = {"companies": 599, "opportunities": 7}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            obj = u.path.rsplit("/", 1)[-1]
+            q = parse_qs(u.query)
+            start = int((q.get("starting_after") or ["0"])[0])
+            limit = int((q.get("limit") or ["60"])[0])
+            rows = [{"id": f"{obj}-{i}", "name": f"{obj} {i}"} for i in range(start, min(start + limit, total[obj]))]
+            end = start + len(rows)
+            body = _json.dumps({"data": {obj: rows}, "pageInfo": {"hasNextPage": end < total[obj], "endCursor": str(end)}}).encode()
+            self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = type("C", (), {"base_url": f"http://127.0.0.1:{srv.server_address[1]}", "api_key": "k", "timeout": 5.0})()
+        rows, cut = S._twenty_all(c, "companies")
+        assert len(rows) == 599 and len({r["id"] for r in rows}) == 599 and cut is False
+        monkeypatch.setattr(S, "READ_CAP", 300)
+        rows, cut = S._twenty_all(c, "companies")
+        assert len(rows) == 300 and cut is True
+        st = S._partial("twenty", ["companies"], at=1.0, n=300)
+        assert st.state == S.STALE and "lower bound" in st.detail and "300" in st.detail
+    finally:
+        srv.shutdown()
