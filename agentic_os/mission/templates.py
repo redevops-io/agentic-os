@@ -275,8 +275,24 @@ def market_intelligence_loop(mission_id: str) -> ExecutionIntent:
                            steps=[s_brief, s_audit, s_before, s_rec, s_ok, s_qa, s_after, s_re])
 
 
+def market_intelligence_research(mission_id: str) -> ExecutionIntent:
+    """The research half of the loop, on its own: what changed on watched pages, how the site reads, where visitors come from, and the
+    ranked recommendations. Every step only READS (public pages, the analytics store); none is consequential, so the mission has no
+    approval step and runs to the end without a person. It decides nothing: `recommendations.plan_kind` says whether the list proposes a
+    change to the site (`changes`) or only information (`read_only`). A list that proposes changes is implemented through
+    `market_intelligence_loop`, whose approval step is where a person decides."""
+    s_brief = IntentStep(outcome="market_brief", value_hint="medium", need="summarise what changed on the watched competitor and vendor pages")
+    s_audit = IntentStep(outcome="site_audit", value_hint="high", need="audit the company's own site for discoverability and funnel instrumentation")
+    s_before = IntentStep(outcome="growth_attribution", value_hint="medium", need="read where visitors and leads come from")
+    s_rec = IntentStep(outcome="recommendations", inputs_from=["site_audit", "market_brief", "growth_attribution"], value_hint="high",
+                       need="rank recommendations from the audit, the brief and the analytics, each with evidence and checks")
+    return ExecutionIntent(mission_id=mission_id, rationale="market-intelligence-research template (read-only)",
+                           steps=[s_brief, s_audit, s_before, s_rec])
+
+
 TEMPLATES = {
     "market_intelligence_loop": market_intelligence_loop,
+    "market_intelligence_research": market_intelligence_research,
     "onboarding": onboarding,
     "invoice_recovery": invoice_recovery,
     "deploy_app": deploy_app,

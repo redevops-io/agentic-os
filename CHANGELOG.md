@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.14; no version set)
 
+- **Market Intelligence: read-only research needs no approval.** New mission template `market_intelligence_research` (watch brief, site audit, analytics, recommendations): every step only reads, so it has no approval step and finishes without a person. `radar.recommend` says whether its list proposes a change to the site (`plan_kind`: `changes` or `read_only`). The approval in `market_intelligence_loop` is unchanged: a list is approved by a person, by its digest, before anything is verified against it.
+
 ## v0.4.14 (nobody waits for a dashboard rebuild; the installer ships Projects; WebAssembly Python)
 
 - A dashboard is no longer rebuilt in front of a viewer because a source was re-read behind the page. With a large QA history one request in every ~20 seconds took about two seconds (measured through a CDN on the public demo); the previous build is now served for up to 120 seconds while one background build replaces it. A write (reported results) or a forced refresh still rebuilds at once.
