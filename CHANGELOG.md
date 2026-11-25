@@ -15,7 +15,15 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.13; no version set)
+## Unreleased (after v0.4.14; no version set)
+
+## v0.4.14 (nobody waits for a dashboard rebuild; the installer ships Projects; WebAssembly Python)
+
+- A dashboard is no longer rebuilt in front of a viewer because a source was re-read behind the page. With a large QA history one request in every ~20 seconds took about two seconds (measured through a CDN on the public demo); the previous build is now served for up to 120 seconds while one background build replaces it. A write (reported results) or a forced refresh still rebuilds at once.
+- `deploy/apps` ships Projects with the dashboards: the signed `redevops-projects` image pinned by digest, on port 8090, behind the operator sign-in that `bootstrap-secrets` generates, in the production profile (no sample data).
+- The dashboards kernel runs where threads cannot be started (WebAssembly Python): `packaging/wasm/dashboards_probe.mjs` proves it, `docs/DASHBOARDS_WASM.md` says which dashboards work through a remote API (all 13) and which with no server (4).
+- CI reporting: Edge Sentinel's suite and the desktop shell's jobs are reported to the QA portfolio dashboard.
+- Projects UI v0.3.5 (the stylesheet has a new content hash).
 
 ## v0.4.13 (behind the gate nothing is publicly cacheable; the QA model is bounded)
 
