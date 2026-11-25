@@ -22,7 +22,7 @@ json() { python3 -c 'import sys,json; d=json.load(sys.stdin); print('"$1"')'; }
 IP=203.0.113.7
 PROFILE=edge-sentinel-enforcement
 BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:$(get BUNDLE_TAG || true)"; BUNDLE_REF="${BUNDLE_REF%:}"
-[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.10"
+[ "$BUNDLE_REF" = "ghcr.io/redevops-io/redevops-ts:" ] && BUNDLE_REF="ghcr.io/redevops-io/redevops-ts:0.1.11"
 COMPOSE="${BUNDLE_COMPOSE:-docker compose -f oci://${BUNDLE_REF} --project-directory . --env-file .env.bundle}"
 PBASE="http://127.0.0.1:$(get PROJECTS_PORT)"; QBASE="http://127.0.0.1:$(get QA_PORT)"; SBASE="http://127.0.0.1:$(get EDGE_SENTINEL_PORT)"
 PB="$(get OPERATOR_BASIC_AUTH)"; QT="$(get QA_SERVICE_TOKEN)"; ST="$(get EDGE_SENTINEL_SERVICE_TOKEN)"

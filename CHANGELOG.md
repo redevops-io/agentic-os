@@ -24,6 +24,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 - Projects UI v0.3.3: a deep link asks for the dashboard next to the catalogue instead of after it; the catalogue is no longer fetched twice on a first visit; notifications are not requested before the project is known.
 - **Host checks on the deployment's own screens** (`PROJECTS_STATUS_DIR`, production provider): each small status file a host timer writes (for example the Vault seal check) appears in runtime health and the infrastructure dashboard, and a failed one is a "needs you" item with its remedy. A check that stops reporting for 30 minutes is shown as failed: silence is not health.
 
+- **Pins: bundle 0.1.11.** Built from this tree: kernel 0.4.11 (the capture store's first open is serialised; QA ingest takes a whole large run), Edge Sentinel 0.6.7, redevops-qa 0.6.6.
+
 ## v0.4.11 (the first page load after a start does not fail)
 
 - The durable capture store and the per-tenant Today ledger are created once, under a lock, and the store waits for a busy file. Two requests arriving together on a fresh start each opened the SQLite file and collided on the journal-mode change ("database is locked"): the first page load answered 500 on some installs. Found by the desktop candidate acceptance on two of seven installer legs.
