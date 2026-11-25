@@ -22,14 +22,14 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type EXACTLY: sign d530a05bfd831ab2a89a3d245002f9ffeb9a8bfd'
+        description: 'Type EXACTLY: sign c40c5619280642c8c9f8289f0322feb6ca9572b3'
         required: true
 
 permissions:
   contents: read
 
 env:
-  BUILD_COMMIT: d530a05bfd831ab2a89a3d245002f9ffeb9a8bfd
+  BUILD_COMMIT: c40c5619280642c8c9f8289f0322feb6ca9572b3
   PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.5"
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
     steps:
       - name: Confirm the exact commit phrase was typed
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "sign d530a05bfd831ab2a89a3d245002f9ffeb9a8bfd" ]; then
+          if [ "${{ github.event.inputs.confirm }}" != "sign c40c5619280642c8c9f8289f0322feb6ca9572b3" ]; then
             echo "::error::confirmation phrase did not match exactly; refusing to proceed"
             exit 1
           fi
@@ -52,11 +52,11 @@ jobs:
             exit 1
           fi
           TREE="$(git rev-parse "${BUILD_COMMIT}^{tree}")"
-          if [ "${TREE:0:8}" != "34c9cdb7" ]; then
-            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 34c9cdb7 prefix (got $TREE) - refusing"
+          if [ "${TREE:0:8}" != "01453033" ]; then
+            echo "::error::BUILD_COMMIT's tree hash does not start with the expected 01453033 prefix (got $TREE) - refusing"
             exit 1
           fi
-          echo "BUILD_COMMIT verified present, tree prefix 34c9cdb7 confirmed."
+          echo "BUILD_COMMIT verified present, tree prefix 01453033 confirmed."
 
   collect:
     needs: guard
@@ -70,7 +70,7 @@ jobs:
       # happens to be" (release/0.6.0 has since moved forward to add this very workflow file).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: d530a05bfd831ab2a89a3d245002f9ffeb9a8bfd
+          ref: c40c5619280642c8c9f8289f0322feb6ca9572b3
       - name: Confirm the actual checkout landed on BUILD_COMMIT (belt-and-suspenders)
         shell: bash
         run: |
@@ -203,7 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: d530a05bfd831ab2a89a3d245002f9ffeb9a8bfd
+          ref: c40c5619280642c8c9f8289f0322feb6ca9572b3
 
       - name: Download round1 state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -411,7 +411,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: d530a05bfd831ab2a89a3d245002f9ffeb9a8bfd
+          ref: c40c5619280642c8c9f8289f0322feb6ca9572b3
 
       - name: CPython 3.12.10
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -559,7 +559,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
-          ref: d530a05bfd831ab2a89a3d245002f9ffeb9a8bfd
+          ref: c40c5619280642c8c9f8289f0322feb6ca9572b3
 
       - name: Download round2 containers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
