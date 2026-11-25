@@ -38,14 +38,14 @@ threads. It now reads in the caller when a thread cannot be started (`SourceCach
 | Missions | yes | yes, empty until a Mission Plane is reachable | a runtime to read missions from |
 | Infrastructure | yes | yes, shows that nothing can be inspected | host inspection is a local service |
 | Security | yes | no | Edge Sentinel API + its token |
-| Revenue | yes | no | CRM (Twenty) API key |
+| Revenue | yes | no | CRM (Twenty) API key, optionally Metabase |
 | Finance | yes | no | ERPNext / Lago keys |
 | Procurement | yes | no | ERPNext key |
 | Support | yes | no | Chatwoot token |
-| Marketing | yes | no | Umami / Postiz / Listmonk credentials |
-| Market | yes | no | the kernel's market store |
-| AI costs | yes | no | the runtime's usage ledger |
-| Knowledge | yes | no | Context Runtime |
+| Marketing | yes | no | Postiz / Listmonk credentials |
+| Market | yes | no | Umami credentials |
+| AI costs | yes | no | the Mission Runtime's record of executed steps |
+| Knowledge | yes | no | the runtime's connected context sources |
 
 "No" in column B is not a rendering problem: in the probe each of those nine builds and explains what it needs. They read
 applications whose credentials are server-side secrets and whose APIs do not admit browser origins. Putting those keys in
