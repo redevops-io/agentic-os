@@ -512,7 +512,27 @@ def test_release_manifest_lists_the_signed_files_and_the_linux_packages(repo, tm
     (wc / "SHA256SUMS").write_text(f"{hashlib.sha256(b'signed msi').hexdigest()}  App.msi\n")
     a = art(tmp_path, c)
     shutil.copytree(a, ev / "artifacts")
+    # a manifest is refused until every platform in it has its SBOM, generated from this very commit
+    with pytest.raises(sp.Refused, match="missing sbom-linux-amd64.cdx.json"):
+        vs.release_manifest(ev, c, repo)
+    names = ["sbom-linux-amd64.cdx.json", "sbom-macos-arm64.cdx.json", "sbom-windows-x64.cdx.json"]
+
+    def sbom(name, commit=c, components=({"name": "x"},)):
+        (ev / "sbom").mkdir(exist_ok=True)
+        (ev / "sbom" / name).write_text(json.dumps({"bomFormat": "CycloneDX", "components": list(components),
+                                                      "metadata": {"component": {"properties": [{"name": "redevops:source-commit", "value": commit}]}}}))
+    for n in names:
+        sbom(n)
+    sbom(names[0], commit="0" * 40)
+    with pytest.raises(sp.Refused, match="not from the release commit"):
+        vs.release_manifest(ev, c, repo)
+    sbom(names[0], components=())
+    with pytest.raises(sp.Refused, match="not a CycloneDX SBOM with components"):
+        vs.release_manifest(ev, c, repo)
+    sbom(names[0])
     doc = json.loads(vs.release_manifest(ev, c, repo))
+    assert [f["name"] for f in doc["sbom"]] == names
+    assert all(f["sha256"] == hashlib.sha256((ev / "sbom" / f["name"]).read_bytes()).hexdigest() for f in doc["sbom"])
     assert doc["release_commit"] == c and [f["name"] for f in doc["platforms"]["macos"]] == ["App.dmg"]
     assert {f["name"] for f in doc["platforms"]["linux"]} == {"app_0.6.0_amd64.deb", "App_0.6.0_amd64.AppImage"}
     assert "P-LIN a" in doc["linux_signing_policy"]

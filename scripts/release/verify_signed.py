@@ -4,7 +4,7 @@
   verify_signed.py macos   --out DIR --input-dmg FILE --team-id TEAMID --commit R --work NEWDIR [--src DIR] [--offline] [--expect-adhoc]
   verify_signed.py windows --out DIR --stage inner|container --commit R [--expect-cn CN] [--package DIR] [--verifier-python PY --verifier FILE]
   verify_signed.py sshsig  --manifest FILE --sig FILE --pubkey FILE --commit R [--artifacts DIR]
-  verify_signed.py release-manifest --evidence DIR --commit R --repo DIR --out FILE
+  verify_signed.py release-manifest --evidence DIR --commit R --repo DIR --out FILE   (DIR/sbom/sbom-<os>-<arch>.cdx.json required)
 
 The macOS verifier replaces the c317 post-run script: no commit, tree or hash constants (every expectation comes from the run's input dmg, the release
 commit and the repository's own entitlements file) and a distribution run is expected (the PRIVATE-CANDIDATE statement is a failure). Check 4 of the c317
@@ -381,6 +381,51 @@ def sshsig(manifest: Path, sig: Path, pubkey: Path, commit: str, artifacts: Path
     return r
 
 
+def sbom_names(plats: dict) -> list[str]:
+    """The SBOM file every platform/architecture of a release must carry, from the installer names."""
+    want = set()
+    if plats.get("macos"):
+        want.add("sbom-macos-arm64.cdx.json")
+    if plats.get("windows"):
+        want.add("sbom-windows-x64.cdx.json")
+    for f in plats.get("linux", []):
+        n = f["name"].lower()
+        if "amd64" in n or "x86_64" in n:
+            want.add("sbom-linux-amd64.cdx.json")
+        elif "arm64" in n or "aarch64" in n:
+            want.add("sbom-linux-arm64.cdx.json")
+        else:
+            raise sp.Refused(f"cannot tell the architecture of the Linux file {f['name']}, so its SBOM cannot be required")
+    return sorted(want)
+
+
+def sbom_source_commit(doc: dict) -> str | None:
+    for pr in ((doc.get("metadata") or {}).get("component") or {}).get("properties") or []:
+        if pr.get("name") == "redevops:source-commit":
+            return pr.get("value")
+    return None
+
+
+def sbom_entries(evidence: Path, plats: dict, commit: str) -> list[dict]:
+    """One CycloneDX SBOM per platform/architecture, from evidence/sbom. A release manifest is refused without them:
+    the SBOMs were left off the r0prime-v0.1.3..5 releases because nothing required them (v0.6.1 had them)."""
+    base = evidence / "sbom"
+    out = []
+    for name in sbom_names(plats):
+        if not sp.regular_inside(base, name):
+            raise sp.Refused(f"missing {name} under {base}: every platform in the manifest needs its SBOM (packaging/dist/sbom/sbom.cdx.json of that platform's build)")
+        try:
+            doc = json.loads((base / name).read_text())
+        except ValueError:
+            raise sp.Refused(f"{name} is not JSON")
+        if doc.get("bomFormat") != "CycloneDX" or not doc.get("components"):
+            raise sp.Refused(f"{name} is not a CycloneDX SBOM with components")
+        if sbom_source_commit(doc) != commit:
+            raise sp.Refused(f"{name} was generated from commit {sbom_source_commit(doc)}, not from the release commit {commit}")
+        out.append({"name": name, "size": (base / name).stat().st_size, "sha256": sp.sha_f(base / name), "components": len(doc["components"])})
+    return out
+
+
 def release_manifest(evidence: Path, commit: str, repo: Path) -> bytes:
     if not is_commit(commit):
         raise sp.Refused("--commit must be the 40-hex release commit")
@@ -406,7 +451,7 @@ def release_manifest(evidence: Path, commit: str, repo: Path) -> bytes:
     if not plats["linux"]:
         raise sp.Refused("the Linux SHA256SUMS lists no .deb, .AppImage or .rpm")
     doc = {"schema": "redevops.release-manifest/1", "release": "0.6.0", "release_commit": c, "release_tree": tree, "approval_sha256": approval,
-           "evidence_manifest_sha256": sp.sha_f(evid) if evid.is_file() else None, "platforms": plats,
+           "evidence_manifest_sha256": sp.sha_f(evid) if evid.is_file() else None, "platforms": plats, "sbom": sbom_entries(evidence, plats, c),
            "linux_signing_policy": "P-LIN a: SHA256 of each package in this manifest; one detached SSHSIG over this manifest; the packages themselves are not individually signed"}
     return (json.dumps(doc, indent=1, sort_keys=True) + "\n").encode()
 

@@ -137,6 +137,20 @@ jobs:
       # - name: Sign & notarize (macOS)   if: runner.os == 'macOS' && secrets.APPLE_ID ...
       # - name: Sign (Windows)            if: runner.os == 'Windows' && secrets.WIN_CERT ...
 
+      # The SBOM under the name it is published with (sbom-<os>-<arch>.cdx.json), as a small artifact of its own: the release
+      # manifest (scripts/release/verify_signed.py release-manifest) refuses a platform without it, and the published-release
+      # check on main (packaging/acceptance/release_assets_check.py) fails a release that does not carry it.
+      - name: Name the SBOM for publication
+        id: sbomname
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-24.04) n=sbom-linux-amd64 ;; ubuntu-24.04-arm) n=sbom-linux-arm64 ;;
+            windows-2022) n=sbom-windows-x64 ;; macos-15) n=sbom-macos-arm64 ;;
+            *) echo "no SBOM name for ${{ matrix.os }}"; exit 1 ;;
+          esac
+          mkdir -p packaging/dist/sbom-release && cp packaging/dist/sbom/sbom.cdx.json "packaging/dist/sbom-release/$n.cdx.json"
+          echo "name=$n" >> "$GITHUB_OUTPUT"
       - name: Upload installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
@@ -152,6 +166,13 @@ jobs:
             deploy/launcher/src-tauri/target/release/bundle/**/*.exe
             deploy/launcher/src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: warn
+
+      - name: Upload the SBOM for publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: ${{ steps.sbomname.outputs.name }}
+          path: packaging/dist/sbom-release/*.cdx.json
+          if-no-files-found: error
 
   acceptance-ubuntu:
     needs: bundle
