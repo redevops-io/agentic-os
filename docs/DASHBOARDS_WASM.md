@@ -7,7 +7,7 @@ records what was measured, which dashboards work in which arrangement, and what 
 
 **A. Static UI, remote API.** The Projects UI is a static bundle. Built with `VITE_PROJECTS_API=<url>` it calls a Projects
 API on another origin, and that API admits the page's origin with `PROJECTS_CORS_ORIGINS=<origin>[,<origin>]`. Every
-dashboard is a projection served by `/api/dashboards/*`, so **all 13 work** this way, with the same numbers, drill-downs,
+dashboard is a projection served by `/api/dashboards/*`, so **all 14 work** this way, with the same numbers, drill-downs,
 filters and saved views as a served deployment. Nothing runs locally except the page.
 
 Limits of A: the caller authenticates with a bearer token (the CORS configuration allows headers, not cookies, so a
@@ -21,7 +21,7 @@ true:
 
     cd <any directory> && npm install pyodide@0.27.7 && node <repo>/packaging/wasm/dashboards_probe.mjs [junit.xml]
 
-Measured (Apple M-series, node 24): the kernel imports, parses a JUnit file, ingests it and builds all 13 dashboards in
+Measured (Apple M-series, node 24): the kernel imports, parses a JUnit file, ingests it and builds every dashboard (13 when measured) in
 about 0.2 s after the interpreter has loaded. With a 69-test file reported for one of two declared platforms: 138 planned,
 69 not executed, coverage 38.4 %, and the drill-down for "not executed" lists exactly 69 tests. The rules are the served
 ones because it is the same code.

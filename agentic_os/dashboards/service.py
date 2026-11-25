@@ -15,6 +15,7 @@ from . import access as accessmod
 from .access import Access
 from .build import Build
 from .builders import business, ops, qa
+from .builders.self_improvement import self_improvement
 from .config import DashboardsConfig, config_from_env
 from .contracts import NOT_CONNECTED, UNAUTHORIZED, Dashboard, Drill, Filters, Record
 from .sources import SOURCE_META, Context, SourceCache
@@ -58,6 +59,9 @@ DEFINITIONS: Tuple[Definition, ...] = (
                "Component health, product readiness and deployment findings."),
     Definition("knowledge", "Knowledge and data quality", "P2", "Operations", ("context_sources",), ops.knowledge,
                "Context sources, what was indexed or skipped, and what is stale."),
+    Definition("self_improvement", "Self-improvement", "P2", "Quality", ("sim_runs",), self_improvement,
+               "What the harness optimizer tried: predictions written before evaluation, measured outcomes, accepted and rejected edits, "
+               "regressions, transfer between runs and rollbacks."),
 )
 BY_ID = {d.id: d for d in DEFINITIONS}
 #: every source a dashboard reads (not only the ones that decide whether it is offered), fetched together before it is built

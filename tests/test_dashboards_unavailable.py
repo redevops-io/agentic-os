@@ -29,7 +29,7 @@ class Provider:
 def clean(monkeypatch):
     import os
     for k in list(os.environ):
-        if re.match(r"(TWENTY|ERPNEXT|CHATWOOT|LAGO|UMAMI|POSTIZ|LISTMONK|METABASE|MISSION_PLANE|AGENTIC_OS_DASHBOARDS|AGENTIC_OS_PRODUCTS|PROJECTS_INSPECTION)", k):
+        if re.match(r"(SIM_RUNS|TWENTY|ERPNEXT|CHATWOOT|LAGO|UMAMI|POSTIZ|LISTMONK|METABASE|MISSION_PLANE|AGENTIC_OS_DASHBOARDS|AGENTIC_OS_PRODUCTS|PROJECTS_INSPECTION)", k):
             monkeypatch.delenv(k)
     return monkeypatch
 
@@ -75,7 +75,9 @@ def test_following_the_two_remedies_literally_gets_the_application_detected(clea
 
 
 def test_every_business_source_that_has_a_collector_is_covered():
-    assert set(APPS) == set(BUSINESS_SOURCES) - {"mission_plane"}
+    # mission_plane is the deployment's own runtime; sim_runs is a directory of record files, not an application with an address
+    # - its two remedies are followed literally in tests/test_dashboards_self_improvement.py
+    assert set(APPS) == set(BUSINESS_SOURCES) - {"mission_plane", "sim_runs"}
 
 
 def test_one_connected_application_is_enough_and_an_unreachable_one_is_not_called_unconnected(clean):

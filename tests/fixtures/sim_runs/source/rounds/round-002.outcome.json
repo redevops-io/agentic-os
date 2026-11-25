@@ -1,0 +1,87 @@
+{
+ "candidates": [
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "outcome": {
+    "cost_usd": 0.0,
+    "details": {
+     "e1": "NEVER-SHOW-THIS reply text for e1",
+     "e2": "NEVER-SHOW-THIS reply text for e2",
+     "e3": "NEVER-SHOW-THIS reply text for e3",
+     "e4": "NEVER-SHOW-THIS reply text for e4"
+    },
+    "failed": [
+     "e3"
+    ],
+    "harness_id": "",
+    "passed": [
+     "e1",
+     "e2",
+     "e4"
+    ],
+    "score": 0.75,
+    "seconds": 0.0
+   },
+   "predicted": [
+    "e2"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "P1",
+   "screened_in": true,
+   "what": "add the second marker"
+  },
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "predicted": [
+    "e3"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "markers are missing",
+   "screened_in": false,
+   "what": "screen me out"
+  },
+  {
+   "files": [
+    "guardrails/policy.md"
+   ],
+   "predicted": [
+    "e3"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "guardrails/policy.md is not a file of the opencode harness surface",
+   "root_cause": "guardrails are in the way",
+   "screened_in": true,
+   "what": "edit a protected file"
+  }
+ ],
+ "chosen": 0,
+ "current": {
+  "cost_usd": 0.0,
+  "details": {
+   "e1": "NEVER-SHOW-THIS reply text for e1",
+   "e2": "NEVER-SHOW-THIS reply text for e2",
+   "e3": "NEVER-SHOW-THIS reply text for e3",
+   "e4": "NEVER-SHOW-THIS reply text for e4"
+  },
+  "failed": [
+   "e2",
+   "e3"
+  ],
+  "harness_id": "",
+  "passed": [
+   "e1",
+   "e4"
+  ],
+  "score": 0.5,
+  "seconds": 0.0
+ },
+ "note": "",
+ "promoted": "9266d153c7fa6e5d8ae953c3cc6e951e31d0850042b4ab8148200499e06faf34",
+ "round": 2
+}

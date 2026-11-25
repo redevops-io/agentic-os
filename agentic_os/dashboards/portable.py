@@ -36,6 +36,10 @@ STANDALONE = ("portfolio", "qa", "missions", "infrastructure")
 MAX_JUNIT_BYTES = 16_000_000
 
 
+#: why the browser-only page cannot show the Self-improvement dashboard
+_RUN_FILES_WHY = ("It reads the record files a Self-Improvement optimizer writes on a server, which a web page cannot reach; connect to a "
+                  "Projects deployment that reads them to see this dashboard.")
+
 class _LocalProvider:
     """What a page-only installation has: no runtime, no products, no applications."""
     serves_fixtures = False
@@ -90,7 +94,8 @@ class PortableDashboards:
             else:
                 out["unavailable"].append({
                     "id": df.id, "title": df.title, "needs": needs,
-                    "why": f"Reads {', '.join(needs)} with that application's credential. A credential is never placed in this "
+                    "why": _RUN_FILES_WHY if df.needs_any == ("sim_runs",) else
+                           f"Reads {', '.join(needs)} with that application's credential. A credential is never placed in this "
                            "page; connect to a Projects deployment that holds it to see this dashboard."})
         return out
 
@@ -104,6 +109,11 @@ class PortableDashboards:
                              "remedy": "use \"Add test results\" on this page with a JUnit XML file"}]
             return out
         df = BY_ID[entry["id"]]
+        if df.needs_any == ("sim_runs",):                  # files on a server, not an application with a credential
+            out["why"] = _RUN_FILES_WHY
+            out["needs"] = [{"id": "sim_runs", "label": SOURCE_META["sim_runs"][0], "state": "not_connected", "detail": "",
+                             "remedy": "connect this page to a Projects deployment that reads optimizer run records"}]
+            return out
         out["why"] = "This page cannot read it: that takes the application's credential, and a credential is never placed in a web page."
         out["needs"] = [{"id": sid, "label": SOURCE_META[sid][0], "state": "not_connected", "detail": "",
                          "remedy": "connect this page to a Projects deployment that holds this connection"} for sid in df.needs_any]

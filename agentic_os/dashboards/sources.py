@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import calendar
 import os
+from pathlib import Path
 import re
 import threading
 import time
@@ -54,6 +55,7 @@ SOURCE_META: Dict[str, Tuple[str, str, str]] = {
     "postiz": ("Postiz", "postiz", "postiz"),
     "listmonk": ("Listmonk", "listmonk", "listmonk"),
     "metabase": ("Control Tower (Metabase)", "metabase", "metabase"),
+    "sim_runs": ("Self-improvement run records", "", "sim_runs"),
 }
 
 
@@ -927,9 +929,36 @@ def metabase(ctx: Context) -> SourceResult:
     return SourceResult(_status("metabase", at=now, n=len(rows)), rows)
 
 
+def sim_runs(ctx: Context) -> SourceResult:
+    """Records an optimizer wrote under the directory the operator named (``sources.sim_runs.dir`` or ``SIM_RUNS_DIR``)."""
+    from . import sim_source  # noqa: PLC0415
+    where = str((ctx.config.sources.get("sim_runs") or {}).get("dir") or os.environ.get("SIM_RUNS_DIR", "")).strip()
+    if not where:
+        return SourceResult(_status("sim_runs", NOT_CONNECTED, detail="no directory of optimizer runs is named",
+                                    remedy="set `sources.sim_runs.dir` in the dashboards file, or SIM_RUNS_DIR, to the directory the runs are written to"))
+    base = Path(where)
+    if not base.is_dir():
+        return SourceResult(_status("sim_runs", UNAVAILABLE, detail="the directory of optimizer runs does not exist or cannot be read"))
+    base = base.resolve()
+    rows: List[Record] = []
+    bad: List[str] = []
+    found, cut = sim_source.run_directories(base)
+    for path in found:
+        try:
+            rows.extend(sim_source.read_run(path, base, project=ctx.default_project))
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            bad.append(f"{path.name}: {exc if isinstance(exc, sim_source.UnreadableRun) else type(exc).__name__}")
+    if bad and not rows:
+        return SourceResult(_status("sim_runs", UNAVAILABLE, detail=f"no run could be read ({'; '.join(bad)[:200]})"))
+    if bad or cut:
+        what = ([f"{len(bad)} run(s) could not be read ({'; '.join(bad)[:160]})"] if bad else []) + ([f"only the first {sim_source.MAX_RUNS} runs were read"] if cut else [])
+        return SourceResult(_status("sim_runs", STALE, at=ctx.now(), n=len(rows), basis="records", detail="; ".join(what) + ": counts here are a lower bound"), rows)
+    return SourceResult(_status("sim_runs", at=ctx.now(), n=len(rows), basis="records"), rows)
+
+
 COLLECTORS: Dict[str, Callable[[Context], SourceResult]] = {
     "missions": missions, "attention": attention, "runtime": runtime, "context_sources": context_sources,
-    "deployment": deployment, "ai_usage": ai_usage, "qa": qa, "qa_ingest": qa_ingest, "sentinel": sentinel,
+    "deployment": deployment, "ai_usage": ai_usage, "qa": qa, "qa_ingest": qa_ingest, "sentinel": sentinel, "sim_runs": sim_runs,
     "twenty": twenty, "erpnext": erpnext, "chatwoot": chatwoot, "lago": lago, "umami": umami, "postiz": postiz,
     "listmonk": listmonk, "metabase": metabase,
 }

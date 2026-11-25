@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.17; no version set)
 
+- **Self-improvement dashboard** (`sim_runs`, off until listed in the dashboards file): reads the records a harness optimizer writes (`agent-harness.sim-run/1`, `agent-harness.sim/1`) - every candidate edit with its prediction written before evaluation, measured fixed / missed / broken tasks, accepted and not-adopted edits, memory carried between runs and models, and rollbacks; each figure drills into its records. Task replies and traces are not read. Runs that accepted nothing say so.
 - **Capability manifests** (`rails.app-capabilities/1`) for every app and Projects, generated from the code: operations with action class, typed inputs and outputs, approval and reversibility; every route with its gate decision and write-access class; the paths each UI calls; and whether an external agent can reach each operation. [docs/CAPABILITY_COVERAGE.md](docs/CAPABILITY_COVERAGE.md) lists every operation it cannot. A stale manifest fails CI.
 - Fixed: the route completeness test did not see routes inside an included router that are hidden from the OpenAPI schema (two Edge Sentinel console routes had no recorded gate decision).
 
