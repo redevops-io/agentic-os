@@ -17,9 +17,10 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.10; no version set)
 
-## v0.4.10 (a whole large test run is one report)
+## v0.4.10 (a whole large test run is one report; a cut read says so)
 
 - `POST /api/dashboards/qa/results` accepts up to 16 MB (20,000 results): one run of a large suite is one request. The kernel's own run (about 9,000 tests) was cut at 1 MB on the way in and answered "invalid JSON".
+- Dashboards read every page of the CRM (a CRM with 599 companies read as 200) and up to 5,000 records of each kind from the ERP and 2,000 conversations per state from the support desk; a source that holds more is reported as partial ("counts and sums here are a lower bound") instead of looking complete. Found by seeding an isolated demo tenant and comparing with the applications' own APIs.
 - A request body over a route's limit is refused with 413 (`too_large`) by the route authorization layer; it used to be truncated silently and fail later in the handler. `RoutePolicy.max_body` sets a route's own limit.
 
 ## v0.4.9 (real rows stay; the kernel reports its own test runs)

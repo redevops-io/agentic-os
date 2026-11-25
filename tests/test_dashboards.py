@@ -691,3 +691,45 @@ def test_metabase_must_prove_its_sign_in_even_with_no_card_configured(monkeypatc
     mb.code = 200
     d = c.get("/api/dashboards/revenue", params={"fresh": "true"}).json()
     assert _panel(d, "revenue_month")["series"][0]["values"] == [10, 12]
+
+
+# ── a read that stops early must not look like the whole application ───────────────────────────────────────────────────
+def test_the_crm_is_read_page_by_page_and_a_cut_read_says_so(monkeypatch):
+    """Found against a seeded CRM: 599 companies read as 200, because only the first page was fetched."""
+    import http.server
+    import json as _json
+    import threading
+    from urllib.parse import parse_qs, urlparse
+
+    from agentic_os.dashboards import sources as S
+
+    total = {"companies": 599, "opportunities": 7}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            obj = u.path.rsplit("/", 1)[-1]
+            q = parse_qs(u.query)
+            start = int((q.get("starting_after") or ["0"])[0])
+            limit = int((q.get("limit") or ["60"])[0])
+            rows = [{"id": f"{obj}-{i}", "name": f"{obj} {i}"} for i in range(start, min(start + limit, total[obj]))]
+            end = start + len(rows)
+            body = _json.dumps({"data": {obj: rows}, "pageInfo": {"hasNextPage": end < total[obj], "endCursor": str(end)}}).encode()
+            self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = type("C", (), {"base_url": f"http://127.0.0.1:{srv.server_address[1]}", "api_key": "k", "timeout": 5.0})()
+        rows, cut = S._twenty_all(c, "companies")
+        assert len(rows) == 599 and len({r["id"] for r in rows}) == 599 and cut is False
+        monkeypatch.setattr(S, "READ_CAP", 300)
+        rows, cut = S._twenty_all(c, "companies")
+        assert len(rows) == 300 and cut is True
+        st = S._partial("twenty", ["companies"], at=1.0, n=300)
+        assert st.state == S.STALE and "lower bound" in st.detail and "300" in st.detail
+    finally:
+        srv.shutdown()

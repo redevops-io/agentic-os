@@ -95,6 +95,18 @@ def _status(sid: str, state: str = OK, *, detail: str = "", at: float = 0.0, n: 
     return SourceStatus(id=sid, label=label, app=app, state=state, detail=detail, observed_at=at, records=n, basis=basis, remedy=remedy)
 
 
+#: The most records one collector reads of one kind. A source that holds more is NOT summarised as if this were all of it:
+#: the source is then reported as partial and says so (``_partial``).
+READ_CAP = 5000
+
+
+def _partial(sid: str, what: Sequence[str], *, at: float, n: int) -> SourceStatus:
+    """A source that holds more than the collector read. Counts and sums built on it are a LOWER BOUND, so the status says
+    exactly that instead of letting a truncated read look like the whole application."""
+    return _status(sid, STALE, at=at, n=n, detail=f"only the first {READ_CAP} {', '.join(what)} were read: counts and sums here are a lower bound",
+                   remedy="narrow what this deployment reads, or raise the read limit")
+
+
 class RemoteMissionPlane:
     """A deployed Mission Plane read over its own HTTP API (``GET /missions`` and ``GET /missions/{id}/events``), shaped
     like the in-process runtime the collectors already read. Read-only; ``MISSION_PLANE_URL`` (+ optional
@@ -555,8 +567,8 @@ def twenty(ctx: Context) -> SourceResult:
     if bad:
         return SourceResult(bad)
     now, project = ctx.now(), ctx.config.source_project("twenty")
-    opps = c.opportunities(limit=200)
-    companies = c.companies(limit=200)
+    opps, more_o = _twenty_all(c, "opportunities")
+    companies, more_c = _twenty_all(c, "companies")
     if not opps and not companies and not getattr(c, "connected", None):
         # this client swallows transport errors; one cheap probe tells an empty CRM from an unreachable one
         import httpx  # noqa: PLC0415
@@ -583,7 +595,35 @@ def twenty(ctx: Context) -> SourceResult:
         rows.append(Record(source="twenty", kind="account", id=str(co.get("id", "")), title=str(co.get("name") or ""), status="account", project=project,
                            at=parse_ts(co.get("createdAt")), fields={"employees": co.get("employees")},
                            ref=f"twenty:{co.get('id', '')}", url=f"{c.base_url}/object/company/{co.get('id', '')}"))
-    return SourceResult(_status("twenty", at=now, n=len(rows)), rows)
+    cut = [w for w, m in (("opportunities", more_o), ("companies", more_c)) if m]
+    return SourceResult(_partial("twenty", cut, at=now, n=len(rows)) if cut else _status("twenty", at=now, n=len(rows)), rows)
+
+
+def _twenty_all(c: Any, obj: str) -> Tuple[List[Dict[str, Any]], bool]:
+    """Every record of one Twenty object, following the REST cursor (the first page alone is 60-200 records, which made a CRM
+    with 599 companies read as 200). Returns ``(rows, truncated)``; a transport failure returns what the client's own
+    single-page read gives, so an unreachable CRM is still told apart from an empty one by the caller's probe."""
+    import httpx  # noqa: PLC0415
+    rows: List[Dict[str, Any]] = []
+    cursor = None
+    try:
+        with httpx.Client(timeout=getattr(c, "timeout", 10.0)) as client:
+            while len(rows) < READ_CAP:
+                r = client.get(f"{c.base_url}/rest/{obj}", headers={"Authorization": f"Bearer {c.api_key}"},
+                               params={"limit": 200, **({"starting_after": cursor} if cursor else {})})
+                if r.status_code >= 400:
+                    return (rows, False) if rows else (getattr(c, obj)(limit=200), False)
+                body = r.json()
+                data = body.get("data") or {}
+                page = (data.get(obj) if isinstance(data, Mapping) else data) or []
+                rows.extend(x for x in page if isinstance(x, Mapping))
+                info = body.get("pageInfo") or {}
+                cursor = info.get("endCursor")
+                if not page or not info.get("hasNextPage") or not cursor:
+                    return rows, False
+    except Exception:  # noqa: BLE001
+        return (rows, False) if rows else (getattr(c, obj)(limit=200), False)
+    return rows[:READ_CAP], True
 
 
 def erpnext(ctx: Context) -> SourceResult:
@@ -599,29 +639,43 @@ def erpnext(ctx: Context) -> SourceResult:
             return float(v)
         except (TypeError, ValueError):
             return None
-    for d in c.get_list("Sales Invoice", ["name", "customer", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=500):
+    for d in c.get_list("Sales Invoice", ["name", "customer", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="invoice", id=str(d.get("name")), title=f"{d.get('name')} · {d.get('customer') or ''}", status=str(d.get("status") or ""),
                            project=project, at=parse_ts(d.get("posting_date")),
                            fields={"amount": money(d.get("grand_total")), "outstanding": money(d.get("outstanding_amount")), "due": parse_ts(d.get("due_date")),
                                    "customer": str(d.get("customer") or ""), "currency": str(d.get("currency") or "")},
                            ref=f"erpnext:Sales Invoice/{d.get('name')}", url=f"{base}/app/sales-invoice/{d.get('name')}"))
-    for d in c.get_list("Purchase Invoice", ["name", "supplier", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=500):
+    for d in c.get_list("Purchase Invoice", ["name", "supplier", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="bill", id=str(d.get("name")), title=f"{d.get('name')} · {d.get('supplier') or ''}", status=str(d.get("status") or ""),
                            project=project, at=parse_ts(d.get("posting_date")),
                            fields={"amount": money(d.get("grand_total")), "outstanding": money(d.get("outstanding_amount")), "due": parse_ts(d.get("due_date")),
                                    "supplier": str(d.get("supplier") or ""), "currency": str(d.get("currency") or "")},
                            ref=f"erpnext:Purchase Invoice/{d.get('name')}", url=f"{base}/app/purchase-invoice/{d.get('name')}"))
-    for d in c.get_list("Purchase Order", ["name", "supplier", "grand_total", "status", "transaction_date", "schedule_date", "per_received", "currency"], limit=500):
+    for d in c.get_list("Purchase Order", ["name", "supplier", "grand_total", "status", "transaction_date", "schedule_date", "per_received", "currency"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="purchase_order", id=str(d.get("name")), title=f"{d.get('name')} · {d.get('supplier') or ''}", status=str(d.get("status") or ""),
                            project=project, at=parse_ts(d.get("transaction_date")),
                            fields={"amount": money(d.get("grand_total")), "supplier": str(d.get("supplier") or ""), "expected": parse_ts(d.get("schedule_date")),
                                    "received_pct": money(d.get("per_received")), "currency": str(d.get("currency") or "")},
                            ref=f"erpnext:Purchase Order/{d.get('name')}", url=f"{base}/app/purchase-order/{d.get('name')}"))
-    for d in c.get_list("Supplier", ["name", "supplier_group", "disabled", "on_hold"], limit=500):
+    for d in c.get_list("Supplier", ["name", "supplier_group", "disabled", "on_hold"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="supplier", id=str(d.get("name")), title=str(d.get("name")), project=project, at=0.0,
                            status="on_hold" if d.get("on_hold") else "disabled" if d.get("disabled") else "active",
                            fields={"group": str(d.get("supplier_group") or "")}, ref=f"erpnext:Supplier/{d.get('name')}", url=f"{base}/app/supplier/{d.get('name')}"))
+    kinds = {"invoice": "sales invoices", "bill": "supplier bills", "purchase_order": "purchase orders", "supplier": "suppliers"}
+    cut = [label for k, label in kinds.items() if sum(1 for r in rows if r.kind == k) > READ_CAP]
+    if cut:                                             # keep the cap, and say the read was cut
+        seen: Dict[str, int] = {}
+        kept = []
+        for r in rows:
+            seen[r.kind] = seen.get(r.kind, 0) + 1
+            if seen[r.kind] <= READ_CAP:
+                kept.append(r)
+        return SourceResult(_partial("erpnext", cut, at=now, n=len(kept)), kept)
     return SourceResult(_status("erpnext", at=now, n=len(rows)), rows)
+
+
+#: Chatwoot lists 25 conversations a page; five pages (125) silently cut a busy desk short.
+CHATWOOT_PAGES = 80
 
 
 def chatwoot(ctx: Context) -> SourceResult:
@@ -630,8 +684,12 @@ def chatwoot(ctx: Context) -> SourceResult:
     if bad:
         return SourceResult(bad)
     now, project, rows = ctx.now(), ctx.config.source_project("chatwoot"), []
+    cut: List[str] = []
     for status in ("open", "pending", "resolved"):
-        for cv in c.conversations(status=status, max_pages=5):
+        listed = c.conversations(status=status, max_pages=CHATWOOT_PAGES)
+        if len(listed) >= CHATWOOT_PAGES * 25:
+            cut.append(f"{status} conversations")
+        for cv in listed:
             cid = str(cv.get("id", ""))
             created, first = parse_ts(cv.get("created_at")), parse_ts(cv.get("first_reply_created_at"))
             sender = (cv.get("meta") or {}).get("sender") or {}
@@ -642,6 +700,8 @@ def chatwoot(ctx: Context) -> SourceResult:
                                        "channel": str((cv.get("meta") or {}).get("channel") or ""), "assigned": bool((cv.get("meta") or {}).get("assignee")),
                                        "last_activity": parse_ts(cv.get("last_activity_at"))},
                                ref=f"chatwoot:{cid}", url=f"{c.base_url}/app/accounts/{c.account_id}/conversations/{cid}"))
+    if cut:
+        return SourceResult(_status("chatwoot", STALE, at=now, n=len(rows), detail=f"only the first {CHATWOOT_PAGES * 25} {', '.join(cut)} were read: counts here are a lower bound"), rows)
     return SourceResult(_status("chatwoot", at=now, n=len(rows)), rows)
 
 
