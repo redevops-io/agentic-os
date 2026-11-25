@@ -28,6 +28,15 @@ Override the file location with `REDEVOPS_SECRETS_FILE`. The rc block is bounded
 `# >>> redevops secrets (managed) >>>` / `# <<< redevops secrets (managed) <<<`; the rc file is backed up once to
 `<rc>.bak-redevops`. Skip it with `--no-shell-profile`.
 
+## A host whose secrets are rendered from Vault
+
+On a deployed host the Vault-rendered `.env` is the only source. A second local store is dangerous there: its shell block
+exports values that Compose prefers to `.env`, so an ordinary `docker compose up` restores whatever the store still holds.
+The deployment records `vault` in `/etc/redevops/secrets-authority` (override: `REDEVOPS_SECRETS_AUTHORITY_FILE`). While
+that record exists, `init` and `rotate` do not create or change a local secrets file or a shell block, whatever
+`--backend` says; with `VAULT_ADDR` and `VAULT_TOKEN` set they work against Vault. Laptops and single-machine installs
+have no record and behave as described above.
+
 ## CLI
 
 ```
