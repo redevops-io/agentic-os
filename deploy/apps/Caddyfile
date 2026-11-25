@@ -8,15 +8,8 @@
 :80 {
 	encode zstd gzip
 
-	# Projects and its dashboards (behind the operator sign-in): http://<host>:8080/projects/
-	handle /projects* {
-		reverse_proxy projects:8787
-	}
-
 	# The operating console — the demo.redevops.io/demo surface.
-	handle {
-		reverse_proxy projects-console:8240
-	}
+	reverse_proxy projects-console:8240
 
 	# Direct access to an individual agent's own dashboard, if you want it:
 	#   redirect /apps/* to the matching service. Uncomment as needed.

@@ -10,7 +10,7 @@ networking, the local registry) removed and every image pulled from GHCR.
 | Layer | Services | Registry |
 |---|---|---|
 | **Operating console** | `projects-console` (the `demo.redevops.io/demo` surface) | public (GHCR) |
-| **Projects and dashboards** | `projects` (signed `redevops-projects` image, pinned by digest) at `/projects/` | public (GHCR) |
+| **Projects and dashboards** | `projects` (signed `redevops-projects` image, pinned by digest) on port 8090 | public (GHCR) |
 | **6 governed domain agents** | revenue · intelligence · finance · customer-success · content · security-compliance | public (GHCR) |
 | **OSS cores** | Twenty CRM · Metabase · Postiz (+ their Postgres/Redis) | public (Docker Hub) |
 | **Front door** | Caddy | public |
@@ -49,7 +49,7 @@ docker compose ps
 Open **http://\<host\>:8080** — the operating console, with a tile per business
 system and a cross-domain attention queue.
 
-Open **http://\<host\>:8080/projects/** — Projects, with the dashboards. It asks for the operator sign-in that
+Open **http://\<host\>:8090** — Projects, with the dashboards (`PROJECTS_HTTP_PORT` in `.env` changes the port). It asks for the operator sign-in that
 `bootstrap-secrets` generated (`agentic-os secrets get OUTREACH_BASIC_AUTH`, or read it in
 `~/.config/redevops/secrets.env`: the part before the colon is the user, the rest is the password). A dashboard is
 offered when its application is connected: put `TWENTY_API_KEY`, `POSTIZ_API_KEY` or the Metabase admin sign-in in `.env`
