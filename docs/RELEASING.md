@@ -70,6 +70,14 @@ After publishing, run the check of the published release and wait for it:
 gh workflow run published-artifacts-acceptance.yml --ref main -f release_tag=r0prime-vX.Y.Z
 ```
 
+**Version identities.** The desktop app's version and its release tag are different numbers: app 0.1.4 is published under
+the tag `r0prime-v0.1.5` (app 0.1.1 under `v0.6.1`). Neither can be derived from the other. `deploy/compat/releases.json` is
+the machine-readable pairing: for each desktop release its app version, release tag, build commit, signed-manifest hash,
+kernel line and Projects UI; for each bundle its kernel, Projects image, UI, redevops-qa and Edge Sentinel versions. Add the
+new entry (and mark the previous one `superseded`) in the same PR that bumps a pin: `tests/test_release_compat.py` fails
+when the file and `deploy/combined/.env.bundle.example` disagree, and the published-release check fails a tag that has no
+entry or whose manifest differs.
+
 Its `supply chain` job (`packaging/acceptance/release_assets_check.py`) fails when the signed manifest, a listed installer
 or an SBOM is missing or differs. Do not point the download page at a release until this run is green.
 

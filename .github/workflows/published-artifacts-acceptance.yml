@@ -15,6 +15,8 @@ on:
       - .github/workflows/published-artifacts-acceptance.yml
       - packaging/acceptance/native_check.py
       - packaging/acceptance/release_assets_check.py
+      - packaging/acceptance/compat_check.py
+      - deploy/compat/releases.json
       - packaging/acceptance/ui_workflow.mjs
 permissions:
   contents: read
@@ -40,6 +42,8 @@ jobs:
           # the patterns may match nothing on a broken release: the check then reports what is missing
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D rel -p "release-manifest.json*" -p release-signing-key.pub -p "sbom-*.cdx.json" || echo "no matching asset on the release"
           python3 -I packaging/acceptance/release_assets_check.py --tag "$TAG" --dir rel --assets-json release.json --out release_assets_check.json
+      - name: The release is the one deploy/compat/releases.json pairs with this tag
+        run: python3 -I packaging/acceptance/compat_check.py --tag "$TAG" --release-dir rel
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with:
