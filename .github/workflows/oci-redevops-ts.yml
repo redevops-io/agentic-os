@@ -37,7 +37,7 @@ jobs:
       TAG: ${{ inputs.bundle_tag }}
       CONFIRM: ${{ inputs.confirm }}
       QA_IMAGE_TAG: "0.6.6"
-      EDGE_SENTINEL_IMAGE_TAG: "0.6.6"
+      EDGE_SENTINEL_IMAGE_TAG: "0.6.7"
     steps:
       - name: Check the confirmation and the tag
         run: |
