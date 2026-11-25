@@ -1494,7 +1494,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     from agentic_os.agent_gateway.auth import GatewayAuthError
 
     default_pid = (prov.projects() or [{"id": "customer-ops"}])[0].get("id", "customer-ops")
-    _GRANTS = {"projects.read", "missions.read", "sources.read"}
+    _GRANTS = {"projects.read", "missions.read", "sources.read"} | ({"dashboards.read"} if local_agents is not None else set())
 
     class _Projections:
         def projects(self): return prov.projects()
@@ -1531,7 +1531,36 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             return True
         return local_agents is not None and perm in local_agents.grants_of(principal.id)
 
-    registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources())
+    class _Dashboards:
+        """The dashboards the app builds, read for an agent that was granted dashboards.read (installed apps only). The figures and
+        their sources, not the records behind a number: the drill-down stays in the app."""
+        @staticmethod
+        def _svc():
+            return getattr(prov, "dashboards_service", None)
+
+        def catalog(self):
+            svc = self._svc()
+            if svc is None:
+                return {"dashboards": [], "not_connected": []}
+            c = svc.catalog(svc.access("local-owner"))
+            return {"dashboards": c["dashboards"], "not_connected": [{k: d.get(k) for k in ("id", "title", "why")} for d in c["not_connected"]],
+                    "projects": c.get("projects", [])}
+
+        def get(self, dashboard_id, days=30, project=""):
+            from agentic_os.dashboards.contracts import Filters
+            from agentic_os.dashboards.service import Forbidden, NotFound
+            svc = self._svc()
+            if svc is None:
+                return {"error": "the dashboards are not available in this build"}
+            try:
+                return svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), svc.access("local-owner")).to_dict()
+            except NotFound:
+                return {"error": "no such dashboard or project"}
+            except Forbidden:
+                return {"error": "not permitted"}
+
+    registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources(),
+                                   dashboards=_Dashboards() if local_agents is not None else None)
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink

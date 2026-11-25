@@ -30,8 +30,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 ENV_DIR = "AGENTIC_OS_LOCAL_AGENTS_DIR"
 #: what this build's local gateway can grant. Read grants only: the mounted gateway registers no write capability.
-GRANTABLE = ("projects.read", "missions.read", "sources.read")
-DEFAULT_GRANTS = GRANTABLE
+GRANTABLE = ("projects.read", "missions.read", "sources.read", "dashboards.read")
+#: dashboards.read is NOT a default: the dashboards hold test results and business figures, so it is granted by naming it.
+DEFAULT_GRANTS = ("projects.read", "missions.read", "sources.read")
 TOKEN_PREFIX = "rla_"                                   # rAIls local agent
 SCHEMA = "agentic-os.local-agents/1"
 GATEWAY_SCHEMA = "agentic-os.local-gateway/1"
@@ -244,7 +245,7 @@ def discover_gateway(directory: "str | Path") -> Dict[str, Any]:
 # ── authority: what a connected agent may do, for how long ───────────────────────────────────────────────
 
 #: which capabilities each grant covers in the agent's authority envelope. max_tier 0: nothing side-effecting can run under it.
-GRANT_PATTERNS = {"projects.read": "projects.*", "missions.read": "missions.*", "sources.read": "sources.*"}
+GRANT_PATTERNS = {"projects.read": "projects.*", "missions.read": "missions.*", "sources.read": "sources.*", "dashboards.read": "dashboards.*"}
 DEFAULT_DAYS = 30.0
 MAX_DAYS = 90.0
 TENANT = "local"

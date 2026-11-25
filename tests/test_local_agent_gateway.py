@@ -68,7 +68,7 @@ def test_there_is_no_grant_for_everything_and_an_unknown_grant_is_refused(tmp_pa
             store.connect("x", grants=bad)
     with pytest.raises(LocalAgentError):
         store.connect("   ")
-    assert store.list() == [] and set(GRANTABLE) == {"projects.read", "missions.read", "sources.read"}
+    assert store.list() == [] and set(GRANTABLE) == {"projects.read", "missions.read", "sources.read", "dashboards.read"}
 
 
 def test_a_revoked_agent_is_nobody_and_an_unreadable_store_admits_nobody(tmp_path):
@@ -254,6 +254,31 @@ def test_an_mcp_client_reaches_the_running_app_through_the_shipped_bridge_with_t
     assert replies[3]["result"]["isError"] is True                                                               # sources.read was not granted
     token = Path(out["token_file"]).read_text().strip()
     assert token not in json.dumps(cfg) and token not in r.stderr
+
+
+def test_dashboards_are_readable_only_by_an_agent_that_was_granted_them_by_name(app):
+    """dashboards.read is not a default grant. With it an agent reads the figures the app shows (a reported test run included);
+    without it the capability is not even listed."""
+    default = connect_agent("no dashboards", env=app["env"])
+    t_default = Path(default["token_file"]).read_text().strip()
+    s, caps = call(app["url"] + "/api/agent-gateway/capabilities", token=t_default)
+    assert s == 200 and not [c for c in caps["capabilities"] if c["name"].startswith("dashboards.")]
+    s, out = call(app["url"] + "/api/agent-gateway/capabilities/dashboards.list/invoke", token=t_default, method="POST", body={})
+    assert out["status"] != "ok"
+    granted = connect_agent("QA reader", grants=["dashboards.read"], env=app["env"])
+    token = Path(granted["token_file"]).read_text().strip()
+    s, caps = call(app["url"] + "/api/agent-gateway/capabilities", token=token)
+    assert sorted(c["name"] for c in caps["capabilities"]) == ["dashboards.get", "dashboards.list"]        # nothing else: no projects, no missions
+    out = call(app["url"] + "/api/agent-gateway/capabilities/dashboards.list/invoke", token=token, method="POST", body={})[1]
+    assert out["status"] == "ok" and "dashboards" in out["output"]
+    ids = [d["id"] for d in out["output"]["dashboards"]]
+    assert "portfolio" in ids
+    got = call(app["url"] + "/api/agent-gateway/capabilities/dashboards.get/invoke", token=token, method="POST", body={"dashboard_id": "portfolio", "days": 7})[1]
+    assert got["status"] == "ok" and got["output"]["id"] == "portfolio" and got["output"]["panels"] and "drills" not in got["output"]
+    bad = call(app["url"] + "/api/agent-gateway/capabilities/dashboards.get/invoke", token=token, method="POST", body={"dashboard_id": "nope"})[1]
+    assert bad["status"] == "ok" and "error" in bad["output"]                       # an unknown dashboard is an answer, not a crash
+    # the granted agent still cannot reach anything outside the gateway
+    assert call(app["url"] + "/api/dashboards", token=token)[0] in (401, 403)
 
 
 # last on purpose: it stops the app the tests above share
