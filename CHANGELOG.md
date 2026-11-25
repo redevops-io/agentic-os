@@ -15,7 +15,14 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.11; no version set)
+## Unreleased (after v0.4.12; no version set)
+
+## v0.4.12 (a page does not wait for the applications; a failed host check is on the screen)
+
+- **Dashboards serve a recent read while one background read replaces it.** A read older than the 20 s TTL but younger than 5 minutes is served with its real observation time; only a first read, an older one or an explicit refresh waits for the application. Every page opened after 20 idle seconds used to wait for all connected applications in front of its first number (about half a second on a LAN).
+- The UI bundle is cached by content hash (`assets/*-<hash>.*`: one year, immutable); the page itself is revalidated on every visit.
+- Projects UI v0.3.3: a deep link asks for the dashboard next to the catalogue instead of after it; the catalogue is no longer fetched twice on a first visit; notifications are not requested before the project is known.
+- **Host checks on the deployment's own screens** (`PROJECTS_STATUS_DIR`, production provider): each small status file a host timer writes (for example the Vault seal check) appears in runtime health and the infrastructure dashboard, and a failed one is a "needs you" item with its remedy. A check that stops reporting for 30 minutes is shown as failed: silence is not health.
 
 ## v0.4.11 (the first page load after a start does not fail)
 

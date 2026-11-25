@@ -735,3 +735,60 @@ def test_the_crm_is_read_page_by_page_and_a_cut_read_says_so(monkeypatch):
         assert st.state == S.STALE and "lower bound" in st.detail and "300" in st.detail
     finally:
         srv.shutdown()
+
+
+# ── a page load does not wait for the connected applications when a recent read exists ────────────────────────────────
+def test_a_recent_read_is_served_while_one_background_read_replaces_it(monkeypatch):
+    import threading
+    import time as _time
+
+    from agentic_os.dashboards import sources as S
+
+    calls, gate = [], threading.Event()
+
+    def slow(ctx):
+        calls.append(_time.monotonic())
+        if len(calls) > 1:
+            gate.wait(5)                                   # the refresh is slow: nobody may be waiting for it
+        return S.SourceResult(S._status("missions", at=float(len(calls)), n=len(calls)))
+
+    monkeypatch.setitem(S.COLLECTORS, "missions", slow)
+    cfg = type("Cfg", (), {"sources": {}})()
+    cache = S.SourceCache(type("Ctx", (), {"config": cfg})(), ttl=0.05, stale_ok=30.0)
+    first = cache.get("missions")
+    assert first.status.records == 1 and len(calls) == 1          # no read yet: this one waits
+    _time.sleep(0.08)                                             # older than the TTL, well inside the serve-stale window
+    t0 = _time.monotonic()
+    again = cache.get("missions")
+    cache.get("missions"); cache.warm(["missions", "missions"])
+    assert _time.monotonic() - t0 < 0.5 and again.status.records == 1    # served at once, with its real observation time
+    _time.sleep(0.05)
+    assert len(calls) == 2                                        # exactly ONE refresh was started, however many asked
+    gate.set()
+    for _ in range(50):
+        if cache.get("missions").status.records >= 2:
+            break
+        _time.sleep(0.02)
+    assert cache.get("missions").status.records >= 2             # the refresh replaced the old read
+    stale = S.SourceCache(type("Ctx", (), {"config": cfg})(), ttl=0.01, stale_ok=0.02)
+    stale.get("missions"); _time.sleep(0.05)
+    n = len(calls)
+    stale.get("missions")
+    assert len(calls) == n + 1                                    # too old to serve: this caller waits for a real read
+    n = len(calls)
+    assert cache.get("missions", fresh=True).status.records == n + 1          # an explicit refresh always reads, and waits
+
+
+def test_the_ui_bundle_is_cached_by_content_hash_and_the_page_is_revalidated(monkeypatch, tmp_path):
+    ui = tmp_path / "ui"
+    (ui / "assets").mkdir(parents=True)
+    (ui / "index.html").write_text("<html><script src='assets/index-AbCd1234.js'></script></html>")
+    (ui / "assets" / "index-AbCd1234.js").write_text("console.log(1)")
+    (ui / "hero.jpg").write_bytes(b"x")
+    _env(monkeypatch)
+    monkeypatch.setenv("PROJECTS_UI_DIR", str(ui))
+    from agentic_os.projects_api import create_app
+    c = TestClient(create_app())
+    assert c.get("/assets/index-AbCd1234.js").headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert c.get("/").headers["cache-control"] == "no-cache" and c.get("/hero.jpg").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in c.get("/api/projects").headers or "immutable" not in c.get("/api/projects").headers["cache-control"]
