@@ -1425,6 +1425,33 @@ class _ConfirmSourcesReq(BaseModel):
     confirmed_by: str = ""
 
 
+def _mount_mcp_server(app: "FastAPI", gateway: Any, verifier: Any) -> None:
+    """A real MCP server over the gateway, mounted beside the REST routes: same registry, same governed path, same
+    tokens. Asked for and unavailable stops startup: a deployment that believes it serves MCP must not silently not."""
+    import contextlib
+    import os
+    from agentic_os.agent_gateway import build_fastmcp_server
+    try:
+        server = build_fastmcp_server(gateway, verifier)
+    except ImportError as exc:
+        raise RuntimeError("AGENT_GATEWAY_MCP is set but the optional MCP server is not installed: pip install 'agentic-os[mcp]'") from exc
+    options: Dict[str, Any] = {"path": "/"}
+    hosts = [h.strip() for h in os.environ.get("AGENT_GATEWAY_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    if hosts:                                              # the names this server is reached by (DNS-rebinding protection)
+        options["allowed_hosts"] = hosts
+    mcp_app = server.http_app(**options)
+    app.mount("/api/agent-gateway/mcp-server", mcp_app)
+    outer = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(a):
+        async with mcp_app.lifespan(a):                    # the MCP session manager runs for as long as the app does
+            async with outer(a) as state:
+                yield state
+    app.router.lifespan_context = _lifespan
+    app.state.agent_gateway_mcp_server = True
+
+
 def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     """Expose a read-only, governed slice of this deployment to external agents over MCP + REST
     (the Governed Agent Gateway). Opt-in: does nothing unless ``AGENT_GATEWAY_TOKEN`` is set — the
@@ -1436,6 +1463,14 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     ``AGENT_GATEWAY_AUDIT_PATH`` names a file: then each call is appended to that hash-chained JSONL event
     log (``EventStoreAuditSink``), and a path that cannot be written stops startup.
 
+    PER-AGENT TOKENS (``AGENT_GATEWAY_AGENTS_FILE``, see ``agent_gateway/agent_tokens.py``): each agent has its own
+    token, read grants, expiry and revocation, and the audit names it. With the file set the gateway is mounted even
+    without the shared bearer. Prefer it; the shared bearer remains for the single-agent, sample-data case.
+
+    ``POST /api/agent-gateway/mcp`` below is MCP-SHAPED, not the MCP protocol (no ``initialize``, no JSON-RPC). With
+    ``AGENT_GATEWAY_MCP=1`` and the ``mcp`` extra installed, a real MCP Streamable-HTTP server over the SAME gateway is
+    served at ``/api/agent-gateway/mcp-server/`` for standard MCP clients.
+
     Only READ capabilities are wired (projects/missions/sources), each running the one governed path
     with PolicyEgressEngine on the way out, so PII/secrets are redacted/denied and every call audits.
     Writes, mission delegation and the sandbox are intentionally NOT exposed on this surface.
@@ -1443,9 +1478,12 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     import hmac
     import os
     token = os.environ.get("AGENT_GATEWAY_TOKEN", "").strip()
-    if not token:
+    agents_file = os.environ.get("AGENT_GATEWAY_AGENTS_FILE", "").strip()
+    if not token and not agents_file:
         return False
     token_bytes = token.encode("utf-8")
+    from agentic_os.agent_gateway.agent_tokens import AgentTokenStore
+    agents = AgentTokenStore(agents_file) if agents_file else None
     from fastapi import Body, Header, HTTPException
     from agentic_os.overlays import Principal
     from agentic_os.agent_gateway import (
@@ -1472,7 +1510,11 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     class _StaticVerifier:
         """Maps the configured bearer to a read-only principal; anything else → None (deny)."""
         def verify(self, t):
-            if t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
+            if agents is not None:
+                own = agents.verify(t)
+                if own is not None:
+                    return own
+            if token and t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
                 return GatewayPrincipal(Principal("external-agent", "service", (), "demo"),
                                         client_id="external-agent", workspace="demo",
                                         scopes=tuple(_GRANTS))
@@ -1485,8 +1527,11 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         audit = EventStoreAuditSink.from_path(audit_path)
     else:
         audit = InMemoryAuditSink()
-    gateway = AgentGateway(registry=registry, authorize=lambda p, perm: perm in _GRANTS,
-                           egress=PolicyEgressEngine(), audit=audit)
+    def _authorize(p, perm):
+        if p.id.startswith("agent:"):                      # a per-agent principal has exactly its own grants
+            return agents is not None and agents.authorize(p, perm)
+        return perm in _GRANTS
+    gateway = AgentGateway(registry=registry, authorize=_authorize, egress=PolicyEgressEngine(), audit=audit)
     verifier = _StaticVerifier()
     rest = RestGatewayAdapter(gateway, verifier)
     endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))
@@ -1514,6 +1559,25 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         except GatewayAuthError:
             raise HTTPException(status_code=401, detail="unauthorized")
 
+    if os.environ.get("AGENT_GATEWAY_MCP", "").strip().lower() in ("1", "true", "yes", "on"):
+        _mount_mcp_server(app, gateway, verifier)
+
+    # The route layer refuses a write METHOD that has no declared policy - on any real network request, in every profile -
+    # and these had none, so over a socket both ways of invoking a capability answered 403 (only the in-process tests,
+    # which the layer treats as advisory, ever reached them). They are queries: this surface registers read capabilities
+    # only (held by a test), and the gateway authenticates and authorizes every call itself.
+    from agentic_os.app_kit.route_authz import RoutePolicy
+    query = RoutePolicy("projects.agent_gateway_read", "read_only",
+                        rationale="invokes a read capability; the gateway authenticates the bearer and authorizes each call")
+    policies = {"POST /api/agent-gateway/capabilities/{name}/invoke": query, "POST /api/agent-gateway/mcp": query}
+    if getattr(app.state, "agent_gateway_mcp_server", False):
+        for method in ("POST", "DELETE"):                  # DELETE ends the client's own MCP session
+            policies[f"{method} /api/agent-gateway/mcp-server/{{rest:path}}"] = query
+    app.state.agent_gateway_policies = policies
+    app.state.agent_gateway_registry = registry
+
+    # what the sign-in gate may let through to this surface: a PER-AGENT credential only, never the shared bearer
+    app.state.agent_gateway_gate_check = (lambda t: agents.verify(t) is not None) if agents is not None else None
     return True
 
 
@@ -2209,13 +2273,14 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
     from agentic_os.app_kit import route_authz as _route_authz
     from agentic_os.projects_route_policy import APP as _APP, PROJECTS_ROUTE_POLICIES
-    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **_product_policies, **_dashboard_policies})
+    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **_product_policies, **_dashboard_policies,
+                                     **getattr(app.state, "agent_gateway_policies", {})})
 
     # An optional sign-in in front of everything (PROJECTS_OPERATOR_GATE=1): added last, so it is the outermost layer and a
     # refused request reaches no route, no static file and no other middleware. See agentic_os/projects/operator_gate.py.
     from agentic_os.projects.operator_gate import OperatorGateMiddleware as _OperatorGate, gate_enabled as _gate_enabled
     if _gate_enabled():
-        app.add_middleware(_OperatorGate)
+        app.add_middleware(_OperatorGate, agent_check=getattr(app.state, "agent_gateway_gate_check", None))
 
     return app
 

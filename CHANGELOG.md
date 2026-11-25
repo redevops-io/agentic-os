@@ -17,6 +17,10 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.16; no version set)
 
+- Agent gateway: **one token per external agent** (`AGENT_GATEWAY_AGENTS_FILE`) with its own read grants, expiry, revocation and audit identity; only hashes are stored and an untrustworthy file authenticates nobody.
+- Agent gateway: `AGENT_GATEWAY_MCP=1` serves a **real MCP** Streamable-HTTP server at `/api/agent-gateway/mcp-server/` over the same governed path (needs the `mcp` extra). Behind the sign-in gate an agent's own token opens gateway paths and nothing else.
+- Fixed: on any real network request the gateway's `invoke` and MCP-shaped routes answered **403 "no authorization policy"** (they had none; only in-process tests reached them). They are now declared as queries, and a test holds that the mounted surface registers read capabilities only.
+
 ## v0.4.16 (a dashboard that is not offered says why, what it needs and how to enable it)
 
 - The catalogue's `not_connected` entries carry `about`, `why` and `needs[{id,label,state,detail,remedy}]`. The remedy names the dashboards file in use (or where one would be read) and the settings the application's connection needs; sources that reported "not connected" without a remedy now give one. Rendered by Projects UI 0.3.8 and later; older UIs ignore the fields.
