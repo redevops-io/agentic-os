@@ -143,6 +143,11 @@ none can be read they are unknown, not zero. Links leading out of the directory 
 time, so the date range does not filter them. The dashboard reports what runs did; it does not claim a system improves
 itself, and it says when nothing was accepted.
 
+**Comparing runs.** A chart by run sets runs side by side, so it is drawn only for runs a reviewer marked comparable in a
+`RUN_NOTES.json` (`agent-harness.sim-run-notes/1`: `comparable`, `caveat`) in the run's directory or above it, and only
+among the runs under that same file. Runs without notes are "not yet reviewed" and are not compared. Each caveat is shown
+word for word; notes that cannot be shown in full approve nothing.
+
 ## From a finding to an action
 
 A drill-down returns actions. None executes anything by itself: *Ask Sidekick* answers from the evidence behind the
