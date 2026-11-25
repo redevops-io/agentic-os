@@ -53,6 +53,26 @@ gh release list --repo redevops-io/agentic-os --limit 5
    ```
 7. Bump the `agentic-os` tag pins in downstream repos separately, via their own PRs.
 
+## Desktop releases (branch `release/0.6.0`, tags `r0prime-vX.Y.Z`)
+
+A desktop release page must carry, besides the installers:
+
+- `release-manifest.json`, `release-manifest.json.sig` and `release-signing-key.pub` (the owner signs the manifest);
+- one CycloneDX SBOM per platform and architecture shipped: `sbom-macos-arm64.cdx.json`, `sbom-windows-x64.cdx.json`,
+  `sbom-linux-amd64.cdx.json`, `sbom-linux-arm64.cdx.json`. Each `native-packaging` leg uploads its SBOM as an artifact of
+  that name. Put them under `<evidence>/sbom/` before building the manifest: `scripts/release/verify_signed.py
+  release-manifest` (on the release branch) refuses a platform without its SBOM and lists each SBOM's sha256 in the
+  manifest, so the one signature covers them.
+
+After publishing, run the check of the published release and wait for it:
+
+```bash
+gh workflow run published-artifacts-acceptance.yml --ref main -f release_tag=r0prime-vX.Y.Z
+```
+
+Its `supply chain` job (`packaging/acceptance/release_assets_check.py`) fails when the signed manifest, a listed installer
+or an SBOM is missing or differs. Do not point the download page at a release until this run is green.
+
 ## Known stale state (to be fixed by the next release)
 
 - The GitHub "Latest release" is `v0.3.7`; tags `v0.3.8` through `v0.3.27` have no Release object.

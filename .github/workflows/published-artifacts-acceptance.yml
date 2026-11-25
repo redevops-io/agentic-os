@@ -14,10 +14,38 @@ on:
     paths:
       - .github/workflows/published-artifacts-acceptance.yml
       - packaging/acceptance/native_check.py
+      - packaging/acceptance/release_assets_check.py
       - packaging/acceptance/ui_workflow.mjs
 permissions:
   contents: read
 jobs:
+  # What the release page itself carries: the signed manifest, every installer listed in it, and an SBOM per platform and
+  # architecture (packaging/acceptance/release_assets_check.py). r0prime-v0.1.3..5 were published without SBOMs because no
+  # check looked at the published release; a release that drops them again fails here.
+  supply-chain:
+    name: supply chain (signed manifest, SBOMs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag || 'r0prime-v0.1.5' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Check the published release
+        run: |
+          mkdir -p rel
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release.json
+          # the patterns may match nothing on a broken release: the check then reports what is missing
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D rel -p "release-manifest.json*" -p release-signing-key.pub -p "sbom-*.cdx.json" || echo "no matching asset on the release"
+          python3 -I packaging/acceptance/release_assets_check.py --tag "$TAG" --dir rel --assets-json release.json --out release_assets_check.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: release-assets-check
+          path: release_assets_check.json
+          if-no-files-found: warn
   native:
     name: ${{ matrix.name }}
     strategy:
@@ -35,7 +63,7 @@ jobs:
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ inputs.release_tag || 'r0prime-v0.1.3' }}
+      TAG: ${{ inputs.release_tag || 'r0prime-v0.1.5' }}
       PATTERN: ${{ matrix.pattern }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
