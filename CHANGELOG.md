@@ -26,6 +26,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 - `packaging/acceptance/dashboards_check.py`: a dependency-free, read-only dashboards check for an installed build.
 - Sidekick's stack knowledge explains a sealed Vault: what stops, how to recover, never to paste a key, and auto-unseal.
 
+- **Market Intelligence: read-only research needs no approval.** New mission template `market_intelligence_research` (watch brief, site audit, analytics, recommendations): every step only reads, so it has no approval step and finishes without a person. `radar.recommend` says whether its list proposes a change to the site (`plan_kind`: `changes` or `read_only`). The approval in `market_intelligence_loop` is unchanged: a list is approved by a person, by its digest, before anything is verified against it.
 - **Pins: bundle 0.1.12.** Built from this tree (kernel 0.4.14 or later): the UI's hashed assets are `private` when the sign-in gate is on, so a CDN in front of a gated Projects no longer serves them to a caller who has not signed in; dashboards serve a recent read while they rebuild.
 
 ## v0.4.14 (nobody waits for a dashboard rebuild; the installer ships Projects; WebAssembly Python)

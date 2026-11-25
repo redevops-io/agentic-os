@@ -214,3 +214,57 @@ def test_an_internal_link_in_another_form_than_the_sitemaps_is_a_finding_until_i
     assert loop.run_check(SITE, f["check"], s.fetch) == (True, "every internal link uses the listed form")
     assert "LINK_FORM" not in loop.site_audit({"site": SITE}, fetch=s.fetch)["site_audit"]["by_code"]
 
+
+
+def _runtime(s, brief_changed=0, monkeypatch=None):
+    radar = Operator("market-radar", [
+        capability("radar.brief", lambda i: {"market_brief": {"changed": brief_changed}}, provides=["market_brief"]),
+        capability("radar.site_audit", lambda i: loop.site_audit(i, fetch=s.fetch), provides=["site_audit"]),
+        capability("radar.recommend", loop.recommend, provides=["recommendations"]),
+        capability("radar.approve_plan", loop.approve_plan, provides=["change_plan_approved"], approval_required=True),
+        capability("radar.verify_change", lambda i: loop.verify_change(i, fetch=s.fetch), provides=["change_verified"]),
+        capability("radar.reassess", lambda i: loop.reassess(i, fetch=s.fetch), provides=["reassessment"]),
+    ])
+    growth = Operator("growth-engine", [
+        capability("growth.analyze", lambda i: {"growth_attribution": {"sources": 3}}, provides=["growth_attribution"]),
+        capability("growth.remeasure", lambda i: {"growth_remeasured": {"sources": 3}}, provides=["growth_remeasured"]),
+    ])
+    reg = CapabilityRegistry(); reg.register(radar.manifest); reg.register(growth.manifest)
+    rt = MissionRuntime(reg, Executor(LocalOperatorClient({"market-radar": radar, "growth-engine": growth})))
+    app = FastAPI(); mount(app, rt)
+    return rt, TestClient(app, headers=TOKEN)
+
+
+def test_the_research_template_only_reads_and_finishes_without_a_person(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "t")
+    s = Site()
+    rt, c = _runtime(s, brief_changed=2)
+    assert "market_intelligence_research" in c.get("/templates").json()["templates"]
+    mid = c.post("/missions", json={"goal": f"Research the market for {SITE}", "template": "market_intelligence_research", "policy_refs": ["*"]}).json()["id"]
+    assert c.get(f"/missions/{mid}").json()["state"] == "succeeded"
+    assert not [t for t in c.get("/inbox").json()["inbox"] if t["mission_id"] == mid]              # nothing waits for a person
+    ran = [(e.get("payload") or {}).get("capability") for e in rt.repo.timeline(mid) if e["type"] == "NodeSucceeded"]
+    assert sorted(ran) == ["growth.analyze", "radar.brief", "radar.recommend", "radar.site_audit"]  # the four reads and nothing else
+    for cap in ran:
+        spec = rt.registry.get(cap)
+        assert not spec.side_effecting and not spec.approval_required, cap                          # the template holds no consequential step
+
+
+def test_the_list_says_whether_it_proposes_a_change_and_a_change_is_still_decided_by_a_person(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "t")
+    s = Site(); s.fix()
+    audit = loop.site_audit({"site": SITE}, fetch=s.fetch)["site_audit"]
+    info = loop.recommend({"site_audit": audit, "market_brief": {"changed": 3}})["recommendations"]
+    assert info["plan_kind"] == "read_only" and info["changes"] == 0 and info["information"] == 1 and all(not it["checks"] for it in info["items"])
+    broken = Site()
+    recs = loop.recommend({"site_audit": loop.site_audit({"site": SITE}, fetch=broken.fetch)["site_audit"]})["recommendations"]
+    assert recs["plan_kind"] == "changes" and recs["changes"] >= 1
+    # the approval rule did not move: no approval, no decision, whatever the kind of list
+    for r in (info, recs):
+        assert loop.approve_plan({"recommendations": r})["status"] == "pending_approval"
+    # and in the loop template the same list still stops at a person
+    rt, c = _runtime(broken)
+    mid = c.post("/missions", json={"goal": f"Run the market intelligence loop for {SITE}", "template": "market_intelligence_loop", "policy_refs": ["*"]}).json()["id"]
+    assert c.get(f"/missions/{mid}").json()["state"] == "waiting_human"
+    (task,) = [t for t in c.get("/inbox").json()["inbox"] if t["mission_id"] == mid]
+    assert task["capability"] == "radar.approve_plan"

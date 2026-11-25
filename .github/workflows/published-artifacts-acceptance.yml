@@ -99,6 +99,10 @@ jobs:
           echo "SIDECAR=$(find "$PWD/squashfs-root" -name redevops-sidecar -type f | head -1)" >> "$GITHUB_ENV"
       - name: Native checks of the installed app
         shell: bash
+        env:
+          # the dashboards session's independent API checks run inside native_check.py and write dashboards_check.json
+          DASH_CHECK_PLATFORM: ${{ matrix.name }}
+          DASH_CHECK_RELEASE: "${{ inputs.release_tag || 'current-release' }}"
         run: python packaging/acceptance/native_check.py "$SIDECAR" native_result.json
       # The same build, in a real browser on this operating system: first workflows, keyboard, accessibility, the session boundary.
       - uses: actions/setup-node@v4
@@ -132,5 +136,6 @@ jobs:
           name: native-${{ strategy.job-index }}
           path: |
             native_result.json
+            dashboards_check.json
             ui_result.json
           if-no-files-found: warn

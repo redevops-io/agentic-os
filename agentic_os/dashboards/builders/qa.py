@@ -84,14 +84,33 @@ class QaModel:
                         self.planned.setdefault((s.project, s.id, p, tid), {"declared": False})
         for h in self.history.values():
             h.sort(key=lambda r: r.at)
-        # the latest run in range per (project, suite, platform)
-        self.latest_run: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
+        # The release a suite is on: the one its newest run in range names. Runs of that release are the suite's state; a platform
+        # whose last run was for an EARLIER release has not been executed for this one, however well it did then. (Without this,
+        # "passed on Windows for 0.1.10" stood next to "passed on macOS for 0.1.11" and read as one qualified release.)
+        newest: Dict[Tuple[str, str], Tuple[float, str]] = {}
+        any_run: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
         for cell, h in self.history.items():
             for r in h:
                 if b.since <= r.at <= b.until:
+                    k2, rel = cell[:2], str(r.get("release") or "")
+                    if k2 not in newest or r.at > newest[k2][0]:
+                        newest[k2] = (r.at, rel)
+                    if cell[:3] not in any_run or r.at > any_run[cell[:3]][0]:
+                        any_run[cell[:3]] = (r.at, rel)
+        self.release: Dict[Tuple[str, str], str] = {k: v[1] for k, v in newest.items() if v[1]}
+        # the latest run in range per (project, suite, platform), of the suite's release when it has one
+        self.latest_run: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
+        for cell, h in self.history.items():
+            want = self.release.get(cell[:2])
+            for r in h:
+                if b.since <= r.at <= b.until and (want is None or str(r.get("release") or "") == want):
                     k = cell[:3]
                     if k not in self.latest_run or r.at > self.latest_run[k][0]:
                         self.latest_run[k] = (r.at, str(r.get("run_id")))
+        #: platforms whose newest run is for another release than the suite's: {(project, suite, platform): that release ("" = none named)}
+        self.behind: Dict[Tuple[str, str, str], str] = {k: v[1] for k, v in any_run.items() if k[:2] in self.release and k not in self.latest_run}
+        for k2, rel in self.release.items():
+            self.suite_names[k2] = f"{self.suite_names.get(k2, k2[1])} · {rel}"
         self.status: Dict[Cell, str] = {}
         self.latest: Dict[Cell, Optional[Record]] = {}
         for cell in self.planned:
@@ -111,7 +130,8 @@ class QaModel:
         return Record(source=prev.source if prev else "qa", kind="qa_result", id="/".join(cell), title=cell[3], status="unexecuted", project=cell[0],
                       at=prev.at if prev else 0.0,
                       fields={"suite": cell[1], "suite_name": self.suite_names.get(cell[:2], cell[1]), "platform": cell[2], "test_id": cell[3],
-                              "reason": "last result is outside the selected range" if prev else "declared in the catalog; never reported",
+                              "reason": (f"not executed for release {self.release[cell[:2]]}; last executed for {self.behind[cell[:3]] or 'an unnamed release'}"
+                                         if cell[:3] in self.behind else "last result is outside the selected range") if prev else "declared in the catalog; never reported",
                               "last_status": prev.status if prev else ""},
                       ref=prev.ref if prev else f"catalog:{cell[1]}", url=prev.url if prev else "")
 

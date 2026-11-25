@@ -8,6 +8,7 @@ Writes:  PUT  /api/dashboards/views                save or update a view (the ca
          DELETE /api/dashboards/views/{view_id}
          POST /api/dashboards/{id}/track           hand a finding to the intake (never sends or approves)
          POST /api/dashboards/qa/results           report a test run (a service identity or the operator)
+         DELETE /api/dashboards/qa/results         withdraw one run that was filed in the wrong place (the same callers)
 
 Every route applies the caller's access (``access.py``) before any data is read back.
 """
@@ -119,11 +120,8 @@ def make_router(svc: DashboardService) -> APIRouter:
             raise HTTPException(404, {"error": "not_found", "detail": "no such view"})
         return {"deleted": view_id}
 
-    @r.post("/api/dashboards/qa/results")
-    def _ingest(body: Dict[str, Any] = Body(default={}), x_service_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-        """A CI lane reports one run: {project, suite, run_id, platform?, environment?, product?, at?, origin?, ref?, url?,
-        evidence_verified?, results: [{test_id, status, severity?, detail?, requirements?, duration_ms?}]}. Statuses are
-        passed | failed | unsupported | blocked; a test that did not run is left out and is then counted as not executed."""
+    def _require_reporter(x_service_token: Optional[str]) -> str:
+        """Who may report (or withdraw) a test run: a service identity holding the capability, or the operator."""
         by = ""
         if x_service_token:
             from agentic_os.app_kit.route_authz import service_identities  # noqa: PLC0415
@@ -142,11 +140,33 @@ def make_router(svc: DashboardService) -> APIRouter:
         if not by:
             raise HTTPException(401, {"error": "unauthenticated",
                                       "detail": f"reporting test results needs a service identity holding {CAP_INGEST}, or the operator"})
+        return by
+
+    @r.post("/api/dashboards/qa/results")
+    def _ingest(body: Dict[str, Any] = Body(default={}), x_service_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        """A CI lane reports one run: {project, suite, run_id, platform?, environment?, product?, at?, origin?, ref?, url?,
+        evidence_verified?, results: [{test_id, status, severity?, detail?, requirements?, duration_ms?}]}. Statuses are
+        passed | failed | unsupported | blocked; a test that did not run is left out and is then counted as not executed."""
+        by = _require_reporter(x_service_token)
         if svc.config.projects and body.get("project") not in svc.config.projects:
             raise HTTPException(422, {"error": "unknown_project", "detail": "project is not declared in the dashboards file"})
         out = _guard(lambda: svc.store.ingest_qa(body, by=by, now=svc.clock()))
         svc.cache.invalidate()
         return {**out, "recorded_by": by}
+
+    @r.delete("/api/dashboards/qa/results")
+    def _withdraw(project: str = "", suite: str = "", platform: str = "", run_id: str = "",
+                  x_service_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        """Remove one reported run that was filed in the wrong place (all four of project, suite, platform, run_id are
+        required and must match exactly). The same callers that may report may withdraw; the answer and the log say who did."""
+        by = _require_reporter(x_service_token)
+        if not (project and suite and platform and run_id):
+            raise HTTPException(422, {"error": "invalid", "detail": "project, suite, platform and run_id are all required"})
+        n = _guard(lambda: svc.store.withdraw_qa(project, suite, platform, run_id))
+        svc.cache.invalidate()
+        import logging  # noqa: PLC0415
+        logging.getLogger("agentic_os.dashboards").warning("qa run withdrawn: %s/%s/%s/%s (%d results) by %s", project, suite, platform, run_id, n, by)
+        return {"withdrawn": {"project": project, "suite": suite, "platform": platform, "run_id": run_id}, "results": n, "withdrawn_by": by}
 
     @r.get("/api/dashboards/{dashboard_id}")
     def _dashboard(dashboard_id: str, request: Request, fresh: bool = False) -> Dict[str, Any]:
