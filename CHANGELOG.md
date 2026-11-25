@@ -15,7 +15,11 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.16; no version set)
+## Unreleased (after v0.4.17; no version set)
+
+## v0.4.17 (one token per external agent, a real MCP server; Vault stays the authority on a deployed host)
+
+- `agentic-os secrets`: on a host that records Vault as its secret authority (`/etc/redevops/secrets-authority`), `init` and `rotate` create or change no local secrets file or shell block. Such a block exported older values that Compose preferred to the Vault-rendered `.env`. Other hosts behave as before.
 
 - Agent gateway: **one token per external agent** (`AGENT_GATEWAY_AGENTS_FILE`) with its own read grants, expiry, revocation and audit identity; only hashes are stored and an untrustworthy file authenticates nobody.
 - Agent gateway: `AGENT_GATEWAY_MCP=1` serves a **real MCP** Streamable-HTTP server at `/api/agent-gateway/mcp-server/` over the same governed path (needs the `mcp` extra). Behind the sign-in gate an agent's own token opens gateway paths and nothing else.
