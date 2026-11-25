@@ -116,3 +116,58 @@ def test_the_extension_manifest_is_a_valid_mcpb_manifest_that_keeps_the_token_in
     assert m["server"]["mcp_config"]["env"] == {"RAILS_URL": "${user_config.rails_url}", "RAILS_TOKEN": "${user_config.rails_token}"}
     src = BRIDGE.read_text(encoding="utf-8")
     assert "require('node:" in src and not [line for line in src.splitlines() if "require(" in line and "node:" not in line and "require.main" not in line]   # standard library only
+
+
+def test_with_an_agents_directory_and_a_token_file_the_bridge_finds_the_running_app_by_itself(deployment, tmp_path):
+    """No address and no token in the client's settings: the app publishes where it listens, the token is read from its private file."""
+    agents = tmp_path / "agents"
+    (agents / "tokens").mkdir(parents=True)
+    token_file = agents / "tokens" / "agent-1.token"
+    token_file.write_text(TOKEN + "\n", encoding="utf-8")
+    port = deployment.rsplit(":", 1)[1]
+    gw = agents / "gateway.json"
+    env = {"RAILS_AGENTS_DIR": str(agents), "RAILS_TOKEN_FILE": str(token_file)}
+    ask = [INIT, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
+
+    def run():
+        out = subprocess.run([NODE, str(BRIDGE)], input="".join(json.dumps(m) + "\n" for m in ask), capture_output=True, text=True, timeout=60, env={"PATH": os.environ.get("PATH", ""), **env})
+        return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
+
+    assert "not running" in run()[1]["error"]["message"]                                   # nothing published: say so, offer nothing
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": f"http://127.0.0.1:{port}", "pid": os.getpid()}), encoding="utf-8")
+    assert "projects_list" in [t["name"] for t in run()[1]["result"]["tools"]]
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": f"http://127.0.0.1:{port}", "pid": dead.pid}), encoding="utf-8")
+    assert "not running" in run()[1]["error"]["message"]                                   # a stale file is not followed
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": "http://evil.example:80", "pid": os.getpid()}), encoding="utf-8")
+    assert "not written by the rAIls app" in run()[1]["error"]["message"]                  # only a loopback address is followed
+    gw.write_text(json.dumps({"schema": "agentic-os.local-gateway/1", "url": f"http://127.0.0.1:{port}", "pid": os.getpid()}), encoding="utf-8")
+    token_file.unlink()
+    assert "not connected to the rAIls app any more" in run()[1]["error"]["message"]       # the credential was removed
+
+
+def test_a_local_agent_gets_its_tools_from_the_bridge_and_cannot_call_one_it_was_not_offered(deployment):
+    """integrations/local-agent: model -> tool call -> bridge -> real gateway. The model is scripted here; nothing else is."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rails_agent", ROOT / "integrations" / "local-agent" / "rails_agent.py")
+    agent = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(agent)
+    mcp = agent.McpStdio([NODE, str(BRIDGE)], {"PATH": os.environ.get("PATH", ""), "RAILS_URL": deployment, "RAILS_TOKEN": TOKEN})
+    script = [{"content": None, "tool_calls": [{"id": "1", "function": {"name": "projects_list", "arguments": "{}"}},
+                                               {"id": "2", "function": {"name": "sandbox_execute", "arguments": "{\"cmd\": \"id\"}"}}]},
+              {"content": "There are projects; the sandbox tool was refused.", "tool_calls": None}]
+    seen = []
+
+    def complete(messages, tools):
+        seen.append((messages, tools))
+        return script.pop(0)
+    try:
+        out = agent.run("which projects exist?", mcp=mcp, complete=complete)
+    finally:
+        mcp.close()
+    assert out["answer"].startswith("There are projects") and "projects_list" in out["tools_offered"] and "sandbox_execute" not in out["tools_offered"]
+    assert out["calls"] == [{"tool": "projects_list", "arguments": {}, "refused": False}, {"tool": "sandbox_execute", "arguments": {"cmd": "id"}, "refused": True}]
+    tool_msgs = [m for m in seen[1][0] if m["role"] == "tool"]
+    assert json.loads(tool_msgs[0]["content"])["status"] == "ok" and json.loads(tool_msgs[1]["content"])["status"] == "denied"
+    assert all(t["function"]["parameters"]["type"] == "object" for t in seen[0][1])

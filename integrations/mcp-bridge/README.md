@@ -37,6 +37,19 @@ Any other client that starts stdio MCP servers can run it directly:
 RAILS_URL=https://apps.example.com RAILS_TOKEN=... node integrations/mcp-bridge/server/index.js
 ```
 
+## A locally installed app: no address, no token
+
+The desktop app publishes where it listens while it runs and keeps each connected agent's token in a file only the user can
+read. Given the two paths the app prints when an agent is connected, the bridge needs nothing else:
+
+```bash
+RAILS_AGENTS_DIR="<agents directory>" RAILS_TOKEN_FILE="<agents directory>/tokens/<agent id>.token" node server/index.js
+```
+
+It finds the running app from `gateway.json` (a loopback address written by a process that is still alive; a stale or foreign
+file is not followed), reads the token when it is used, and says so plainly when the app is not running or the agent was
+disconnected.
+
 ## What the deployment needs
 
 The gateway must be mounted on the Projects API (`AGENT_GATEWAY_TOKEN`, or per-agent tokens where configured); see

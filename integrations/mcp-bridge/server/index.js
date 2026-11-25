@@ -15,15 +15,47 @@
 const http = require('node:http');
 const https = require('node:https');
 const readline = require('node:readline');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const SERVER = { name: 'rails-gateway-bridge', version: '0.1.0' };
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const TIMEOUT_MS = Math.min(Math.max(Number(process.env.RAILS_TIMEOUT_MS) || 60000, 1000), 600000);
 const log = (...a) => process.stderr.write('[rails-bridge] ' + a.join(' ') + '\n');
 
+// A locally installed app publishes where it listens in <agents dir>/gateway.json while it runs, and keeps each connected
+// agent's token in a file only the user can read. With RAILS_AGENTS_DIR and RAILS_TOKEN_FILE the bridge needs no address and
+// no token in any client's settings: it finds the running app, and reads the token when it is used (so a revoked or renewed
+// credential takes effect without restarting the client).
+function alive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; }
+}
+
+function discover(dir) {
+  let doc;
+  try { doc = JSON.parse(fs.readFileSync(path.join(dir, 'gateway.json'), 'utf8')); }
+  catch (e) { return { error: 'the rAIls app is not running on this machine: open it and try again' }; }
+  const url = String(doc && doc.url || '');
+  if (!doc || doc.schema !== 'agentic-os.local-gateway/1' || !/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(url)) return { error: 'the local gateway file was not written by the rAIls app' };
+  if (!alive(Number(doc.pid))) return { error: 'the rAIls app is not running on this machine: open it and try again' };
+  return { url };
+}
+
 function config() {
-  const raw = (process.env.RAILS_URL || '').trim();
-  const token = (process.env.RAILS_TOKEN || '').trim();
+  let raw = (process.env.RAILS_URL || '').trim();
+  let token = (process.env.RAILS_TOKEN || '').trim();
+  const agentsDir = (process.env.RAILS_AGENTS_DIR || '').trim();
+  const tokenFile = (process.env.RAILS_TOKEN_FILE || '').trim();
+  if (!raw && agentsDir) {
+    const found = discover(agentsDir);
+    if (found.error) return found;
+    raw = found.url;
+  }
+  if (!token && tokenFile) {
+    try { token = fs.readFileSync(tokenFile, 'utf8').trim(); }
+    catch (e) { return { error: 'this agent is not connected to the rAIls app any more (its credential was removed): connect it again in the app' }; }
+  }
   if (!raw) return { error: 'RAILS_URL is not set: the address of the rAIls deployment (for example https://apps.example.com or http://127.0.0.1:8787)' };
   if (!token) return { error: 'RAILS_TOKEN is not set: the agent token issued by that deployment' };
   let url;
@@ -121,7 +153,8 @@ async function handle(msg, cfg) {
 }
 
 function main() {
-  const cfg = config();
+  const dynamic = !!((process.env.RAILS_AGENTS_DIR || '').trim() || (process.env.RAILS_TOKEN_FILE || '').trim());
+  let cfg = config();
   if (cfg.error) log(cfg.error);
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   let chain = Promise.resolve();
@@ -129,11 +162,11 @@ function main() {
     if (!line.trim()) return;
     let msg;
     try { msg = JSON.parse(line); } catch (e) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }) + '\n'); return; }
-    chain = chain.then(() => handle(msg, cfg)).then((out) => { if (out) process.stdout.write(JSON.stringify(out) + '\n'); })
+    chain = chain.then(() => { if (dynamic) cfg = config(); return handle(msg, cfg); }).then((out) => { if (out) process.stdout.write(JSON.stringify(out) + '\n'); })
       .catch((e) => log('internal error:', String(e && e.message || e)));
   });
   rl.on('close', () => chain.then(() => process.exit(0)));
 }
 
 if (require.main === module) main();
-module.exports = { config, toolName, handle };
+module.exports = { config, discover, toolName, handle };
