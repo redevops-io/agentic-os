@@ -112,3 +112,19 @@ def test_missions_come_from_the_mission_plane_and_an_outage_is_stated(monkeypatc
     c2 = _client(monkeypatch, tmp_path, MISSION_PLANE_URL="http://plane.invalid")
     assert c2.get(f"/api/projects/{pid}/missions", headers=H).json() == []
     assert c2.get(f"/api/projects/{pid}/runtime", headers=H).json()["runtimes"][0]["state"] == "bad"
+
+
+def test_real_mission_plane_rows_stay_when_a_products_registry_is_configured(monkeypatch, tmp_path):
+    """Found on the signed-in instance: with a products registry the production provider's Mission Plane missions vanished,
+    because the rule that drops demo rows next to product rows also dropped real ones."""
+    from agentic_os.dashboards import sources as S
+    from tests._products_fakes import FakeSentinel, write_registry
+    monkeypatch.setattr(S.RemoteMissionPlane, "missions", lambda self: [{"id": "m-1", "title": "Reconcile invoices", "state": "succeeded"}])
+    fake = FakeSentinel()
+    try:
+        c = _client(monkeypatch, tmp_path, MISSION_PLANE_URL="http://plane.invalid", AGENTIC_OS_PRODUCTS=write_registry(tmp_path, fake.serve()))
+        pid = c.get("/api/projects", headers=H).json()[0]["id"]
+        titles = [m["title"] for m in c.get(f"/api/projects/{pid}/missions", headers=H).json()]
+        assert "Reconcile invoices" in titles and len(titles) >= 2            # the real mission AND the product's rows
+    finally:
+        fake.close()
