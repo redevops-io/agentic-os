@@ -875,6 +875,30 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
         source="Governance path shipped: integrations/execution.py GovernedEnvelope (tiers+approval+audit) · "
                "Roadmap: common outcome telemetry + offline/online evaluation before any self-improvement claim"),
     KnowledgeEntry(
+        id="vault-sealed",
+        topic="Platform secrets",
+        keywords=("vault is sealed", "vault sealed", "sealed vault", "unseal", "vault seal", "seal state",
+                  "secrets cannot be read", "vault restarted", "vault restart", "stay sealed", "stayed sealed", "remained sealed",
+                  "why is vault sealed", "how do i unseal", "vault incident", "vault outage", "vault is down"),
+        question="Vault is sealed. What happened and how do I recover?",
+        answer=(
+            "A sealed Vault holds its data encrypted and cannot decrypt it: nothing can read or write a secret until "
+            "it is unsealed. Vault seals itself on EVERY restart (a host reboot, a pod restart, an upgrade) when it "
+            "uses Shamir key shares, so a sealed Vault after a reboot is expected, not a breach. What stops: "
+            "rendering the stack configuration, rotating or adding a secret, and any service that fetches a secret "
+            "at start. What keeps working: services already running with the secrets they loaded. Check it: "
+            "`vault status` (Sealed true/false, and how many key shares have been entered). Recover: the key "
+            "holders each run `vault operator unseal` and type their own share at the hidden prompt, until the "
+            "threshold is reached (commonly 3 of 5); on Kubernetes `kubectl -n vault exec -it vault-0 -- vault "
+            "operator unseal`. Then re-run whatever failed while it was sealed (for this stack: the secrets "
+            "rendering step, and a restart of services that started without their secrets). Never paste an unseal "
+            "key into a chat, a ticket or this assistant, and never store the shares next to Vault. To stop it "
+            "recurring, move Vault to an auto-unseal seal backed by a cloud KMS key (`vault operator unseal "
+            "-migrate`): it then unseals itself after a restart, and the recovery keys are only needed for "
+            "recovery operations. Projects shows the seal state under runtime health and as a 'needs you' item "
+            "when the host's seal check is installed."),
+        source="docs/VAULT_SEAL.md (agentic-os-stack) · scripts/vault-seal-check.sh · PROJECTS_STATUS_DIR"),
+    KnowledgeEntry(
         id="secrets-where",
         topic="Platform secrets",
         keywords=("where are my secrets", "where is my secret", "where are the secrets", "secrets file",
