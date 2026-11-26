@@ -7,9 +7,10 @@ The operator names a JSON file in ``AGENT_GATEWAY_AGENTS_FILE``. It stores only 
 
     {"schema": "aos.agent-gateway.agents/v1",
      "agents": [{"id": "claude-laptop", "token_sha256": "…", "grants": ["projects.read"], "expires_at": 1830000000,
-                 "tenant": "default", "label": "…", "revoked": false}]}
+                 "tenant": "default", "label": "…", "revoked": false, "rate_per_minute": 30}]}
 
     python -m agentic_os.agent_gateway.agent_tokens issue  agents.json --id claude-laptop --grant projects.read --days 30
+    python -m agentic_os.agent_gateway.agent_tokens issue  agents.json --id demo-visitor-1 --grant projects.read --minutes 60 --rate 30
     python -m agentic_os.agent_gateway.agent_tokens revoke agents.json --id claude-laptop
     python -m agentic_os.agent_gateway.agent_tokens list   agents.json
 
@@ -20,6 +21,7 @@ malformed field, a past expiry, or a duplicate id or token authenticates nobody.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import hmac
 import json
@@ -43,9 +45,11 @@ SCHEMA = "aos.agent-gateway.agents/v1"
 READ_GRANTS: FrozenSet[str] = frozenset({"projects.read", "missions.read", "sources.read"})
 TOKEN_PREFIX = "aga_"
 MAX_DAYS = 366
+MAX_MINUTES = 24 * 60                 # a lifetime given in minutes is for a temporary identity: at most a day
+MAX_RATE = 600                        # capability calls a minute
 _ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
-_FIELDS = {"id", "token_sha256", "grants", "expires_at", "tenant", "label", "revoked", "created_at"}
+_FIELDS = {"id", "token_sha256", "grants", "expires_at", "tenant", "label", "revoked", "created_at", "rate_per_minute"}
 _log = logging.getLogger("agentic_os.agent_gateway.agents")
 
 
@@ -75,7 +79,8 @@ def _entries(doc: Any) -> List[Dict[str, Any]]:
                    "bad token_sha256" if not (isinstance(h, str) and _HASH.match(h)) else
                    "grants must be a non-empty list of read grants" if not (isinstance(grants, list) and grants and set(map(str, grants)) <= READ_GRANTS) else
                    "expires_at must be a number" if not (isinstance(exp, (int, float)) and not isinstance(exp, bool)) else
-                   "revoked must be true or false" if not isinstance(a.get("revoked", False), bool) else "")
+                   "revoked must be true or false" if not isinstance(a.get("revoked", False), bool) else
+                   f"rate_per_minute must be a whole number from 1 to {MAX_RATE}" if "rate_per_minute" in a and not (type(a["rate_per_minute"]) is int and 1 <= a["rate_per_minute"] <= MAX_RATE) else "")
         if problem:
             _log.warning("agent entry #%d (%r) is ignored: %s", i, aid if isinstance(aid, str) else "?", problem)
             continue
@@ -127,12 +132,45 @@ class AgentTokenStore:
         return GatewayPrincipal(Principal(f"agent:{found['id']}", "service", (), tenant), client_id=found["id"],
                                 workspace=tenant, scopes=tuple(sorted(found["grants"])))
 
+    def rate_of(self, principal: Principal) -> Optional[int]:
+        """This agent's calls-per-minute limit, read from the entry as it is now; ``None`` = the entry sets none."""
+        for a in self._load():
+            if principal.id == f"agent:{a['id']}" and principal.tenant == str(a.get("tenant") or "default"):
+                return a.get("rate_per_minute")
+        return None
+
     def authorize(self, principal: Principal, permission: str) -> bool:
         """Deny by default; the grants are read again, so a revocation also stops a principal already resolved."""
         for a in self._load():
             if principal.id == f"agent:{a['id']}" and principal.tenant == str(a.get("tenant") or "default"):
                 return self._live(a) and permission in a["grants"]
         return False
+
+
+class AgentRateLimit:
+    """The gateway's :class:`BudgetGuard` for per-agent tokens: at most ``rate_per_minute`` capability calls in any 60
+    seconds. A refused call does not count against the limit. Held in memory, per process: a restart empties the
+    window, and N processes allow N times the rate."""
+
+    def __init__(self, store: AgentTokenStore, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self.store, self._clock = store, clock
+        self._lock = threading.Lock()
+        self._calls: Dict[str, "collections.deque[float]"] = {}
+
+    def check(self, principal: GatewayPrincipal, manifest: Any):
+        who = principal.principal
+        limit = self.store.rate_of(who) if who.id.startswith("agent:") else None
+        if limit is None:
+            return True, "", ()
+        with self._lock:
+            now = self._clock()
+            window = self._calls.setdefault(f"{who.tenant}/{who.id}", collections.deque())
+            while window and now - window[0] >= 60.0:
+                window.popleft()
+            if len(window) >= limit:
+                return False, f"rate_limited: at most {limit} calls a minute for this agent", ("budget:agent_rate",)
+            window.append(now)
+        return True, "", ("budget:agent_rate",)
 
 
 # ── the operator's commands ────────────────────────────────────────────────────────────────────────
@@ -157,22 +195,30 @@ def _write(path: str, doc: Dict[str, Any]) -> None:
             os.unlink(tmp)
 
 
-def issue(path: str, agent_id: str, grants: List[str], *, days: int, tenant: str = "default", label: str = "",
-          now: Optional[float] = None) -> str:
+def issue(path: str, agent_id: str, grants: List[str], *, days: Optional[int] = None, minutes: Optional[int] = None,
+          rate_per_minute: Optional[int] = None, tenant: str = "default", label: str = "", now: Optional[float] = None) -> str:
     """Add an agent and return its token. The token is not stored anywhere: it is shown once."""
     now = time.time() if now is None else now
     if not _ID.match(agent_id):
         raise ValueError("an agent id is lower-case letters, digits, '.', '_' or '-' (at most 64)")
     if not grants or not set(grants) <= READ_GRANTS:
         raise ValueError(f"grants must be among {', '.join(sorted(READ_GRANTS))}")
-    if not 1 <= days <= MAX_DAYS:
+    if (days is None) == (minutes is None):
+        raise ValueError("give a lifetime in --days or in --minutes (exactly one): every agent token expires")
+    if days is not None and not 1 <= days <= MAX_DAYS:
         raise ValueError(f"--days must be between 1 and {MAX_DAYS}: every agent token expires")
+    if minutes is not None and not 1 <= minutes <= MAX_MINUTES:
+        raise ValueError(f"--minutes must be between 1 and {MAX_MINUTES}")
+    if rate_per_minute is not None and not 1 <= rate_per_minute <= MAX_RATE:
+        raise ValueError(f"--rate must be between 1 and {MAX_RATE} calls a minute")
+    lifetime = days * 86400 if days is not None else minutes * 60
     doc = _read(path)
     if any(a.get("id") == agent_id for a in doc["agents"]):
         raise ValueError(f"{agent_id} already exists: revoke it and choose a new id, so the audit trail stays unambiguous")
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
     doc["agents"].append({"id": agent_id, "token_sha256": digest(token), "grants": sorted(set(grants)), "tenant": tenant,
-                          "label": label, "created_at": int(now), "expires_at": int(now + days * 86400), "revoked": False})
+                          "label": label, "created_at": int(now), "expires_at": int(now + lifetime), "revoked": False,
+                          **({"rate_per_minute": rate_per_minute} if rate_per_minute is not None else {})})
     _write(path, doc)
     return token
 
@@ -193,7 +239,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("file")
     ap.add_argument("--id")
     ap.add_argument("--grant", action="append", default=[])
-    ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--days", type=int, help="lifetime in days (30 when neither --days nor --minutes is given)")
+    ap.add_argument("--minutes", type=int, help="lifetime in minutes, for a temporary identity")
+    ap.add_argument("--rate", type=int, help="most capability calls a minute")
     ap.add_argument("--tenant", default="default")
     ap.add_argument("--label", default="")
     args = ap.parse_args(argv)
@@ -212,7 +260,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 1
             print(f"revoked {args.id}")
             return 0
-        token = issue(args.file, args.id, args.grant, days=args.days, tenant=args.tenant, label=args.label)
+        days = 30 if args.days is None and args.minutes is None else args.days
+        token = issue(args.file, args.id, args.grant, days=days, minutes=args.minutes, rate_per_minute=args.rate,
+                      tenant=args.tenant, label=args.label)
         print(f"token for {args.id} (shown once; give it to that agent and nobody else):", file=sys.stderr)
         print(token)                                                    # stdout only: it can be piped into a secret store
         return 0

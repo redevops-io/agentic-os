@@ -1531,7 +1531,11 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         if p.id.startswith("agent:"):                      # a per-agent principal has exactly its own grants
             return agents is not None and agents.authorize(p, perm)
         return perm in _GRANTS
-    gateway = AgentGateway(registry=registry, authorize=_authorize, egress=PolicyEgressEngine(), audit=audit)
+    limits = {}
+    if agents is not None:
+        from agentic_os.agent_gateway.agent_tokens import AgentRateLimit
+        limits["budget"] = AgentRateLimit(agents)          # an agent whose entry sets rate_per_minute is held to it
+    gateway = AgentGateway(registry=registry, authorize=_authorize, egress=PolicyEgressEngine(), audit=audit, **limits)
     verifier = _StaticVerifier()
     rest = RestGatewayAdapter(gateway, verifier)
     endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))
