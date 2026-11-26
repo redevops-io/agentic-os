@@ -1,6 +1,6 @@
 {
  "app": "edge-sentinel",
- "digest": "sha256:5399fc1c4adf2a3dbd0bfbad1afc2330adbb1c4b098bd0be712263e7b4d3757d",
+ "digest": "sha256:c4be90e428c4cc1c51170c295765e3a906a05d428ae1d971708c06e33d3a7499",
  "operations": [
   {
    "action": "read",
@@ -974,6 +974,17 @@
   {
    "gate": "operator_authenticated",
    "method": "POST",
+   "path": "/api/v1/sync",
+   "write_policy": {
+    "access": "operator_boundary",
+    "agent_actions": [],
+    "capability": "edge-sentinel.v1_sync",
+    "permission": "edge-sentinel:write"
+   }
+  },
+  {
+   "gate": "operator_authenticated",
+   "method": "POST",
    "path": "/api/v1/users",
    "write_policy": {
     "access": "operator_boundary",
@@ -1010,7 +1021,7 @@
  "summary": {
   "operations": 26,
   "reachable_by_external_agents": 0,
-  "routes": 59,
+  "routes": 60,
   "routes_without_a_gate_decision": 0,
   "typed": 3,
   "ui_calls": 16,

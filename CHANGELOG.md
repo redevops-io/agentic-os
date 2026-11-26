@@ -17,6 +17,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.19; no version set)
 
+- CI now runs the test files directly under `apps/` (15 files, including route authorisation, fail-closed operator seams and the capability manifest check). No workflow ran them before, so the v0.4.18 statement that a stale manifest fails CI was wrong until now.
+- Edge Sentinel's `POST /api/v1/sync` now has a declared route policy (operator boundary). Without one the route layer refused it on any network request. Found by the checks CI had not been running.
+
 ## v0.4.19 (fix: a viewer limited to a project could not see the self-improvement records filed under it)
 
 - Fixed: the Self-improvement dashboard filed run records under the provider's default project instead of `sources.sim_runs.project`, so a viewer limited to the configured project was told there were no runs (0.4.18).

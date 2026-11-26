@@ -117,7 +117,7 @@ OPERATOR_AUTH_ROUTES = {"billing": {("POST", "/api/outcomes/observe"): _LOOP, ("
                                     ("POST", "/api/decide/{mission_id}/approve"): _LOOP}}
 _V1 = ("the product API: authenticates itself in EVERY profile (session cookie + CSRF, Basic against the local user table, or the service credential for reads and staging); "
        "no anonymous access; a decision or execution needs a user with the operator role or a verified approval token for a linked user")
-_V1_ROUTES = [("GET", "/api/v1/info"), ("GET", "/api/v1/posture"), ("GET", "/api/v1/events"), ("GET", "/api/v1/decisions"), ("GET", "/api/v1/cases"),
+_V1_ROUTES = [("GET", "/api/v1/info"), ("GET", "/api/v1/posture"), ("GET", "/api/v1/events"), ("GET", "/api/v1/decisions"), ("GET", "/api/v1/cases"), ("POST", "/api/v1/sync"),
               ("POST", "/api/v1/cases"), ("GET", "/api/v1/cases/{case_id}"), ("GET", "/api/v1/cases/{case_id}/evidence/{artifact_id}"),
               ("GET", "/api/v1/actions"), ("GET", "/api/v1/actions/{request_id}"), ("GET", "/api/v1/actions/{request_id}/verification"),
               ("POST", "/api/v1/cases/{case_id}/resolution"), ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/decision"), ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/execute"),
