@@ -133,6 +133,17 @@ jobs:
           mkdir -p ../../../packaging/dist
           { cargo test --locked && cargo test --locked -- --ignored --test-threads=1 real_sidecar_start_handshake real_sidecar_survives; } 2>&1 | tee ../../../packaging/dist/launcher-tests-windows.log
 
+      # The agent commands of the launcher (connect, list, disconnect) against the FROZEN sidecar just built, on every system: the credential is a
+      # private file, its value is never returned to the launcher, the grants are read-only, and disconnecting removes the file. This is the sidecar
+      # that ships; launcher-native.yml runs the same test against the source sidecar on every change.
+      - name: Agent commands through the frozen sidecar (all systems)
+        shell: bash
+        timeout-minutes: 15
+        working-directory: deploy/launcher/src-tauri
+        env:
+          RDO_SIDECAR: ${{ github.workspace }}/packaging/dist/redevops-sidecar${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: cargo test --locked agents_commands -- --ignored --test-threads=1 --nocapture
+
       # --- Signing / notarization: staged (decision 4). Enabled per-OS in P2 when secrets exist. ---
       # - name: Sign & notarize (macOS)   if: runner.os == 'macOS' && secrets.APPLE_ID ...
       # - name: Sign (Windows)            if: runner.os == 'Windows' && secrets.WIN_CERT ...
