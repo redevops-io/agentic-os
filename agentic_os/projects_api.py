@@ -1535,6 +1535,14 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     if agents is not None:
         from agentic_os.agent_gateway.agent_tokens import AgentRateLimit
         limits["budget"] = AgentRateLimit(agents)          # an agent whose entry sets rate_per_minute is held to it
+    from agentic_os.mission.profile import is_production
+    if is_production():
+        # The production profile refuses a gateway without durable authority (and with none configured it still does).
+        # Each per-agent token needs its stored record (agent_tokens issue --authority-db); the shared bearer has none.
+        from agentic_os.agent_gateway.agent_tokens import envelope_key_of
+        from agentic_os.mission.authority import authority_from_env
+        limits["authority"] = authority_from_env()
+        limits["authority_key"] = envelope_key_of
     gateway = AgentGateway(registry=registry, authorize=_authorize, egress=PolicyEgressEngine(), audit=audit, **limits)
     verifier = _StaticVerifier()
     rest = RestGatewayAdapter(gateway, verifier)

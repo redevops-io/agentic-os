@@ -14,6 +14,11 @@ The operator names a JSON file in ``AGENT_GATEWAY_AGENTS_FILE``. It stores only 
     python -m agentic_os.agent_gateway.agent_tokens revoke agents.json --id claude-laptop
     python -m agentic_os.agent_gateway.agent_tokens list   agents.json
 
+Under ``AGENTIC_OS_PROFILE=production`` the gateway is fail-closed on authority as well: every call needs a stored
+authority record for that agent. ``issue`` writes one with ``--authority-db`` (default ``AGENTIC_OS_AUTHORITY_DB``, the
+store the gateway reads): the agent's read capabilities only, its tenant, the token's own end time and an action budget.
+``revoke`` with the same store ends it too.
+
 The file is read again whenever it changes, so a revocation takes effect on the next call. Everything fails closed: a file
 that cannot be read or does not validate authenticates nobody; an entry with a grant outside the allowed set, a missing or
 malformed field, a past expiry, or a duplicate id or token authenticates nobody.
@@ -29,6 +34,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -47,6 +53,7 @@ TOKEN_PREFIX = "aga_"
 MAX_DAYS = 366
 MAX_MINUTES = 24 * 60                 # a lifetime given in minutes is for a temporary identity: at most a day
 MAX_RATE = 600                        # capability calls a minute
+MAX_ACTIONS = 5000                    # calls one authority record allows over its life
 _ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _FIELDS = {"id", "token_sha256", "grants", "expires_at", "tenant", "label", "revoked", "created_at", "rate_per_minute"}
@@ -173,6 +180,36 @@ class AgentRateLimit:
         return True, "", ("budget:agent_rate",)
 
 
+# ── authority (the production profile) ────────────────────────────────────────────────────────────
+def envelope_key(agent_id: str) -> str:
+    return f"gateway-agent:{agent_id}"
+
+
+def envelope_key_of(principal: GatewayPrincipal) -> str:
+    """Which stored authority covers a caller. Only a per-agent principal has one: the shared bearer maps to a key that
+    is never written, so in production every call it makes is denied."""
+    if str(principal.subject).startswith("agent:"):
+        return envelope_key(principal.client_id)
+    return "gateway-shared-bearer"
+
+
+def record_authority(authority_db: str, agent_id: str, grants: List[str], *, tenant: str, issued_at: float, expires_at: float,
+                     max_actions: int = MAX_ACTIONS) -> str:
+    """Store what this agent may do: exactly the read capabilities its grants name, at the read tier, for its tenant, until
+    its token ends. No delegation, no spend. Returns the record's digest."""
+    from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES  # noqa: PLC0415
+    from agentic_os.mission.authority import AuthorityEnvelope, AutonomyBudget, Grant, SqliteEnvelopeStore  # noqa: PLC0415
+    names = sorted(c.name for c in READ_CAPABILITIES if c.permissions and set(c.permissions) <= set(grants) & READ_GRANTS)
+    env = AuthorityEnvelope(
+        tenant=tenant, principal=f"agent:{agent_id}", mission_id=envelope_key(agent_id),
+        goal="read access for an external agent through the governed gateway",
+        grants=tuple(Grant(capability=n, max_tier=0) for n in names),
+        budget=AutonomyBudget(usd=0.0, max_actions=int(max_actions), max_children=0, max_depth=0, max_parallel=4),
+        may_delegate=False, issued_at=issued_at, expires_at=expires_at)
+    SqliteEnvelopeStore(authority_db).put(env)
+    return env.digest()
+
+
 # ── the operator's commands ────────────────────────────────────────────────────────────────────────
 def _read(path: str) -> Dict[str, Any]:
     if not os.path.exists(path):
@@ -196,7 +233,8 @@ def _write(path: str, doc: Dict[str, Any]) -> None:
 
 
 def issue(path: str, agent_id: str, grants: List[str], *, days: Optional[int] = None, minutes: Optional[int] = None,
-          rate_per_minute: Optional[int] = None, tenant: str = "default", label: str = "", now: Optional[float] = None) -> str:
+          rate_per_minute: Optional[int] = None, tenant: str = "default", label: str = "", now: Optional[float] = None,
+          authority_db: Optional[str] = None) -> str:
     """Add an agent and return its token. The token is not stored anywhere: it is shown once."""
     now = time.time() if now is None else now
     if not _ID.match(agent_id):
@@ -220,15 +258,24 @@ def issue(path: str, agent_id: str, grants: List[str], *, days: Optional[int] = 
                           "label": label, "created_at": int(now), "expires_at": int(now + lifetime), "revoked": False,
                           **({"rate_per_minute": rate_per_minute} if rate_per_minute is not None else {})})
     _write(path, doc)
+    if authority_db:
+        try:
+            record_authority(authority_db, agent_id, grants, tenant=tenant, issued_at=int(now), expires_at=int(now + lifetime))
+        except Exception:
+            revoke(path, agent_id)                          # no live credential without the authority that bounds it
+            raise
     return token
 
 
-def revoke(path: str, agent_id: str) -> bool:
+def revoke(path: str, agent_id: str, *, authority_db: Optional[str] = None) -> bool:
     doc = _read(path)
     for a in doc["agents"]:
         if a.get("id") == agent_id:
             a["revoked"] = True
             _write(path, doc)
+            if authority_db:
+                from agentic_os.mission.authority import SqliteEnvelopeStore  # noqa: PLC0415
+                SqliteEnvelopeStore(authority_db).revoke(envelope_key(agent_id))
             return True
     return False
 
@@ -243,6 +290,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--minutes", type=int, help="lifetime in minutes, for a temporary identity")
     ap.add_argument("--rate", type=int, help="most capability calls a minute")
     ap.add_argument("--tenant", default="default")
+    ap.add_argument("--authority-db", default=os.environ.get("AGENTIC_OS_AUTHORITY_DB", "").strip() or None,
+                    help="the authority store the gateway reads (needed under the production profile)")
     ap.add_argument("--label", default="")
     args = ap.parse_args(argv)
     try:
@@ -255,18 +304,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("--id is required", file=sys.stderr)
             return 2
         if args.command == "revoke":
-            if not revoke(args.file, args.id):
+            if not revoke(args.file, args.id, authority_db=args.authority_db):
                 print(f"no agent {args.id}", file=sys.stderr)
                 return 1
             print(f"revoked {args.id}")
             return 0
+        if os.environ.get("AGENTIC_OS_PROFILE", "").strip().lower() == "production" and not args.authority_db:
+            print("the production profile needs --authority-db (or AGENTIC_OS_AUTHORITY_DB): a token without an authority "
+                  "record would be denied every call", file=sys.stderr)
+            return 1
         days = 30 if args.days is None and args.minutes is None else args.days
         token = issue(args.file, args.id, args.grant, days=days, minutes=args.minutes, rate_per_minute=args.rate,
-                      tenant=args.tenant, label=args.label)
+                      tenant=args.tenant, label=args.label, authority_db=args.authority_db)
         print(f"token for {args.id} (shown once; give it to that agent and nobody else):", file=sys.stderr)
         print(token)                                                    # stdout only: it can be piped into a secret store
         return 0
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, sqlite3.Error) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
