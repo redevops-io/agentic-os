@@ -137,6 +137,8 @@ INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "quality.qa_start_run": _obj({
         "target_id": _s(TARGET_ID), "profile": _s(PROFILE_ID), "estimate_digest": _s(DIGEST),
         "defect": {"type": "string", "enum": ["none", "discount", "settings"]}}, ("target_id", "profile")),
+    "quality.qa_list_runs": _obj({"state": {"type": "string", "enum": ["awaiting_approval", "running", "finished", "failed", "cancelled"]},
+                                  "limit": _LIMIT}),
     "quality.qa_get_run": _obj({"run_id": _s(RUN_ID)}, ("run_id",)),
     "quality.qa_run_events": _obj({"run_id": _s(RUN_ID), "after": {"type": "integer", "minimum": 0, "maximum": 10 ** 9},
                                    "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, ("run_id",)),
@@ -183,6 +185,7 @@ TOOL_CLASS: Dict[str, str] = {
     "security.sentinel_read_back": "read",
     "quality.qa_info": "read", "quality.qa_list_targets": "read", "quality.qa_list_profiles": "read",
     "quality.qa_estimate": "read", "quality.qa_start_run": "bounded_write", "quality.qa_get_run": "read",
+    "quality.qa_list_runs": "read",
     "quality.qa_run_events": "read", "quality.qa_cancel_run": "bounded_write", "quality.qa_get_evidence": "read",
     "quality.qa_verify": "read",
     # ui_audit starts a run through the same gated, approval-bearing path as qa_start_run; plan_generate asks the

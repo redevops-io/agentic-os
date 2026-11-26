@@ -133,7 +133,8 @@ def build_fastmcp_server(gateway: AgentGateway, verifier: TokenVerifier, *,
             at = get_access_token()
             view = await to_thread.run_sync(functools.partial(bridge.call_tool, at.token if at else "", self.name, args))
             view = json.loads(json.dumps(view, default=str))              # what is sent must be plain JSON
-            return ToolResult(content=json.dumps(view), structured_content=view)
+            # an MCP client learns that a call failed from isError; the text is the same view REST returns
+            return ToolResult(content=json.dumps(view), structured_content=view, is_error=view.get("status") in ("error", "denied"))
 
     for manifest in gateway.registry.all():
         schema = {"type": "object", "properties": {}, **dict(manifest.input_schema or {})}

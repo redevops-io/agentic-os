@@ -48,17 +48,21 @@ def _obj_schema(**props: str) -> dict:
             "required": list(props)}
 
 
+_NO_INPUT = {"type": "object", "properties": {}}
+
+
 # ── manifests (all read-only ⇒ RiskTier.READ, non-side-effecting, auto-approve) ────
 PROJECTS_LIST = CapabilityManifest(
     "projects.list", "List the projects you can see.", CapabilityKind.DIRECT,
-    permissions=("projects.read",), data_classes=(DataClass.INTERNAL,))
+    permissions=("projects.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 PROJECTS_GET_STATUS = CapabilityManifest(
     "projects.get_status", "Get a project's current status overview.", CapabilityKind.DIRECT,
-    permissions=("projects.read",), input_schema=_obj_schema(project_id="string"),
+    permissions=("projects.read",),             # no project_id: the deployment's default project
+    input_schema={"type": "object", "properties": {"project_id": {"type": "string"}}},
     data_classes=(DataClass.INTERNAL,))
 MISSIONS_LIST = CapabilityManifest(
     "missions.list", "List missions and their state.", CapabilityKind.DIRECT,
-    permissions=("missions.read",), data_classes=(DataClass.INTERNAL,))
+    permissions=("missions.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 MISSIONS_GET = CapabilityManifest(
     "missions.get", "Get one mission's summary and state.", CapabilityKind.DIRECT,
     permissions=("missions.read",), input_schema=_obj_schema(mission_id="string"),
@@ -69,7 +73,7 @@ MISSIONS_EXPLAIN = CapabilityManifest(
     data_classes=(DataClass.INTERNAL,))
 MISSIONS_PENDING = CapabilityManifest(
     "missions.list_pending_approvals", "List mission steps awaiting human approval.",
-    CapabilityKind.DIRECT, permissions=("missions.read",), data_classes=(DataClass.INTERNAL,))
+    CapabilityKind.DIRECT, permissions=("missions.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 SOURCES_SEARCH = CapabilityManifest(
     "sources.search", "Search connected knowledge sources; returns references, not copies.",
     CapabilityKind.DIRECT, permissions=("sources.read",),
@@ -80,7 +84,7 @@ SOURCES_SEARCH = CapabilityManifest(
 DASHBOARDS_LIST = CapabilityManifest(
     "dashboards.list", "List the dashboards you can read here (for example QA and release readiness, portfolio health, "
     "missions) and those that are not available, with why.", CapabilityKind.DIRECT,
-    permissions=("dashboards.read",), data_classes=(DataClass.INTERNAL,))
+    permissions=("dashboards.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 DASHBOARDS_GET = CapabilityManifest(
     "dashboards.get", "Read one dashboard: its summary, panels with their numbers, sources and how fresh each is. It returns "
     "figures and at most a few table rows, not the underlying records. E-mail addresses are masked; names of people and "

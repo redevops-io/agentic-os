@@ -68,6 +68,8 @@ _TOOLS: Tuple[Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, 
     ("quality.qa_start_run", "quality", "Start a redevops-qa run for a target and profile; a run that needs approval waits for a person.",
      ("start run", "run tests", "start qa run", "run test profile"), ("target_id", "profile"),
      ("estimate_digest", "defect"), ("request_run_approval",)),
+    ("quality.qa_list_runs", "quality", "Recent redevops-qa runs with their state and outcome, newest first; filter by state to find what failed.",
+     ("list runs", "recent runs", "failed runs", "which runs failed", "qa history"), (), ("state", "limit"), ()),
     ("quality.qa_get_run", "quality", "Progress, state and outcome of a redevops-qa run.",
      ("run progress", "how is the run going", "qa run status", "get run"), ("run_id",), (), ()),
     ("quality.qa_run_events", "quality", "Progress events of a redevops-qa run.",
@@ -337,6 +339,14 @@ class ProductTools:
         return CapabilityResult(capability_id="quality.qa_start_run", answer=ans, data={
             "product": spec.id, "run_id": rid, "state": st, "approval": card, "executed": False},
             evidence=(rid,), artifacts=(_link(spec, "run", rid, f"/ui/runs/{rid}"),))
+
+    def _qa_list_runs(self, spec, inp, who):
+        r = self.hub.qa(spec.id).runs(state=inp.get("state", ""), limit=inp.get("limit", 20), actor=who, source="sidekick")
+        items = r.get("items", r.get("runs", [])) if isinstance(r, Mapping) else []
+        lines = [f"{x.get('id') or x.get('run_id')} {x.get('state')}" + (f" {x.get('outcome')}" if x.get("outcome") else "") for x in items[:10]]
+        return CapabilityResult(capability_id="quality.qa_list_runs", answer=(f"{len(items)} run(s): " + "; ".join(lines) + ".") if items else "No runs match.",
+                                data={"product": spec.id, "items": items, "executed": False},
+                                evidence=tuple(str(x.get("id") or x.get("run_id")) for x in items if x.get("id") or x.get("run_id")))
 
     def _qa_get_run(self, spec, inp, who):
         r = self.hub.qa(spec.id).run(inp["run_id"], actor=who, source="sidekick")

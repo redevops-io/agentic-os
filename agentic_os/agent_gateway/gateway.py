@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, replace
-from typing import Protocol, Tuple
+from typing import Mapping, Protocol, Tuple
 
 from agentic_os.overlays import Principal
 
@@ -94,6 +94,28 @@ class InMemoryAuditSink:
         ref = f"audit_{len(self.events)}"
         self.events.append(event)
         return ref
+
+
+def invalid_arguments(request: GatewayRequest, manifest: CapabilityManifest) -> list:
+    """What is wrong with a call's arguments (field paths, never values), or nothing. A capability that publishes an input
+    schema is held to it, and an input it does not name is refused unless the schema allows extras: a misspelt or
+    wrapped argument must not be silently ignored. ``idempotency_key`` is the gateway's own and always accepted. A
+    capability that declares no schema at all is not checked."""
+    schema = dict(manifest.input_schema or {})
+    if not schema:
+        return []
+    from agentic_os.products.schemas import SchemaError, validate   # noqa: PLC0415  (a pure, stdlib-only validator)
+    if "properties" in schema:
+        schema.setdefault("additionalProperties", False)
+    arguments = request.arguments
+    if not isinstance(arguments, Mapping):
+        return ["$: expected object"]
+    declared = schema.get("properties", {})
+    try:
+        validate({k: v for k, v in arguments.items() if k != "idempotency_key" or k in declared}, schema)
+    except SchemaError as exc:
+        return exc.problems
+    return []
 
 
 # ── the gateway ────────────────────────────────────────────────────────────────────
@@ -199,6 +221,14 @@ class AgentGateway:
                                   self._deny("unknown_capability"), exposed_reason="hidden")
 
         tier = manifest.risk_tier
+
+        # 1a. the arguments against the capability's published schema, before anything is claimed, spent or dispatched:
+        # a malformed call reaches no handler, uses no budget, authority or idempotency key, and is audited as a refusal.
+        problems = invalid_arguments(request, manifest)
+        if problems:
+            decision = GatewayDecision(allowed=False, reason="invalid_arguments", risk_tier=tier)
+            return self._finalize(request, start, GatewayResult("", GatewayStatus.ERROR, decision,
+                                                               error="invalid_arguments: " + "; ".join(problems[:6])), exposed_reason="permitted")
 
         # 1b. authority envelope (fail-closed when configured): scope, resources, limits, expiry, revocation.
         standing_ok = False

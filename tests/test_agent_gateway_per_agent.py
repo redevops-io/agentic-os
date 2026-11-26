@@ -208,14 +208,24 @@ def test_asking_for_the_mcp_server_without_the_extra_stops_startup(env, tmp_path
         create_app(SampleProjectionProvider())
 
 
-def test_the_mounted_surface_registers_reads_only(env, tmp_path):
-    """The route layer treats the gateway's POSTs as queries. That stays true only while nothing here can write."""
-    from agentic_os.agent_gateway.contracts import CapabilityKind
+def test_the_mounted_surface_can_only_read_stage_or_start_bounded_work(env, tmp_path):
+    """The route layer lets the gateway's POSTs through to the gateway, which authorizes each call. What it can reach
+    is held here: reads, plus the product tools that stage a proposal or start/cancel a test run. Nothing decides or
+    executes, and any new side-effecting capability has to be added to this list on purpose."""
+    from agentic_os.agent_gateway.contracts import ApprovalPolicy, RiskTier
+    from agentic_os.products.schemas import FORBIDDEN_TOOLS, TOOL_CLASS
     env.setenv("AGENT_GATEWAY_TOKEN", "t")
     app = create_app(SampleProjectionProvider())
     caps = list(app.state.agent_gateway_registry.all())
-    assert caps and all(not getattr(m, "side_effecting", False) for m in caps)
-    assert all(all(p in AT.ALLOWED_GRANTS for p in m.permissions) and m.permissions for m in caps), [(m.name, m.permissions) for m in caps]
+    assert caps and all(all(p in AT.ALLOWED_GRANTS for p in m.permissions) and m.permissions for m in caps), [(m.name, m.permissions) for m in caps]
+    assert not [m.name for m in caps if m.side_effecting], "with only the shared bearer, nothing writes"
+    from agentic_os.agent_gateway.product_capabilities import manifests
+    writes = {m.name for m in manifests() if m.side_effecting}
+    assert writes == {"security.sentinel_propose_ban", "security.sentinel_propose_unban", "quality.qa_start_run",
+                      "quality.qa_cancel_run", "quality.ui_audit", "quality.plan_generate"}
+    assert all(TOOL_CLASS[n] in ("stage", "bounded_write") for n in writes)
+    assert not {m.name for m in manifests()} & FORBIDDEN_TOOLS
+    assert all(m.risk_tier == RiskTier.BOUNDED_WRITE and m.effective_approval_policy == ApprovalPolicy.AUTO for m in manifests() if m.side_effecting)
     assert {k for k in app.state.route_policies if "agent-gateway" in k} == {"POST /api/agent-gateway/capabilities/{name}/invoke", "POST /api/agent-gateway/mcp"}
 
 
