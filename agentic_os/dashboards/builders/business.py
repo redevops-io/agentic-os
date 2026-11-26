@@ -14,6 +14,12 @@ from ..contracts import Record
 from ..store import DAY, day_of
 
 
+def _days_past(date: Any, now: float) -> int:
+    """Whole calendar days (UTC) since a DATE such as a due or expected date, which sources give as its first instant.
+    0 on the day itself: something due today is not overdue until tomorrow, as the applications themselves count it."""
+    return int(now // DAY) - int(float(date) // DAY)
+
+
 def _money(recs: Sequence[Record], field: str = "amount") -> Tuple[Optional[float], str, str]:
     """(sum in the main currency, that currency, a note naming what was left out)."""
     by: Dict[str, List[float]] = {}
@@ -133,7 +139,7 @@ def finance(b: Build) -> None:
     inv = b.records("erpnext", "invoice", timed=False)
     bills = b.records("erpnext", "bill", timed=False)
     ar = [x for x in inv if (x.get("outstanding") or 0) > 0]
-    overdue = [x for x in ar if x.get("due") and float(x.get("due")) < b.now]
+    overdue = [x for x in ar if x.get("due") and _days_past(x.get("due"), b.now) > 0]
     ap = [x for x in bills if (x.get("outstanding") or 0) > 0]
     invoiced = [x for x in inv if x.at and b.since <= x.at <= b.until and x.status not in ("Cancelled", "Draft")]
     cols = ("customer", "outstanding", "currency", "amount")
@@ -167,8 +173,7 @@ def finance(b: Build) -> None:
     buckets = (("Not due", -1e9, 0), ("1–30 days", 0, 30), ("31–60 days", 30, 60), ("61–90 days", 60, 90), ("Over 90 days", 90, 1e9))
     items = []
     for label, lo, hi in buckets:
-        recs = [x for x in ar if lo < ((b.now - float(x.get("due"))) / DAY if x.get("due") else -1) <= hi] if label != "Not due" else \
-               [x for x in ar if not x.get("due") or float(x.get("due")) >= b.now]
+        recs = [x for x in ar if lo < (_days_past(x.get("due"), b.now) if x.get("due") else -1) <= hi]
         items.append({"label": label, "value": _money(recs, "outstanding")[0] or 0, "note": f"{len(recs)} invoice(s)", "tone": "ok" if label == "Not due" else "warn" if hi <= 60 else "bad",
                       "drill": b.drill(f"aging:{label}", f"Receivables: {label.lower()}", recs, columns=cols) if recs else ""})
     d.panels.append(panel("aging", "Receivables aging", "bars", sources=E, unit=cur, items=items, empty="" if ar else "Nothing is outstanding."))
@@ -181,7 +186,7 @@ def finance(b: Build) -> None:
                           series=[{"id": "invoiced", "label": "Invoiced", "tone": "ok", "values": [_money(by[m])[0] or 0 for m in months]}],
                           empty="" if invoiced else "No invoice was posted in this range."))
     rows = [row({"invoice": x.id, "customer": x.get("customer"), "outstanding": x.get("outstanding"), "currency": x.get("currency"),
-                 "days_overdue": int((b.now - float(x.get("due"))) / DAY), "status": x.status}, tone="bad", ref=x.ref, url=x.url)
+                 "days_overdue": _days_past(x.get("due"), b.now), "status": x.status}, tone="bad", ref=x.ref, url=x.url)
             for x in sorted(overdue, key=lambda r: float(r.get("due")))[:50]]
     d.panels.append(panel("overdue", "Overdue invoices", "table", sources=E, span=2, rows=rows, empty="" if rows else "No invoice is overdue.",
                           columns=[col("invoice", "Invoice"), col("customer", "Customer"), col("outstanding", "Outstanding", "right"), col("currency", "Cur."),
@@ -290,7 +295,7 @@ def procurement(b: Build) -> None:
     sup = b.records("erpnext", "supplier", timed=False)
     bills = b.records("erpnext", "bill", timed=False)
     open_ = [p for p in pos if p.status not in ("Completed", "Closed", "Cancelled", "Draft")]
-    late = [p for p in open_ if p.get("expected") and float(p.get("expected")) < b.now and (p.get("received_pct") or 0) < 100]
+    late = [p for p in open_ if p.get("expected") and _days_past(p.get("expected"), b.now) > 0 and (p.get("received_pct") or 0) < 100]
     placed = [p for p in pos if p.at and b.since <= p.at <= b.until and p.status not in ("Cancelled", "Draft")]
     hold = [s for s in sup if s.status == "on_hold"]
     due = [x for x in bills if (x.get("outstanding") or 0) > 0 and x.get("due") and float(x.get("due")) < b.now + 7 * DAY]
@@ -318,7 +323,7 @@ def procurement(b: Build) -> None:
                           items=[{"label": k, "value": len(v), "tone": "bad", "drill": b.drill(f"late:{k}", f"Late orders from {k}", v, columns=cols)}
                                  for k, v in sorted(late_by.items(), key=lambda kv: -len(kv[1]))[:12]]))
     rows = [row({"order": p.id, "supplier": p.get("supplier"), "amount": p.get("amount"), "currency": p.get("currency"), "status": p.status,
-                 "days_late": int((b.now - float(p.get("expected"))) / DAY), "received": p.get("received_pct")}, tone="bad", ref=p.ref, url=p.url)
+                 "days_late": _days_past(p.get("expected"), b.now), "received": p.get("received_pct")}, tone="bad", ref=p.ref, url=p.url)
             for p in sorted(late, key=lambda p: float(p.get("expected")))[:50]]
     d.panels.append(panel("late", "Late purchase orders", "table", sources=S, span=2, rows=rows, empty="" if rows else "No open order is late.",
                           columns=[col("order", "Order"), col("supplier", "Supplier"), col("amount", "Amount", "right"), col("currency", "Cur."), col("status", "Status"),

@@ -961,3 +961,31 @@ def test_a_project_that_reported_but_is_not_declared_has_a_row_in_the_readiness_
     assert rows["elsewhere (not declared)"]["cells"]["readiness"] == "Not ready" and rows["elsewhere (not declared)"]["cells"]["failed"] == 1
     assert rows["other (not declared)"]["cells"]["readiness"] != "Not ready"
     assert any("9.9.9" in str(x) for x in _panel(d, "by_suite")["x"])               # the reported release label is in the suite's name
+
+
+def test_something_due_today_is_not_overdue_until_tomorrow(monkeypatch, tmp_path):
+    """Found against a live ERPNext: an invoice due today was counted overdue from midnight, so the dashboard's overdue
+    figure disagreed with the application it was read from. A due date is a day, not its first instant."""
+    day = lambda offset: time.strftime("%Y-%m-%d", time.gmtime(T0 + offset * DAY))  # noqa: E731
+
+    class Erp(_Erp):
+        def get_list(self, doctype, fields, filters=None, limit=0):
+            if doctype == "Sales Invoice":
+                return [{"name": f"SINV-{n}", "customer": "C", "grand_total": amt, "outstanding_amount": amt, "due_date": day(n), "status": "Unpaid",
+                         "posting_date": day(-40), "currency": "USD"} for n, amt in ((-1, 10), (0, 200), (1, 3000), (-31, 40000))]
+            if doctype == "Purchase Order":
+                return [{"name": f"PO-{n}", "supplier": "S", "grand_total": 1, "status": "To Receive and Bill", "transaction_date": day(-9),
+                         "schedule_date": day(n), "per_received": 0, "currency": "USD"} for n in (-1, 0, 1)]
+            return super().get_list(doctype, fields, filters, limit)
+
+    c, svc, _ = _app(monkeypatch, tmp_path)
+    svc.config.sources.update({"erpnext": {"project": "billing"}})
+    svc.ctx.clients.update({"erpnext": Erp()})
+    svc.cache.invalidate()
+    fin = c.get("/api/dashboards/finance").json()
+    assert (_metric(fin, "receivables")["value"], _metric(fin, "overdue")["value"]) == (43210.0, 40010.0)
+    aging = {i["label"]: i["value"] for i in _panel(fin, "aging")["items"]}
+    assert aging == {"Not due": 3200.0, "1–30 days": 10.0, "31–60 days": 40000.0, "61–90 days": 0, "Over 90 days": 0}
+    assert sorted(r["cells"]["days_overdue"] for r in _panel(fin, "overdue")["rows"]) == [1, 31]
+    pro = c.get("/api/dashboards/procurement").json()
+    assert _metric(pro, "late")["value"] == 1 and [r["cells"]["days_late"] for r in _panel(pro, "late")["rows"]] == [1]
