@@ -18,11 +18,10 @@ any other pid. Nothing in the harness matches processes by command name (the iso
 an expired refresh token is refused by the server and the SDK goes back to consent); 5 revocation by the person (the live session, the refresh path and a reconnect are refused); 6 tenant isolation behind the operator gate
 (each approver sees and ends only its own tenant's connections; another tenant's revoke is a 404), and the difference between authorities: the deployment OPERATOR sees and can end any tenant's connection (explicit administrative
 authority), a tenant approver only its own, a requester token and an anonymous caller none; 6b the consent page's Referrer-Policy; 6c consent in a real Chromium with the browser's own headers (no forged Origin); 7 protocol
-negatives (anonymous consent, unregistered redirect_uri, PKCE `plain`, wrong verifier, code replay, refresh rotation and reuse detection); 8 the MCP tools' input schemas equal the REST capability schemas, and malformed arguments
+negatives (anonymous consent, unregistered redirect_uri, PKCE `plain`, wrong verifier, code replay, refresh rotation and reuse detection); 9 product tools over OAuth with tenants (when the checkout has product capabilities: a real Sentinel demo is registered; the tenant granted the product reads it, the other tenant gets no product tools and a refused call; a connection consented without the grant has none); 8 the MCP tools' input schemas equal the REST capability schemas, and malformed arguments
 must be rejected alike on both interfaces.
 
-**Known defect, strict xfail (scenario 8.2):** neither the REST invoke route nor MCP validates arguments against the input schema: a missing required property or a wrong type is passed to the handler and answered `ok`. Reported
-to the owner with a reproduction. The scenario fails the run when it starts passing, so the marker is removed with the fix.
+**Argument validation (scenario 8.2):** the gateway validates arguments against each capability's input schema and answers `invalid_arguments: <path>: <problem>` alike on REST and on MCP (unknown properties are refused where the schema says `additionalProperties: false`, which every mounted capability does). On a checkout that lacks validation (`invalid_arguments` absent from `agentic_os/agent_gateway`) these checks are strict expected failures instead, so the run is red if they start passing there; on any checkout with validation they are ordinary checks.
 
 ## Results
 - **b79ddf85 (#867 as first opened): 34 of 36.** Failures: tools published one opaque `arguments` object; the consent POST 403d with `Origin: null`.
