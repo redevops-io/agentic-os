@@ -745,7 +745,8 @@ def economics(ctx: Context) -> SourceResult:
         return SourceResult(_status("economics", STALE, at=now, n=len(rows),
                                     detail="; ".join(f"{g['source']}: {g['what']} ({g['effect']})" for g in gaps[:4]) + ": the figures built on this are incomplete",
                                     remedy="fix what is named, then reload"), rows)
-    return SourceResult(_status("economics", at=now, n=len(rows)), rows)
+    optional = "; ".join(f"{g['source']}: {g['what']} ({g['effect']})" for g in ex.notes[:3])
+    return SourceResult(_status("economics", at=now, n=len(rows), detail=(f"optional: {optional}" if optional else "")), rows)
 
 
 def chatwoot(ctx: Context) -> SourceResult:

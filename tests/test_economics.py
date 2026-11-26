@@ -142,12 +142,12 @@ def test_a_field_the_application_leaves_out_without_an_error_is_a_gap():
     assert any("base_costing_amount" in g["what"] for g in ex.gaps)
 
 
-def test_custom_fields_the_site_does_not_have_cost_supplier_attribution_not_the_whole_read():
+def test_custom_fields_the_site_does_not_have_cost_supplier_attribution_not_the_whole_read_and_do_not_make_it_incomplete():
     rows = base_rows()
     for r in rows["Timesheet Detail"]:
         r.pop("custom_supplier"), r.pop("custom_reference")
     ex = ev(rows)
-    assert any("custom_supplier" in g["what"] for g in ex.gaps)
+    assert any("custom_supplier" in g["what"] for g in ex.notes) and not ex.gaps          # said, but the read is complete without an optional extension
     assert by_id(ex, "T2:Rework:2026-09-05").amount == Decimal("-1300.00") and "supplier" not in by_id(ex, "T3:Rework:2026-09-18").subjects
 
 

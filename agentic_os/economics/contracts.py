@@ -87,6 +87,10 @@ class Extraction:
     events: list = field(default_factory=list)
     gaps: list = field(default_factory=list)          # [{"source": ..., "what": ..., "effect": ...}]
     counts: Dict[str, int] = field(default_factory=dict)
+    notes: list = field(default_factory=list)         # optional capability a site does not have (a custom field): said, but it does not make the read incomplete
+
+    def note(self, source: str, what: str, effect: str) -> None:
+        self.notes.append({"source": source, "what": what, "effect": effect})
 
     def gap(self, source: str, what: str, effect: str) -> None:
         self.gaps.append({"source": source, "what": what, "effect": effect})

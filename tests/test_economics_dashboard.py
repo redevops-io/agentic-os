@@ -52,3 +52,12 @@ def test_a_source_that_could_not_be_fully_read_makes_the_dashboard_say_so(monkey
     _, dash = _dash(monkeypatch, tmp_path, base_rows(), fail=["Purchase Invoice"])
     st = next(s for s in dash["sources"] if s["id"] == "economics")
     assert st["state"] != "ok" and "Purchase Invoice" in st["detail"] and "incomplete" in st["detail"]
+
+
+def test_a_site_without_the_optional_custom_fields_is_not_reported_as_stale_but_says_what_it_lacks(monkeypatch, tmp_path):
+    rows = base_rows()
+    for r in rows["Timesheet Detail"]:
+        r.pop("custom_supplier"), r.pop("custom_reference")
+    _, dash = _dash(monkeypatch, tmp_path, rows)
+    st = next(s for s in dash["sources"] if s["id"] == "economics")
+    assert st["state"] == "ok" and "custom_supplier" in st["detail"] and st["detail"].startswith("optional")
