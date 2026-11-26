@@ -3,6 +3,9 @@
 The mounted gateway had a single static bearer shared by every holder: no identity per agent, so no per-agent grant, audit
 attribution or revocation. This is the :class:`~agentic_os.agent_gateway.auth.TokenVerifier` that gives each agent its own.
 
+On a deployment with tenants (``AGENTIC_OS_TENANT_LIMITS``) an agent reads only what its token's ``tenant`` is granted
+there (see ``scope.py``). ``dashboards.read`` is not a default grant: it must be named.
+
 The operator names a JSON file in ``AGENT_GATEWAY_AGENTS_FILE``. It stores only the SHA-256 of each token:
 
     {"schema": "aos.agent-gateway.agents/v1",
@@ -49,6 +52,9 @@ SCHEMA = "aos.agent-gateway.agents/v1"
 #: what an agent may be granted here. The mounted gateway exposes reads only; a write grant would grant nothing and is
 #: refused, so that a file cannot appear to give an agent something it cannot have.
 READ_GRANTS: FrozenSet[str] = frozenset({"projects.read", "missions.read", "sources.read"})
+#: read grants that expose business figures. Never part of a default set: a token has one only when the operator names it.
+NAMED_GRANTS: FrozenSet[str] = frozenset({"dashboards.read"})
+ALLOWED_GRANTS: FrozenSet[str] = READ_GRANTS | NAMED_GRANTS
 TOKEN_PREFIX = "aga_"
 MAX_DAYS = 366
 MAX_MINUTES = 24 * 60                 # a lifetime given in minutes is for a temporary identity: at most a day
@@ -84,7 +90,7 @@ def _entries(doc: Any) -> List[Dict[str, Any]]:
         problem = ("unknown field(s) " + ", ".join(sorted(set(a) - _FIELDS)) if set(a) - _FIELDS else
                    "bad id" if not (isinstance(aid, str) and _ID.match(aid)) else
                    "bad token_sha256" if not (isinstance(h, str) and _HASH.match(h)) else
-                   "grants must be a non-empty list of read grants" if not (isinstance(grants, list) and grants and set(map(str, grants)) <= READ_GRANTS) else
+                   "grants must be a non-empty list of read grants" if not (isinstance(grants, list) and grants and set(map(str, grants)) <= ALLOWED_GRANTS) else
                    "expires_at must be a number" if not (isinstance(exp, (int, float)) and not isinstance(exp, bool)) else
                    "revoked must be true or false" if not isinstance(a.get("revoked", False), bool) else
                    f"rate_per_minute must be a whole number from 1 to {MAX_RATE}" if "rate_per_minute" in a and not (type(a["rate_per_minute"]) is int and 1 <= a["rate_per_minute"] <= MAX_RATE) else "")
@@ -199,7 +205,7 @@ def record_authority(authority_db: str, agent_id: str, grants: List[str], *, ten
     its token ends. No delegation, no spend. Returns the record's digest."""
     from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES  # noqa: PLC0415
     from agentic_os.mission.authority import AuthorityEnvelope, AutonomyBudget, Grant, SqliteEnvelopeStore  # noqa: PLC0415
-    names = sorted(c.name for c in READ_CAPABILITIES if c.permissions and set(c.permissions) <= set(grants) & READ_GRANTS)
+    names = sorted(c.name for c in READ_CAPABILITIES if c.permissions and set(c.permissions) <= set(grants) & ALLOWED_GRANTS)
     env = AuthorityEnvelope(
         tenant=tenant, principal=f"agent:{agent_id}", mission_id=envelope_key(agent_id),
         goal="read access for an external agent through the governed gateway",
@@ -239,8 +245,8 @@ def issue(path: str, agent_id: str, grants: List[str], *, days: Optional[int] = 
     now = time.time() if now is None else now
     if not _ID.match(agent_id):
         raise ValueError("an agent id is lower-case letters, digits, '.', '_' or '-' (at most 64)")
-    if not grants or not set(grants) <= READ_GRANTS:
-        raise ValueError(f"grants must be among {', '.join(sorted(READ_GRANTS))}")
+    if not grants or not set(grants) <= ALLOWED_GRANTS:
+        raise ValueError(f"grants must be among {', '.join(sorted(ALLOWED_GRANTS))}")
     if (days is None) == (minutes is None):
         raise ValueError("give a lifetime in --days or in --minutes (exactly one): every agent token expires")
     if days is not None and not 1 <= days <= MAX_DAYS:
