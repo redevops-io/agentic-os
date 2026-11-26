@@ -237,6 +237,19 @@ def test_sign_in_refuses_wrong_cross_site_cleartext_and_repeated_attempts(world)
     assert last.status_code == 429 and sign_in(c, A_APPROVER).status_code == 429       # locked out, even with the right one
 
 
+def test_other_peoples_failures_never_lock_an_approver_out(world):
+    from agentic_os.projects.approver_session import FAILURES_IN_ALL, FLOOD_DELAY_S
+    now = [1000.0]
+    s = Sessions(clock=lambda: now[0])
+    assert s.failure_delay() == 0.0
+    for n in range(FAILURES_IN_ALL * 10):                                       # a flood from many (or forged) addresses
+        s.sign_in(f"attacker-{n}", token="z" * 40)
+    assert s.failure_delay() == FLOOD_DELAY_S and len(s._all_failures) <= FAILURES_IN_ALL * 4
+    assert not s.blocked("the-approver") and s.sign_in("the-approver", token=A_APPROVER)
+    now[0] += 301
+    assert s.failure_delay() == 0.0
+
+
 def test_signing_in_never_redirects_elsewhere(world):
     for bad in ("https://evil.example/x", "//evil.example", "/approvals/../../etc", "/api/dashboards", "/approvals/x\r\nSet-Cookie: a=1", ""):
         assert safe_next(bad) == "/approvals", bad

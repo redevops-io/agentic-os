@@ -23,8 +23,11 @@ COOKIE = "aos_approver"
 TTL_S = 8 * 3600
 IDLE_S = 1800
 MAX_SESSIONS = 500
-#: failed sign-ins allowed in five minutes, per client address and in all
+#: failed sign-ins one client address may make in five minutes before it is refused; and the number from everywhere past
+#: which each further FAILURE is slowed. Nobody is refused for what others did: an overall lockout would let anyone on the
+#: internet keep every approver out.
 FAILURES_PER_CLIENT, FAILURES_IN_ALL, FAILURE_WINDOW_S = 8, 60, 300
+FLOOD_DELAY_S = 2.0
 
 
 def _digest(value: str) -> str:
@@ -98,10 +101,16 @@ class Sessions:
         return len(q)
 
     def blocked(self, client: str) -> bool:
+        """This client failed too often itself."""
         with self._lock:
-            now = self.clock()
-            return (self._recent(self._failures.get(client, deque()), now) >= FAILURES_PER_CLIENT
-                    or self._recent(self._all_failures, now) >= FAILURES_IN_ALL)
+            return self._recent(self._failures.get(client, deque()), self.clock()) >= FAILURES_PER_CLIENT
+
+    def failure_delay(self) -> float:
+        """How long to hold back the answer to a FAILED sign-in: nothing, unless failures are flooding in from anywhere.
+        A successful sign-in is never delayed. (A client address behind a proxy can be forged, so the per-client limit
+        alone does not slow a deliberate guesser.)"""
+        with self._lock:
+            return FLOOD_DELAY_S if self._recent(self._all_failures, self.clock()) >= FAILURES_IN_ALL else 0.0
 
     def sign_in(self, client: str, *, token: str = "", username: str = "", password: str = "") -> Optional[str]:
         """The new session's cookie value, or None. Refused attempts count against the client."""
@@ -115,6 +124,8 @@ class Sessions:
                     self._failures.clear()
                 self._failures.setdefault(client, deque()).append(now)
                 self._all_failures.append(now)
+                while len(self._all_failures) > FAILURES_IN_ALL * 4:           # bounded, however long a flood lasts
+                    self._all_failures.popleft()
                 return None
             for key in [k for k, s in self._by_id.items() if now - s.created > TTL_S or now - s.seen > IDLE_S]:
                 del self._by_id[key]

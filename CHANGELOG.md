@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.26; no version set)
 
+- Fixed: 60 failed sign-ins from anywhere refused everyone's approval sign-in for five minutes, so anyone who could reach the page could keep approvers out. Only a client's own failures refuse it now; a flood slows failed answers.
+
 ## v0.4.26 (the MCP server works under a base path)
 
 - Fixed: the real MCP server (`AGENT_GATEWAY_MCP=1`) did not work under `PROJECTS_BASE_PATH`: every client failed at `initialize`, because a mounted application's lifespan, which starts the MCP session manager, was never run.

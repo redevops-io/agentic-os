@@ -204,6 +204,8 @@ class ApprovalPages:
             value = self.sessions.sign_in(client, token=form.get("token", "").strip(), username=form.get("username", ""),
                                           password=form.get("password", ""))
             if value is None:
+                import asyncio  # noqa: PLC0415
+                await asyncio.sleep(self.sessions.failure_delay())
                 return _page("Sign in to approve", signin_html(base, safe_next(form.get("next", "")), "That credential was not accepted."), 401)
             out = RedirectResponse(base + safe_next(form.get("next", "")), 303, headers=HEADERS)
             out.set_cookie(COOKIE, value, max_age=TTL_S, path=base or "/", httponly=True, samesite="lax", secure=self._secure(request))

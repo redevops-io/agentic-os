@@ -173,7 +173,8 @@ ERPNext.
 requester) token. The session is a cookie (HttpOnly, SameSite=Lax) naming a server-side record that lives 8 hours at most
 and 30 idle minutes; removing or replacing the credential ends it at once, as does a restart. A decision also needs the
 session's CSRF token and the same origin. Sign-in is refused over plain HTTP except from this machine (an SSH tunnel to
-localhost); failed attempts are rate limited. Behind `PROJECTS_OPERATOR_GATE`, a session opens these pages and nothing else.
+localhost); a client address that keeps failing is refused for five minutes, and during a flood failed answers are
+slowed. Nobody is locked out by other people's failures. Behind `PROJECTS_OPERATOR_GATE`, a session opens these pages and nothing else.
 
 The pages apply what the APIs apply: a tenant approver needs `writes:decide` for a governed write and `projects:write`
 plus the product's `products:<id>` for a product action; a requester never decides a write, and decides nothing once its
