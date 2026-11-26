@@ -77,9 +77,12 @@ def test_every_shape_of_front_end_call_the_apps_use_is_found(tmp_path):
 def test_the_inventory_sees_every_read_the_gateway_registers_dashboards_included():
     from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES
     from agentic_os.app_kit.capability_inventory import gateway_capabilities
+    from agentic_os.agent_gateway.product_capabilities import manifests as product_manifests
+    from agentic_os.products.schemas import FORBIDDEN_TOOLS
     registered = set(gateway_capabilities())
-    assert {"dashboards.list", "dashboards.get"} <= registered
+    assert {"dashboards.list", "dashboards.get"} <= registered and {m.name for m in product_manifests()} <= registered
     assert {c.name for c in READ_CAPABILITIES} - registered == {"crm.lookup_account"}     # the mount gives it no CRM port
+    assert not registered & FORBIDDEN_TOOLS
 
 
 def test_a_candidate_lacks_nothing_and_every_other_unreachable_read_says_what_it_lacks():

@@ -1,6 +1,6 @@
 {
  "app": "projects",
- "digest": "sha256:09abfe2b666d2077153834d864f7e695fdd78d7d0d9ae6575c4e98fe0c75d4db",
+ "digest": "sha256:e6c58caee9c93ab28f993b259586da5cd4bc3f7a66ba10a149db531e296ae9c2",
  "operations": [
   {
    "action": "write",
@@ -124,6 +124,20 @@
    "route_access": [
     "authority_required"
    ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "findings.consolidate",
    "typed": false
   },
   {
@@ -653,6 +667,314 @@
    "typed": false
   },
   {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.plan_generate",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_cancel_run",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_estimate",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_get_evidence",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_get_run",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_info",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_list_profiles",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_list_runs",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_list_targets",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_run_events",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_start_run",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_verify",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.ui_audit",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.deployment_scan",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_get_case",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_list_actions",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_list_cases",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_posture",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_propose_ban",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_propose_unban",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_read_back",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_request_decision",
+   "typed": false
+  },
+  {
    "action": "read",
    "action_source": "gateway",
    "declared_by": [
@@ -1090,14 +1412,14 @@
  "status": "incomplete",
  "summary": {
   "gateway_candidates": 0,
-  "operations": 32,
-  "reachable_by_external_agents": 9,
+  "operations": 55,
+  "reachable_by_external_agents": 32,
   "routes": 54,
   "routes_without_a_gate_decision": 0,
   "typed": 0,
   "ui_calls": 0,
   "ui_calls_not_matched": 0,
-  "writes_or_deletes": 22
+  "writes_or_deletes": 28
  },
  "ui_calls": []
 }
