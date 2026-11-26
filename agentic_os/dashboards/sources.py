@@ -945,7 +945,7 @@ def sim_runs(ctx: Context) -> SourceResult:
     found, cut = sim_source.run_directories(base)
     for path in found:
         try:
-            rows.extend(sim_source.read_run(path, base, project=ctx.default_project))
+            rows.extend(sim_source.read_run(path, base, project=ctx.config.source_project("sim_runs") or ctx.default_project))
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             bad.append(f"{path.name}: {exc if isinstance(exc, sim_source.UnreadableRun) else type(exc).__name__}")
     if bad and not rows:
