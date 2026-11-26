@@ -1483,9 +1483,11 @@ class MissionRuntime:
         rather than returning pending forever. ``None`` when the node was never approved."""
         granted = False
         edit = None
+        approver = ""
         for e in self.store.for_mission(mission_id):
             if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
                 granted = True
+                approver = str(e.payload.get("approver") or "")
                 if e.payload.get("edit") is not None:
                     edit = e.payload.get("edit")
         if not granted:
@@ -1495,6 +1497,17 @@ class MissionRuntime:
             marker.update(edit)
         elif edit is not None:
             marker["edit"] = edit
+        return self._bind_identity(marker, mission_id, approver)
+
+    def _bind_identity(self, marker: dict, mission_id: str, approver: str) -> dict:
+        """Who approved and for which tenant come from the recorded decision and the mission, never from an edit."""
+        marker.pop("by", None)
+        marker.pop("tenant", None)
+        if approver:
+            marker["by"] = approver
+        tenant = str(getattr(self._missions.get(mission_id), "tenant", "") or "")
+        if tenant:
+            marker["tenant"] = tenant
         return marker
 
     # ── human gates ────────────────────────────────────────────────────────────
@@ -1648,7 +1661,7 @@ class MissionRuntime:
         m = self._missions[mission_id]
         # fork-branch approvals are handled (and fail closed) by the fork controller, before the generic guards
         if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
-            return self.forks.approve_branch(mission_id, node_id, decision, edit)
+            return self.forks.approve_branch(mission_id, node_id, decision, edit, actor=actor)
         # A terminal mission has nothing to approve: without this a bogus reject re-entered the saga of a
         # COMPENSATION_FAILED mission (consumed retry attempts, duplicate MissionOutcome). The node must also
         # be one that is actually awaiting a human.

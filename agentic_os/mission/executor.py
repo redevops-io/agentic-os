@@ -373,7 +373,10 @@ class Executor:
             # Trusted registry declares this undo and the forward step demonstrably executed: the undo is
             # part of the scope of what ran, so it carries the compensation marker (+ own_approval when the
             # compensation required, and has, its own human approval).
-            inputs["_approval"] = {"approved": True, "compensation": True, **({"own_approval": True} if needs_own else {})}
+            # an undo that needs its own approval names who gave it; otherwise it is the declared policy that allows it, not a person
+            by = str((approval or {}).get("approver") or "") if needs_own else "policy:declared-undo"
+            inputs["_approval"] = {"approved": True, "compensation": True, **({"own_approval": True} if needs_own else {}),
+                                   **({"by": by} if by else {})}
         try:
             out = self.client.invoke(node.operator, node.undo, inputs,
                                      f"{node.idempotency_key}:undo:{int(attempt)}")

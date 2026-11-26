@@ -55,11 +55,13 @@ def _mask(ref: str) -> str:
     return ref  # a reference is not a secret (it names where the secret is)
 
 
-def mint_settings_approval(inputs: Dict[str, Any], *, ttl_s: int = 300, secret: "bytes | str | None" = None) -> Optional[str]:
-    """Called by the control plane AFTER a person approved the preview: a token bound to exactly these inputs."""
+def mint_settings_approval(inputs: Dict[str, Any], *, ttl_s: int = 300, secret: "bytes | str | None" = None,
+                           approver: str = "") -> Optional[str]:
+    """Called by the control plane AFTER a person approved the preview: a token bound to exactly these inputs, naming
+    ``approver`` (required where approver identity is required)."""
     clean = {k: v for k, v in inputs.items() if not k.startswith("_approval")}
     return mint_approval_token(secret, operator=OPERATOR, capability=CAPABILITY_ID, mission_id=None, node_id=None,
-                               inputs=clean, marker={"approved": True}, ttl_s=ttl_s)
+                               inputs=clean, marker={"approved": True, **({"by": approver} if approver else {})}, ttl_s=ttl_s)
 
 
 def make_handler(*, prompt_secret: Optional[Callable[[str], str]] = None, settings_path: Optional[str] = None,

@@ -204,7 +204,7 @@ def _build_app():
         if _RT.repo.state(mid) is None:
             raise HTTPException(404, "unknown mission")
         body = await request.json()
-        _RT.approve(mid, body.get("node_id"), body.get("decision", "approve"))
+        _RT.approve(mid, body.get("node_id"), body.get("decision", "approve"), actor="control-token")
         return _mission_head(mid)
 
     # ── bridge: one control surface over the DEPLOYED agents (their /capabilities + /invoke) ──────────
