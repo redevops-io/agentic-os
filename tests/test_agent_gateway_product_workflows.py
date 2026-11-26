@@ -110,6 +110,8 @@ def test_sentinel_investigate_propose_approve_execute_verify(world):
     # the agent verifies the resulting state itself
     verified = invoke(c, who, "security.sentinel_read_back", request_id=request_id)["output"]
     assert verified["state"] == "verified" and verified["receipt_id"] and verified["receipt_status"] == "SUCCEEDED"
+    assert verified["action_has_run"] is True and verified["dry_run"] is False and verified["executed"] is False
+    assert "decision is present" not in verified["answer"]                                   # the same words serve an unblock
     assert invoke(c, who, "security.sentinel_get_case", case_id=case_id)["output"]["case"]
 
 

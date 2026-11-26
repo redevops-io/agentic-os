@@ -55,7 +55,9 @@ _TOOLS: Tuple[Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, 
      ("request_unban_approval",)),
     ("security.sentinel_request_decision", "security", "Show the approval card of an Edge Sentinel proposal. Makes no decision.",
      ("approval card", "request decision", "show approval", "what needs approval security"), ("request_id",), (), ()),
-    ("security.sentinel_read_back", "security", "Read the persisted post-action verification (read-back) of an Edge Sentinel action.",
+    ("security.sentinel_read_back", "security", "Read the persisted post-action verification (read-back) of an Edge Sentinel action. "
+     "action_has_run says whether the action ran and dry_run whether it was only a dry run; executed is false on every tool result "
+     "and means this call executed nothing.",
      ("read back", "verify ban", "was the ban verified", "verification", "read-back"), ("request_id",), (), ()),
     ("quality.qa_info", "quality", "redevops-qa version, platform and which test profiles are available or explicitly unavailable.",
      ("qa info", "quality status", "test platform status", "which tests can run"), (), (), ()),
@@ -287,7 +289,7 @@ class ProductTools:
     def _sentinel_read_back(self, spec, inp, who):
         v = self.hub.sentinel(spec.id).verification(inp["request_id"], actor=who, source="sidekick")
         state = str(v.get("state") or "not_run")
-        text = {"verified": "Verified: the product read the edge back and the decision is present.",
+        text = {"verified": "Verified: the product read the edge back and saw the expected result.",
                 "unverified": "Unverified: the request was accepted but the read-back did not observe it.",
                 "dry_run": "Executed as a dry run: nothing was blocked, so there is nothing to verify at the edge.",
                 "no_read_back": "The action ran (it has a receipt) but no read-back is recorded, so its effect is not verified.",
@@ -296,6 +298,8 @@ class ProductTools:
                                 + (f" {v.get('detail')}" if v.get("detail") else ""), data={
             "product": spec.id, "request_id": inp["request_id"], "state": state, "detail": v.get("detail", ""),
             "at": v.get("at", ""), "receipt_id": v.get("receipt_id", ""), "receipt_status": v.get("receipt_status", ""),
+            # about the ACTION: whether it ran at all, and whether that run was only a dry run
+            "action_has_run": bool(v.get("receipt_id")), "dry_run": v.get("receipt_status") == "DRY_RUN" or state == "dry_run",
             "executed": False}, evidence=(inp["request_id"],),                       # "executed" is about THIS call: it runs nothing
             artifacts=(_link(spec, "action", inp["request_id"], f"/ui/actions/{inp['request_id']}"),))
 
