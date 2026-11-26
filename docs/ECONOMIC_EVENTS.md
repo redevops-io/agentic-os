@@ -41,3 +41,13 @@ Two behaviours of ERPNext 16 found while building this, both silent: a read of a
 ## Where it appears
 
 The `economics` dashboard (enabled with the `erpnext` source) shows the same figures in Projects and, through `dashboards.get`, to an external agent whose token holds `dashboards.read`. A tenant is granted it as `dashboards:economics`.
+
+## Communications as evidence (`evidence.py`, `correlate.py`)
+
+Chatwoot conversations (customer messages, company replies, private notes) and Twenty notes are read with strict, paginated readers (`ChatwootClient.read_conversations` / `read_messages`, `TwentyClient.read_page` / `read_all`). They raise where the older sensor reads return `[]`, so a failed or cut read is a recorded gap ("its absence is not evidence of silence"), never an empty answer. Chatwoot activity lines (reopened, assigned) are counted, not kept as speech.
+
+`EvidenceRef` is built on `integrations.business.contracts.Provenance` (provider, the source's own id, when it was observed, when it was said) and adds the tenant, version marker, author and role (`customer`, `company`, `internal_note`, `crm_note`), time, link and the access scope that governed the read. Scope is applied before anything is retrieved: the collectors read only the sources they are given.
+
+The customer is resolved by an **explicit identifier** both sides hold (contact e-mail, website domain). A name that matches a customer but no identifier is reported as `name_only` and not resolved. A note attached to more than one company has no customer.
+
+`correlate` links a communication to an economic event with the method named: a named document (`explicit_identifier`; it says what the message is about, not why), or the same customer in a window with a percentage or amount the event's own numbers reproduce and the matching kind of event (`customer+time+percent+kind`). Same customer and period alone is only a `candidate`, or `ambiguous` between equally fitting events, and a figure the event does not reproduce ("25% off" beside a 40% discount) blocks the link. A statement of a discrepancy's amounts by the same customer is linked to it and marked as not independent bank evidence. Nothing here decides why an adjustment was made; that, and whether a message is a commitment, is the next step.
