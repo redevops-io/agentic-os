@@ -236,3 +236,18 @@ def test_the_nearest_notes_win_and_a_notes_link_out_of_the_directory_is_not_foll
     (runs / "target" / "RUN_NOTES.json").symlink_to(outside / "RUN_NOTES.json")
     d = build(service(runs))
     assert "FROM-OUTSIDE" not in json.dumps(d.to_dict()) and [c.x for c in charts(d)] == [["source"]]
+
+
+def test_runs_belong_to_the_configured_project_not_the_providers_default(runs):
+    """A caller scoped to the project the operator filed the runs under sees them. (They were filed under the provider's
+    default project, so on a deployment whose default was another project a scoped viewer was told there were no runs.)"""
+    cfg = parse_config({"schema": "aos.dashboards/v1", "projects": [{"id": "main", "name": "Main"}, {"id": "lab", "name": "Lab"}],
+                        "sources": {"sim_runs": {"project": "lab", "dir": str(runs)}},
+                        "access": {"anonymous": {"projects": ["lab"], "sources": ["sim_runs"]},
+                                   "principals": {"elsewhere": {"projects": ["main"], "sources": ["sim_runs"]}}}})
+    assert not cfg.errors, cfg.errors
+    svc = DashboardService(Provider(), config=cfg, store=DashboardStore(""))
+    d = build(svc, "")
+    assert d.panels and not d.empty and metrics(d), d.empty
+    other = build(svc, "elsewhere")                                # may read the source, but not the project the runs are in
+    assert not other.panels

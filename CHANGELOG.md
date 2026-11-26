@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.18; no version set)
 
+- Fixed: the Self-improvement dashboard filed run records under the provider's default project instead of `sources.sim_runs.project`, so a viewer limited to the configured project was told there were no runs (0.4.18).
+
 ## v0.4.18 (self-improvement records on the dashboards; temporary credentials that expire; what external agents cannot yet reach)
 
 - A tenant credential can expire: `expires_at` in a tenant's `AGENTIC_OS_TENANT_LIMITS` entry makes its requester and approver tokens 401 from that moment, with no restart and nothing to revoke. An unreadable value counts as expired; entries without it behave as before.
