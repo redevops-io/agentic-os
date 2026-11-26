@@ -61,7 +61,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
         run: |
-          pytest -v -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py | tee "$RUNNER_TEMP/fastmcp.out"
+          pytest -v -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py tests/test_mcp_under_base_path.py | tee "$RUNNER_TEMP/fastmcp.out"
           if grep -q "SKIPPED" "$RUNNER_TEMP/fastmcp.out"; then echo "::error::a FastMCP transport test was skipped (is the mcp extra installed?)"; exit 1; fi
       - name: App-level suite (the test files directly under apps/)
         # Cross-app checks: route authorisation registry, fail-closed operator seams, permission classification, capability
