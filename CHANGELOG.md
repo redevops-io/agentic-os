@@ -19,7 +19,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Fixed: the finance and procurement dashboards counted an invoice or order due **today** as overdue or late (a due date was read as its first instant). Overdue, aging, days overdue and late orders now count whole calendar days (UTC), as the applications do. Found by checking a deployment's figures against its own ERPNext.
 - Agent gateway: Edge Sentinel and redevops-qa tools for external agents behind named grants (`security.read`, `security.propose`, `quality.read`, `quality.run`), each product granted per tenant (`products:<id>`); writes need an `idempotency_key`. An agent can propose and start bounded work, never decide or execute. New `quality.qa_list_runs`.
-- Agent gateway, **stricter**: every call's arguments are checked against the capability's published schema (REST and MCP alike); unknown inputs are refused, and MCP marks a failed call `isError`.
+- Agent gateway, **stricter**: every call's arguments are checked against the capability's published schema (REST and MCP alike): required inputs and types always; unknown inputs where the schema says `additionalProperties: false`, as every capability the mounted gateway offers does. MCP marks a failed call `isError`. The validator is stdlib-only (`agentic_os.schema_check`).
 - Fixed: for a few seconds after a request whose body a product did not read (a QA cancel), Projects reported that product unavailable ("HTTP 501"): product connections are no longer reused.
 - Fixed: `security.sentinel_read_back` said "not run" about every action on a real Edge Sentinel (it read the verification route's nested answer as flat).
 

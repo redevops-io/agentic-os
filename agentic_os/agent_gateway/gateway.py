@@ -98,15 +98,14 @@ class InMemoryAuditSink:
 
 def invalid_arguments(request: GatewayRequest, manifest: CapabilityManifest) -> list:
     """What is wrong with a call's arguments (field paths, never values), or nothing. A capability that publishes an input
-    schema is held to it, and an input it does not name is refused unless the schema allows extras: a misspelt or
-    wrapped argument must not be silently ignored. ``idempotency_key`` is the gateway's own and always accepted. A
-    capability that declares no schema at all is not checked."""
+    schema is held to it: required inputs and types always, and inputs it does not name where it says
+    ``additionalProperties: false`` (every capability the mounted gateway offers does, so a misspelt or wrapped argument
+    is not silently ignored). An integrator's partial schema keeps accepting what it does not list. ``idempotency_key`` is
+    the gateway's own and always accepted. A capability that declares no schema at all is not checked."""
     schema = dict(manifest.input_schema or {})
     if not schema:
         return []
-    from agentic_os.products.schemas import SchemaError, validate   # noqa: PLC0415  (a pure, stdlib-only validator)
-    if "properties" in schema:
-        schema.setdefault("additionalProperties", False)
+    from agentic_os.schema_check import SchemaError, validate   # noqa: PLC0415
     arguments = request.arguments
     if not isinstance(arguments, Mapping):
         return ["$: expected object"]

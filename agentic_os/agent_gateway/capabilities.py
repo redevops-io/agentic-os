@@ -45,10 +45,10 @@ def _obj_schema(**props: str) -> dict:
     """JSON-schema-lite for a flat object of string params (all required)."""
     return {"type": "object",
             "properties": {k: {"type": v} for k, v in props.items()},
-            "required": list(props)}
+            "required": list(props), "additionalProperties": False}
 
 
-_NO_INPUT = {"type": "object", "properties": {}}
+_NO_INPUT = {"type": "object", "properties": {}, "additionalProperties": False}
 
 
 # ── manifests (all read-only ⇒ RiskTier.READ, non-side-effecting, auto-approve) ────
@@ -58,7 +58,7 @@ PROJECTS_LIST = CapabilityManifest(
 PROJECTS_GET_STATUS = CapabilityManifest(
     "projects.get_status", "Get a project's current status overview.", CapabilityKind.DIRECT,
     permissions=("projects.read",),             # no project_id: the deployment's default project
-    input_schema={"type": "object", "properties": {"project_id": {"type": "string"}}},
+    input_schema={"type": "object", "additionalProperties": False, "properties": {"project_id": {"type": "string"}}},
     data_classes=(DataClass.INTERNAL,))
 MISSIONS_LIST = CapabilityManifest(
     "missions.list", "List missions and their state.", CapabilityKind.DIRECT,
@@ -77,7 +77,7 @@ MISSIONS_PENDING = CapabilityManifest(
 SOURCES_SEARCH = CapabilityManifest(
     "sources.search", "Search connected knowledge sources; returns references, not copies.",
     CapabilityKind.DIRECT, permissions=("sources.read",),
-    input_schema={"type": "object",
+    input_schema={"type": "object", "additionalProperties": False,
                   "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
                   "required": ["query"]},
     data_classes=(DataClass.INTERNAL,))
@@ -90,7 +90,7 @@ DASHBOARDS_GET = CapabilityManifest(
     "figures and at most a few table rows, not the underlying records. E-mail addresses are masked; names of people and "
     "companies are not.", CapabilityKind.DIRECT,
     permissions=("dashboards.read",), data_classes=(DataClass.INTERNAL,),
-    input_schema={"type": "object", "properties": {"dashboard_id": {"type": "string"}, "days": {"type": "integer"}, "project": {"type": "string"}},
+    input_schema={"type": "object", "additionalProperties": False, "properties": {"dashboard_id": {"type": "string"}, "days": {"type": "integer"}, "project": {"type": "string"}},
                   "required": ["dashboard_id"]})
 CRM_LOOKUP = CapabilityManifest(
     "crm.lookup_account", "Look up a CRM account/contact by name, email, or id.",
@@ -214,7 +214,7 @@ MISSIONS_DELEGATE_GOAL = CapabilityManifest(
     "Side effects inside the mission still require human approval.",
     CapabilityKind.MISSION, permissions=("missions.delegate",), risk_tier=RiskTier.BOUNDED_WRITE,
     side_effecting=True, approval_policy=ApprovalPolicy.IF_POLICY,
-    input_schema={"type": "object",
+    input_schema={"type": "object", "additionalProperties": False,
                   "properties": {"goal": {"type": "string"},
                                  "constraints": {"type": "array", "items": {"type": "string"}}},
                   "required": ["goal"]},

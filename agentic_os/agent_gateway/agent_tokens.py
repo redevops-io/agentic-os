@@ -206,10 +206,12 @@ def record_authority(authority_db: str, agent_id: str, grants: List[str], *, ten
     """Store what this agent may do: exactly the capabilities its grants name, each at its own risk tier, for its tenant,
     until its token ends. No delegation, no spend. Returns the record's digest."""
     from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES  # noqa: PLC0415
-    from agentic_os.agent_gateway.product_capabilities import manifests as product_manifests  # noqa: PLC0415
+    from agentic_os.agent_gateway.product_capabilities import GRANTS as PRODUCT_GRANTS, manifests as product_manifests  # noqa: PLC0415
     from agentic_os.mission.authority import AuthorityEnvelope, AutonomyBudget, Grant, SqliteEnvelopeStore  # noqa: PLC0415
     held = set(grants) & ALLOWED_GRANTS
-    tiers = {c.name: int(c.risk_tier) for c in (*READ_CAPABILITIES, *product_manifests()) if c.permissions and set(c.permissions) <= held}
+    # the product tools only for a token that holds one of their grants: they need the products package's dependencies
+    known = (*READ_CAPABILITIES, *(product_manifests() if held & set(PRODUCT_GRANTS) else ()))
+    tiers = {c.name: int(c.risk_tier) for c in known if c.permissions and set(c.permissions) <= held}
     env = AuthorityEnvelope(
         tenant=tenant, principal=f"agent:{agent_id}", mission_id=envelope_key(agent_id),
         goal="access for an external agent through the governed gateway",

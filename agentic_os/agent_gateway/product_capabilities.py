@@ -19,8 +19,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from agentic_os.products.schemas import FORBIDDEN_TOOLS, INPUT_SCHEMAS, TOOL_CLASS
-
 from .contracts import ApprovalPolicy, CapabilityKind, CapabilityManifest, DataClass, GatewayPrincipal, RiskTier
 from .registry import CapabilityRegistry, HandlerResult
 
@@ -37,6 +35,7 @@ _OUTPUT_REFUSALS = ("unavailable", "refused", "invalid")
 def _grants_for(tool: str) -> Tuple[str, ...]:
     if tool == "findings.consolidate":                       # it reads both products
         return ("security.read", "quality.read")
+    from agentic_os.products.schemas import TOOL_CLASS  # noqa: PLC0415
     domain, cls = tool.split(".", 1)[0], TOOL_CLASS[tool]
     if cls in ("read", "present"):
         return (f"{domain}.read",)
@@ -48,6 +47,9 @@ def _grants_for(tool: str) -> Tuple[str, ...]:
 
 
 def manifests() -> Tuple[CapabilityManifest, ...]:
+    # imported here: the products package needs an HTTP client, which a base install of the kernel does not have, and
+    # this module's grant names are read there too
+    from agentic_os.products.schemas import FORBIDDEN_TOOLS, INPUT_SCHEMAS, TOOL_CLASS  # noqa: PLC0415
     from agentic_os.products.tools import _TOOLS  # noqa: PLC0415
     out = []
     for tool, _domain, summary, *_rest in _TOOLS:

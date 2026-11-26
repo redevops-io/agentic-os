@@ -11,7 +11,8 @@ from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES
 from agentic_os.agent_gateway.contracts import CapabilityKind, CapabilityManifest, RiskTier
 from agentic_os.projects_api import SampleProjectionProvider, create_app
 
-SCHEMA = {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]}
+SCHEMA = {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"],
+          "additionalProperties": False}
 BAD = [({}, "query: required"), ({"query": 5}, "query: expected string"), ({"query": "x", "limit": "many"}, "limit: expected integer"),
        ({"query": "x", "surprise": 1}, "surprise: not allowed"), ({"arguments": {"query": "x"}}, "arguments: not allowed")]
 
@@ -62,7 +63,11 @@ def test_good_calls_and_the_gateways_own_idempotency_key_pass():
     assert len(ran) == 2 and budget.checked == 2
 
 
-def test_a_capability_that_allows_extras_or_declares_no_schema_is_left_to_itself():
+def test_a_partial_schema_still_checks_what_it_names_and_accepts_the_rest():
+    """An integrator's schema that does not close itself keeps working (a voice capability lists two of its fields)."""
+    gw, verifier, token, ran, *_ = world({k: v for k, v in SCHEMA.items() if k != "additionalProperties"})
+    assert McpGatewayBridge(gw, verifier).call_tool(token, "find.read", {"query": 5, "budget_band": "x"})["error"].startswith("invalid_arguments: query")
+    assert McpGatewayBridge(gw, verifier).call_tool(token, "find.read", {"query": "x", "budget_band": "x"})["status"] == "ok"
     gw, verifier, token, ran, *_ = world({**SCHEMA, "additionalProperties": True})
     assert McpGatewayBridge(gw, verifier).call_tool(token, "find.read", {"query": "x", "extra": 1})["status"] == "ok"
     gw, verifier, token, ran, *_ = world({})
@@ -79,7 +84,9 @@ def test_every_mounted_read_declares_a_contract_and_the_peers_six_calls_are_refu
     for k in ("AGENTIC_OS_PROFILE", "AGENT_GATEWAY_AGENTS_FILE", "AGENTIC_OS_TENANT_LIMITS", "AGENTIC_OS_OAUTH_DB"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("AGENT_GATEWAY_TOKEN", "t-shared-value")
-    assert all(m.input_schema for m in READ_CAPABILITIES)
+    from agentic_os.agent_gateway.product_capabilities import manifests as product_manifests
+    for m in (*READ_CAPABILITIES, *product_manifests()):               # everything the mounted gateway can offer is closed
+        assert m.input_schema.get("additionalProperties") is False, m.name
     c = TestClient(create_app(SampleProjectionProvider()), raise_server_exceptions=False)
     who = {"Authorization": "Bearer t-shared-value"}
 

@@ -72,8 +72,9 @@ browser sends the operator's Basic sign-in, not a bearer. A browser sign-in for 
 ## Arguments
 
 Every call is checked against the capability's published input schema, on REST and MCP alike, after the caller's
-authority and before rate limits: a malformed call reaches no handler and spends nothing. An input the schema does not name
-is refused (`idempotency_key` is always accepted). The answer is `{"status": "error", "error": "invalid_arguments:
+authority and before rate limits: a malformed call reaches no handler and spends nothing. Required inputs and types are
+always checked; an input the schema does not name is refused where the schema says `additionalProperties: false`, as
+every capability this gateway offers does (`idempotency_key` is always accepted). The answer is `{"status": "error", "error": "invalid_arguments:
 <field>: <problem>"}` (REST: HTTP 200; MCP: `isError` true), and never repeats a value.
 
 ## Security and quality products
