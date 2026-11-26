@@ -50,7 +50,9 @@ def test_ledger_approved_execution_mints_marker_once_and_is_idempotent():
     r1 = ex.compensate(n, mission_id="m1"); r2 = ex.compensate(n, mission_id="m1")
     assert r1 == r2 == {"undone": True}
     assert len(c.undo_inputs) == 1
-    assert c.undo_inputs[0]["_approval"] == {"approved": True, "compensation": True}
+    # the declared policy allows this undo, not a person, and the marker says so: where an approval must name who gave it,
+    # an unnamed undo would be refused at the operator and the rollback would never run
+    assert c.undo_inputs[0]["_approval"] == {"approved": True, "compensation": True, "by": "policy:declared-undo"}
 
 
 def test_other_mission_same_node_id_refused():

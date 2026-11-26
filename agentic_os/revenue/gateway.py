@@ -99,7 +99,7 @@ class OwnerAttentionGateway:
             # pre-authorized: send a courtesy notice, then resolve the gate automatically with evidence.
             brief = build_brief(opp, mission_id, approval_policy=reason)
             self.channel.send("[auto-sent per your policy]\n" + brief.text)
-            rt.approve(mission_id, node_id, "approve")
+            rt.approve(mission_id, node_id, "approve", actor="policy:auto-followup")
             return SendResolution(mode, True, "policy", reason, brief)
 
         # owner-in-the-loop: deliver the brief; the owner acts via owner_action(...).
@@ -107,7 +107,7 @@ class OwnerAttentionGateway:
         self.channel.send(brief.text)
         return SendResolution(mode, False, "pending", reason, brief)
 
-    def owner_action(self, rt, mission_id: str, action: str, opp: RevenueOpportunity) -> str:
+    def owner_action(self, rt, mission_id: str, action: str, opp: RevenueOpportunity, actor: str = "") -> str:
         """Apply the owner's one-tap decision to the parked send-gate. Returns the resulting state note.
         Every action is a governed Mission event via `rt.approve`."""
         if action not in ALLOWED_ACTIONS:
@@ -118,7 +118,7 @@ class OwnerAttentionGateway:
         node_id = pending["node_id"]
 
         if action in ("APPROVE_AND_SEND", "MARK_DONE"):
-            rt.approve(mission_id, node_id, "approve")
+            rt.approve(mission_id, node_id, "approve", **({"actor": actor} if actor else {}))
             return "approved — follow-up sent"
         if action in ("REJECT", "CLOSE_LOST"):
             rt.approve(mission_id, node_id, "reject")
