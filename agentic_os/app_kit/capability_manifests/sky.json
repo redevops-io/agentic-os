@@ -1,6 +1,6 @@
 {
  "app": "sky",
- "digest": "sha256:ba040d04673e4d308e3b99e6fa4f640c9333dd9ae7afe59398d50a70846cbe9d",
+ "digest": "sha256:eee0a6f6db551cfe1a4b7c0fd21327a28c3e49d26d2e0baaa105dd1754944904",
  "operations": [
   {
    "action": "read",
@@ -14,6 +14,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "sky.check",
    "inputs": {},
@@ -36,6 +41,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "sky.down",
    "inputs": {},
@@ -58,6 +64,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "sky.launch",
    "inputs": {},
@@ -81,6 +88,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "sky.optimize",
    "inputs": {},
@@ -103,6 +115,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "sky.serve",
    "inputs": {},
@@ -126,6 +139,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "sky.serve_down",
    "inputs": {},
@@ -148,6 +162,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "sky.status",
    "inputs": {},
@@ -164,6 +183,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 7,
   "reachable_by_external_agents": 0,
   "routes": 0,

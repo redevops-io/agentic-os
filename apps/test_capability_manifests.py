@@ -72,3 +72,22 @@ def test_every_shape_of_front_end_call_the_apps_use_is_found(tmp_path):
     (tmp_path / "ui.js").write_text("api('/cases'); fetch(`${base}/api/items/` + id); getJSON('v1/posture')")
     (tmp_path / "server.py").write_text("fetch('/rest/companies')   # server code in a file with no page: not a UI call")
     assert inv.ui_calls(tmp_path) == sorted(["/api/agent", "/api/fleet", "/agent/run", "/api/items/", "/cases", "/v1/posture"])
+
+
+def test_the_inventory_sees_every_read_the_gateway_registers_dashboards_included():
+    from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES
+    from agentic_os.app_kit.capability_inventory import gateway_capabilities
+    registered = set(gateway_capabilities())
+    assert {"dashboards.list", "dashboards.get"} <= registered
+    assert {c.name for c in READ_CAPABILITIES} - registered == {"crm.lookup_account"}     # the mount gives it no CRM port
+
+
+def test_a_candidate_lacks_nothing_and_every_other_unreachable_read_says_what_it_lacks():
+    from agentic_os.app_kit.capability_inventory import gateway_blockers
+    ready = {"external_access": {"gateway": False}, "action": "read", "typed": True, "http": [{"method": "GET", "path": "/x"}],
+             "data_classifications": ["internal"], "side_effecting": False}
+    assert gateway_blockers(ready) == []
+    assert gateway_blockers({**ready, "typed": False, "http": [{"method": "POST", "path": "/x"}], "data_classifications": []}) == [
+        "no typed inputs and outputs", "no GET route", "no data classification"]
+    for never in ({"external_access": {"gateway": True}}, {"action": "write"}, {"side_effecting": True}, {"route_access": ["human_only"]}):
+        assert gateway_blockers({**ready, **never}) is None

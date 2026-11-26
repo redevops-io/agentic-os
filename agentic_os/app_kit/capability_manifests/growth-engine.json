@@ -1,6 +1,6 @@
 {
  "app": "growth-engine",
- "digest": "sha256:9a6552c67b6c923196f1ad1126d41648ed46c48815a8e79b6422dceadbe7256c",
+ "digest": "sha256:62580923fc6e78564cdc91381b028f1bf0d74dcc24c62f0c8e004a0e524b7a71",
  "operations": [
   {
    "action": "read",
@@ -15,6 +15,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "action": "analyze",
@@ -49,6 +54,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "reallocate_budget",
@@ -83,6 +89,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "growth.remeasure",
    "inputs": {},
@@ -105,6 +116,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "top_pages",
    "typed": false
@@ -119,6 +136,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "top_referrers",
    "typed": false
@@ -133,6 +156,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -251,6 +279,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 6,
   "reachable_by_external_agents": 0,
   "routes": 12,

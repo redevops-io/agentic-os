@@ -1,6 +1,6 @@
 {
  "app": "projects",
- "digest": "sha256:4fc62c27265a8edc372a2ff525050dd600a7b3ce702706122de336bc977f43e4",
+ "digest": "sha256:09abfe2b666d2077153834d864f7e695fdd78d7d0d9ae6575c4e98fe0c75d4db",
  "operations": [
   {
    "action": "write",
@@ -12,6 +12,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "DELETE",
@@ -25,6 +26,20 @@
    "typed": false
   },
   {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "dashboards.get",
+   "typed": false
+  },
+  {
    "action": "write",
    "action_source": "route_policy",
    "declared_by": [
@@ -34,6 +49,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "DELETE",
@@ -51,6 +67,20 @@
    "typed": false
   },
   {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "dashboards.list",
+   "typed": false
+  },
+  {
    "action": "write",
    "action_source": "route_policy",
    "declared_by": [
@@ -60,6 +90,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "PUT",
@@ -82,6 +113,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -103,6 +135,7 @@
    "external_access": {
     "gateway": true
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "missions.explain",
    "typed": false
@@ -116,6 +149,7 @@
    "external_access": {
     "gateway": true
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "missions.get",
    "typed": false
@@ -129,6 +163,7 @@
    "external_access": {
     "gateway": true
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "missions.list",
    "typed": false
@@ -142,6 +177,7 @@
    "external_access": {
     "gateway": true
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "missions.list_pending_approvals",
    "typed": false
@@ -156,6 +192,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -178,6 +215,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -200,6 +238,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -222,6 +261,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -244,6 +284,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -266,6 +307,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -287,6 +329,7 @@
    "external_access": {
     "gateway": true
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "projects.get_status",
    "typed": false
@@ -300,6 +343,7 @@
    "external_access": {
     "gateway": true
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "projects.list",
    "typed": false
@@ -314,6 +358,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -336,6 +381,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -358,6 +409,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -380,6 +432,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -402,6 +455,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -424,6 +478,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -446,6 +501,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -468,6 +524,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -490,6 +547,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -512,6 +570,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "PUT",
@@ -534,6 +593,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -556,6 +616,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -578,6 +639,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -599,6 +661,7 @@
    "external_access": {
     "gateway": true
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "sources.search",
    "typed": false
@@ -1026,8 +1089,9 @@
  "schema": "rails.app-capabilities/1",
  "status": "incomplete",
  "summary": {
-  "operations": 30,
-  "reachable_by_external_agents": 7,
+  "gateway_candidates": 0,
+  "operations": 32,
+  "reachable_by_external_agents": 9,
   "routes": 54,
   "routes_without_a_gate_decision": 0,
   "typed": 0,
