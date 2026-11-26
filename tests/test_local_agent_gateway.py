@@ -288,3 +288,72 @@ def test_the_gateway_file_is_removed_when_the_app_stops(app):
     app["proc"].stdin.close()
     app["proc"].wait(timeout=30)
     assert not (app["dir"] / "gateway.json").exists() and discover_gateway(app["dir"])["running"] is False
+
+
+# ── lifecycle over real server restarts and the clock ────────────────────────────────────────────────────
+
+def _start_app(home):
+    port = _free_port()
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home), "USERPROFILE": str(home), "XDG_STATE_HOME": str(home / "state"),
+           "LOCALAPPDATA": str(home / "state"), "PYTHONPATH": str(REPO), "PROJECTS_PORT": str(port), "PROJECTS_HOST": "127.0.0.1"}
+    if "SYSTEMROOT" in os.environ:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    probe = dict(env, AGENTIC_OS_PACKAGED="1")
+    desktop_profile.apply(probe, home=str(home))
+    agents_dir = Path(probe["AGENTIC_OS_LOCAL_AGENTS_DIR"])
+    log = home / f"serve-{port}.log"
+    with open(log, "wb") as fh:
+        p = subprocess.Popen([sys.executable, str(ENTRY), "serve", "--exit-on-stdin-eof"], env=env, cwd=home, stdin=subprocess.PIPE, stdout=fh, stderr=subprocess.STDOUT)
+    end = time.time() + 90
+    while time.time() < end and p.poll() is None and not discover_gateway(agents_dir)["running"]:
+        time.sleep(0.2)
+    found = discover_gateway(agents_dir)
+    assert found["running"], log.read_text(errors="replace")[-2000:]
+    return p, found["url"], probe
+
+
+def _stop_app(p):
+    try:
+        p.stdin.close()
+    except OSError:
+        pass
+    try:
+        p.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        p.kill()
+
+
+def test_a_connected_agent_and_a_disconnected_one_both_survive_an_app_restart_as_they_were(tmp_path):
+    """Persistence: the credential, its authority and its revocation live on disk, not in the running process. After the app is stopped and
+    started again (a new port, a new process) the connected agent is still admitted and the disconnected one is still refused."""
+    p, url, env = _start_app(tmp_path)
+    try:
+        kept = connect_agent("kept across restart", env=env)
+        gone = connect_agent("disconnected before restart", env=env)
+        t_kept, t_gone = Path(kept["token_file"]).read_text().strip(), Path(gone["token_file"]).read_text().strip()
+        assert call(url + "/api/agent-gateway/capabilities/projects.list/invoke", token=t_kept, method="POST", body={})[1]["status"] == "ok"
+        assert disconnect_agent(gone["agent"]["id"], env=env)
+    finally:
+        _stop_app(p)
+    p2, url2, _ = _start_app(tmp_path)
+    try:
+        assert call(url2 + "/api/agent-gateway/capabilities/projects.list/invoke", token=t_kept, method="POST", body={})[1]["status"] == "ok"
+        assert call(url2 + "/api/agent-gateway/capabilities", token=t_gone)[0] == 401
+        assert call(url2 + "/api/agent-gateway/capabilities/projects.list/invoke", token=t_gone, method="POST", body={})[0] == 401
+    finally:
+        _stop_app(p2)
+
+
+def test_an_agent_whose_authority_has_run_out_is_refused_by_the_server_though_its_credential_is_still_on_disk(tmp_path):
+    """Expiry is enforced by the server's own clock, not by the file. The authority here lasts two seconds."""
+    p, url, env = _start_app(tmp_path)
+    try:
+        short = connect_agent("short lived", days=2 / 86400, env=env)
+        tok = Path(short["token_file"]).read_text().strip()
+        assert call(url + "/api/agent-gateway/capabilities/projects.list/invoke", token=tok, method="POST", body={})[1]["status"] == "ok"
+        time.sleep(4)
+        assert Path(short["token_file"]).exists()
+        s, out = call(url + "/api/agent-gateway/capabilities/projects.list/invoke", token=tok, method="POST", body={})
+        assert out.get("status") == "denied" or s in (401, 403), (s, out)
+    finally:
+        _stop_app(p)

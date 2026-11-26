@@ -550,6 +550,73 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
+    /// The agent commands, end to end, through a REAL sidecar (the source entry under a CPython, or the frozen binary in `RDO_SIDECAR`):
+    /// connect makes a private token file whose value is never in what the launcher returns, list shows the agent, disconnect revokes it
+    /// and removes the file, and an argument that could be read as an option never reaches the sidecar.
+    /// `RDO_TEST_PYTHON=<python> cargo test agents_commands -- --ignored --test-threads=1` (or `RDO_SIDECAR=<frozen>`).
+    #[test]
+    #[ignore]
+    fn agents_commands_connect_list_and_disconnect_through_the_real_sidecar() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..").canonicalize().unwrap();
+        let home = std::env::temp_dir().join(format!("rdo-agents-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        for k in ["HOME", "USERPROFILE"] {
+            std::env::set_var(k, &home);
+        }
+        std::env::set_var("XDG_STATE_HOME", home.join("state"));
+        std::env::set_var("LOCALAPPDATA", home.join("state"));
+        std::env::set_var("PYTHONPATH", &root);
+        if std::env::var("RDO_SIDECAR").is_err() {
+            let py = std::env::var("RDO_TEST_PYTHON").expect("set RDO_SIDECAR or RDO_TEST_PYTHON");
+            let entry = root.join("packaging").join("sidecar_main.py");
+            let (wrapper, body) = if cfg!(windows) {
+                (home.join("sidecar.cmd"), format!("@echo off\r\n\"{}\" \"{}\" %*\r\n", py, entry.display()))
+            } else {
+                (home.join("sidecar.sh"), format!("#!/bin/sh\nexec \"{}\" \"{}\" \"$@\"\n", py, entry.display()))
+            };
+            std::fs::write(&wrapper, body).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            std::env::set_var("RDO_SIDECAR", &wrapper);
+        }
+
+        let listed = |json: &str| -> Vec<serde_json::Value> { serde_json::from_str::<serde_json::Value>(json).unwrap()["agents"].as_array().unwrap().clone() };
+        assert!(listed(&agents_list().expect("list")).is_empty(), "no agent exists until one is connected");
+
+        // an option-looking name or id, an unknown client, never reach the sidecar
+        assert!(agents_connect("--grants=everything".to_string(), "generic".to_string()).is_err());
+        assert!(agents_connect("fine".to_string(), "not-a-client".to_string()).is_err());
+        assert!(agents_disconnect("--all".to_string()).is_err());
+        assert!(listed(&agents_list().unwrap()).is_empty());
+
+        let out = agents_connect("Rust test agent".to_string(), "local-model".to_string()).expect("connect");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let token_file = std::path::PathBuf::from(v["token_file"].as_str().unwrap());
+        let token = std::fs::read_to_string(&token_file).unwrap().trim().to_string();
+        assert!(token.starts_with("rla_") && !out.contains(&token), "the launcher returns the path of the token, never the token");
+        assert_eq!(v["agent"]["grants"], serde_json::json!(["projects.read", "missions.read", "sources.read"]), "read-only by default; the launcher cannot widen it");
+        assert_eq!(v["expires_in_days"].as_f64().unwrap(), 30.0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&token_file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let agents = listed(&agents_list().unwrap());
+        assert_eq!(agents.len(), 1);
+        assert!(agents[0]["active"].as_bool().unwrap() && !agents_list().unwrap().contains(&token));
+        let id = agents[0]["id"].as_str().unwrap().to_string();
+
+        let gone = agents_disconnect(id.clone()).expect("disconnect");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&gone).unwrap()["disconnected"], serde_json::json!(true));
+        assert!(!token_file.exists(), "disconnecting removes the credential file");
+        assert!(!listed(&agents_list().unwrap())[0]["active"].as_bool().unwrap());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn agent_arguments_are_checked_before_they_reach_the_sidecar() {
         assert!(agent_name_ok("Gemini CLI"));
