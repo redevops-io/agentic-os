@@ -15,7 +15,12 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.17; no version set)
+## Unreleased (after v0.4.18; no version set)
+
+## v0.4.18 (self-improvement records on the dashboards; temporary credentials that expire; what external agents cannot yet reach)
+
+- A tenant credential can expire: `expires_at` in a tenant's `AGENTIC_OS_TENANT_LIMITS` entry makes its requester and approver tokens 401 from that moment, with no restart and nothing to revoke. An unreadable value counts as expired; entries without it behave as before.
+- `integrations/mcp-bridge` on Windows keeps `SYSTEMROOT` in the Node process environment.
 
 - Self-improvement dashboard: runs are set side by side only when a reviewer's `RUN_NOTES.json` marks them comparable, and only within that file's runs; every caveat is shown word for word.
 - **Self-improvement dashboard** (`sim_runs`, off until listed in the dashboards file): reads the records a harness optimizer writes (`agent-harness.sim-run/1`, `agent-harness.sim/1`) - every candidate edit with its prediction written before evaluation, measured fixed / missed / broken tasks, accepted and not-adopted edits, memory carried between runs and models, and rollbacks; each figure drills into its records. Task replies and traces are not read. Runs that accepted nothing say so.
