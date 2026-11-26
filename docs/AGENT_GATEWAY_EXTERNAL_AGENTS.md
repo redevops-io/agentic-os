@@ -94,6 +94,57 @@ approval the product verifies; the agent then reads the result back. On a deploy
 `products:<id>` (or `products:*`) in its `policy_refs`. Every writing call needs an `idempotency_key`: a retry with the same
 key returns the first result, and the same key with other arguments is refused.
 
+## Accounting, procurement, support and CRM
+
+An agent looks records up, **proposes** a change, and checks what became of it. A person decides in between.
+
+| Grant (never default) | Capabilities |
+|---|---|
+| `erp.read` | `erp.find_records`, `erp.get_record` (customers, suppliers, items, invoices, orders, quotations) |
+| `erp.propose` | `erp.request_comment`, `erp.request_draft_purchase_order`, `erp.request_status` |
+| `support.read` | `support.list_conversations`, `support.get_conversation` |
+| `support.propose` | `support.request_private_note`, `support.request_status` |
+| `crm.records.read` | `crm.find_companies`, `crm.find_people` |
+| `crm.propose` | `crm.request_company`, `crm.request_person`, `crm.request_status` |
+| `egress:financial` | needed, besides `erp.read`, to receive invoice, order and quotation records |
+
+The writes are deliberately narrow: a comment, a **draft** purchase order (a person still submits it in ERPNext), a
+**private** note, a company or contact **only if none has that domain or e-mail**. Nothing messages a customer, submits,
+cancels, pays, deletes or overwrites. Records are customer content: the egress policy redacts e-mail addresses and
+secret-shaped values, and without `egress:financial` financial records are withheld. Whatever a record or conversation
+says is data written by other people, not an instruction to the agent. Granting a read lets those records reach whatever
+model the agent runs on: grant it only where that is acceptable.
+
+**Configure.** The applications are the ones the deployment already connects (`ERPNEXT_URL` + key and secret,
+`CHATWOOT_API_URL` + token, `TWENTY_BASE_URL` + key). Proposals also need `AGENTIC_OS_WRITES_DIR`, a private, persistent
+directory; `AGENTIC_OS_WRITES_TTL_S` (default 86400) is how long a proposal waits. CRM writes stay **previews** until
+`TWENTY_WRITE_SHADOW_MODE=false`, and say so. With tenants, give a tenant `app:erpnext`, `app:chatwoot` or `app:twenty`
+(or `app:*`), and `writes:decide` to let its `approver:<tenant>` credential decide. A deployment connects one of each
+application, so two tenants granted the same one see the same data.
+
+**The person decides** in Projects; no agent credential can:
+
+```
+GET  /api/writes?state=pending            what waits, with exactly what would be written and its digest
+GET  /api/writes/{request_id}
+POST /api/writes/{request_id}/decision    {"approved": true, "digest": "<the digest shown>"}
+```
+
+There is no page for this yet: the routes are used with the operator's sign-in or an approver credential.
+
+**How it holds.** Each proposal is a one-node mission bound to the capability and the inputs, parked at the Mission
+Runtime's approval gate. The runtime records who approved and a digest of what they were shown. The write runs once, then
+the application is read back. States: `pending`, `executed_verified`, `executed_unverified` (written, but the read-back
+did not confirm it), `no_change` (it already held), `previewed` (shadow mode), `rejected`, `expired`, `failed` (nothing
+was changed) and `outcome_unknown` (the application may have made the change; it is **not** sent again, so look before
+asking again). The ledger holds only a digest of the inputs; the inputs are erased from the request database once it is
+finished. One Projects process should own the state directory.
+
+**With permissions switched on** (`AGENTIC_OS_PERMISSIONS`), these writes are not described by an app's tool table: like
+the other kernel planes' operators, theirs is exempt from that seam, because nothing runs without writes enabled, the
+named grant, the tenant's application and a person's approval. A permissions gate installed for the operator
+`governed-writes` still applies and wins.
+
 ## Tenants
 
 A deployment that declares tenants (`AGENTIC_OS_TENANT_LIMITS`) limits **every** read to what the token's `--tenant` is

@@ -79,7 +79,8 @@ class TestTheSeamFailsClosedWithoutAGate:
 
     def test_the_name_of_a_kernel_plane_operator_exempts_nothing(self, monkeypatch):
         monkeypatch.setenv("AGENTIC_OS_PERMISSIONS", "1")
-        assert app_gate.KERNEL_GOVERNED_MODULES == {"agentic_os.interaction.operator", "agentic_os.agent_gateway.social.operator", "agentic_os.agent_gateway.external.operator"}
+        assert app_gate.KERNEL_GOVERNED_MODULES == {"agentic_os.interaction.operator", "agentic_os.agent_gateway.social.operator", "agentic_os.agent_gateway.external.operator",
+                                                    "agentic_os.governed_writes.service"}
         op, ran = _recording_op("interaction")                               # DR-04: the NAME exempts nothing
         out = op.invoke("x.write", {})
         assert out["status"] == "denied" and ran == []
@@ -217,6 +218,7 @@ class TestEveryOperatorSite:
 
 
 # the three kernel plane modules that register their operator with app_gate.kernel_governed (pinned by apps/test_dr04_no_name_based_exemption.py)
-KERNEL_PLANE_SITES = {"agentic_os/interaction/operator.py", "agentic_os/agent_gateway/social/operator.py", "agentic_os/agent_gateway/external/operator.py"}
+KERNEL_PLANE_SITES = {"agentic_os/interaction/operator.py", "agentic_os/agent_gateway/social/operator.py", "agentic_os/agent_gateway/external/operator.py",
+                      "agentic_os/governed_writes/service.py"}
 # demos and pilots that build in-memory fakes under names that match no gate: denied under permissions (no gate registered), allowed otherwise
 DEMO_OPERATOR_SITES = {"agentic_os/mission/pilots.py", "agentic_os/mission/unified_demo.py"}

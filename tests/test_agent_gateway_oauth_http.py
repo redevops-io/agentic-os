@@ -201,6 +201,27 @@ def test_dashboards_are_not_offered_where_every_dashboard_call_would_be_refused(
     assert only.status_code == 303 and "error=invalid_scope" in only.headers["location"]
 
 
+def test_application_grants_are_offered_only_where_they_would_work(deployment, tmp_path):
+    from agentic_os.governed_writes import apps as apps_mod
+    from tests._writes_fakes import FakeApps
+    asked = "projects.read erp.read erp.propose support.read crm.propose"
+    deployment.monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"default": {"policy_refs": ["app:erpnext", "app:chatwoot"]}}))
+    deployment.monkeypatch.setattr(apps_mod, "writers_from_env", lambda: {k: v for k, v in FakeApps().writers().items() if k != "twenty"})
+    c = deployment()                                                             # no state directory: lookups only
+    client_id = register(c).json()["client_id"]
+    page = consent_page(c, client_id, scope=asked)
+    offered = set(re.findall(r'name="grant" value="([^"]+)"', page.text))
+    assert offered == {"projects.read", "erp.read", "support.read"}, page.text
+    assert not re.search(r'value="(erp|support)\.read" checked', page.text)       # never ticked for the person
+    assert "AGENTIC_OS_WRITES_DIR" in page.text and "not connected" in page.text
+    deployment.monkeypatch.setenv("AGENTIC_OS_WRITES_DIR", str(tmp_path / "writes"))
+    page = consent_page(deployment(), client_id, scope=asked)
+    assert 'value="erp.propose">' in page.text and 'value="crm.propose"' not in page.text    # CRM is not connected
+    deployment.monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"default": {"policy_refs": ["project:*"]}}))
+    page = consent_page(deployment(), client_id, scope=asked)
+    assert set(re.findall(r'name="grant" value="([^"]+)"', page.text)) == {"projects.read"} and "app:erpnext" in page.text
+
+
 def test_consent_cannot_be_forged_replayed_or_widened(deployment):
     c = deployment()
     client_id = register(c).json()["client_id"]

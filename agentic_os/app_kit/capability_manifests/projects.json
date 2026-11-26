@@ -1,7 +1,77 @@
 {
  "app": "projects",
- "digest": "sha256:e6c58caee9c93ab28f993b259586da5cd4bc3f7a66ba10a149db531e296ae9c2",
+ "digest": "sha256:f93e2d9f3154d7a3a44964858161b43d67ba8f35c4049ffc814cce8d00d3f633",
  "operations": [
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.find_companies",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.find_people",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.request_company",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.request_person",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.request_status",
+   "typed": false
+  },
   {
    "action": "write",
    "action_source": "route_policy",
@@ -124,6 +194,76 @@
    "route_access": [
     "authority_required"
    ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.find_records",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.get_record",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.request_comment",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.request_draft_purchase_order",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.request_status",
    "typed": false
   },
   {
@@ -987,6 +1127,62 @@
    "http": [],
    "id": "sources.search",
    "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.get_conversation",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.list_conversations",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.request_private_note",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.request_status",
+   "typed": false
   }
  ],
  "problems": [
@@ -1412,14 +1608,14 @@
  "status": "incomplete",
  "summary": {
   "gateway_candidates": 0,
-  "operations": 55,
-  "reachable_by_external_agents": 32,
+  "operations": 69,
+  "reachable_by_external_agents": 46,
   "routes": 54,
   "routes_without_a_gate_decision": 0,
   "typed": 0,
   "ui_calls": 0,
   "ui_calls_not_matched": 0,
-  "writes_or_deletes": 28
+  "writes_or_deletes": 33
  },
  "ui_calls": []
 }

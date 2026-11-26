@@ -254,10 +254,13 @@ def gateway_capabilities() -> Dict[str, Dict[str, Any]]:
         def __getattr__(self, name):
             return lambda *a, **k: None
 
+    from agentic_os.agent_gateway.app_record_capabilities import manifests as record_manifests
     from agentic_os.agent_gateway.product_capabilities import manifests as product_manifests
     registry = build_read_registry(projections=_Port(), missions=_Port(), sources=_Port(), dashboards=_Port())
-    # what a deployment with both products registered mounts; a deployment without them offers fewer
-    return {m.name: {"side_effecting": m.side_effecting, "permissions": sorted(m.permissions)} for m in (*registry.all(), *product_manifests())}
+    # what a deployment with both products registered, ERPNext, Chatwoot and Twenty connected and governed writes enabled
+    # mounts; a deployment without them offers fewer
+    return {m.name: {"side_effecting": m.side_effecting, "permissions": sorted(m.permissions)}
+            for m in (*registry.all(), *product_manifests(), *record_manifests())}
 
 
 def _access(name: str, gateway: Dict[str, Any]) -> Dict[str, Any]:
@@ -377,6 +380,8 @@ def coverage_report(manifests: Dict[str, Dict[str, Any]]) -> str:
              "credential is not agent access (no agent identity, grant, budget or audit).", "",
              "Edge Sentinel and redevops-qa are reached through their product tools, which are listed under `projects` (the gateway "
              "is mounted there): the `edge-sentinel` row counts that app's own operations, which agents do not call directly.", "",
+             "The same holds for ERPNext, support and CRM: their lookups and governed proposals are `projects` operations on the "
+             "underlying applications. The `books`, `support` and `agentic-crm` rows count those agent apps' own operations.", "",
              "| App | Operations | Reachable by agents | Write or delete | Typed inputs/outputs | Inventory |",
              "|---|---|---|---|---|---|"]
     for app, m in sorted(manifests.items()):

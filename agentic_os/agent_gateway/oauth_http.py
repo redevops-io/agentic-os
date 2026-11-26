@@ -41,6 +41,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from agentic_os.overlays import Principal
 
 from .agent_tokens import ALLOWED_GRANTS, NAMED_GRANTS, envelope_key, record_authority
+from .app_record_capabilities import GRANTS as APP_RECORD_GRANTS
 from .product_capabilities import GRANTS as PRODUCT_GRANTS
 from .contracts import GatewayPrincipal
 from .oauth import AuthorizationServer, OAuthError, new_connection_id
@@ -64,7 +65,7 @@ GRANT_TEXT = {"projects.read": "See the project list and a project's status",
               "missions.read": "See missions, how they were planned, and what waits for approval",
               "sources.read": "Search the names of connected knowledge sources",
               "dashboards.read": "Read dashboard figures from your business applications. Names of people and companies in tables are not masked",
-              **PRODUCT_GRANTS}
+              **PRODUCT_GRANTS, **APP_RECORD_GRANTS}
 
 
 def check_issuer(issuer: str) -> str:

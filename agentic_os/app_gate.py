@@ -470,7 +470,8 @@ def denial_result(app_name: str, *tools: str):
 # Operators of the kernel's own planes are governed by those planes (the customer-interaction layer; the Agent Gateway's social and external-agent operators, behind the gateway's token auth, capability
 # filtering and approvals), not by an app's tool table. That exemption is trusted metadata about a specific OPERATOR OBJECT and its specific CAPABILITIES, registered by the three kernel modules that build
 # them, never a property of an operator NAME (DR-04): an operator someone calls "social" is gated like any other. ``kernel_governed`` refuses any other caller.
-KERNEL_GOVERNED_MODULES = frozenset({"agentic_os.agent_gateway.social.operator", "agentic_os.agent_gateway.external.operator", "agentic_os.interaction.operator"})
+KERNEL_GOVERNED_MODULES = frozenset({"agentic_os.agent_gateway.social.operator", "agentic_os.agent_gateway.external.operator", "agentic_os.interaction.operator",
+                                     "agentic_os.governed_writes.service"})
 _KERNEL_GOVERNED: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()      # Operator object -> {capability name: why a kernel plane governs it}
 
 
