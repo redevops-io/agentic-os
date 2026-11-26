@@ -1477,8 +1477,13 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     """
     import hmac
     import os
+    from agentic_os.local_agents import LocalAgentStore
     token = os.environ.get("AGENT_GATEWAY_TOKEN", "").strip()
-    if not token:
+    # A locally installed app mounts the gateway for the agents its user has connected (agentic_os/local_agents.py): each has its own
+    # token and its own grants, read from the store on every call, so a revocation holds from the next request. With no agent
+    # connected the routes exist and admit nobody.
+    local_agents = LocalAgentStore.from_env()
+    if not token and local_agents is None:
         return False
     token_bytes = token.encode("utf-8")
     from fastapi import Body, Header, HTTPException
@@ -1489,7 +1494,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     from agentic_os.agent_gateway.auth import GatewayAuthError
 
     default_pid = (prov.projects() or [{"id": "customer-ops"}])[0].get("id", "customer-ops")
-    _GRANTS = {"projects.read", "missions.read", "sources.read"}
+    _GRANTS = {"projects.read", "missions.read", "sources.read"} | ({"dashboards.read"} if local_agents is not None else set())
 
     class _Projections:
         def projects(self): return prov.projects()
@@ -1505,23 +1510,72 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         def search(self, query, limit=10): return prov.sources(default_pid)[: int(limit)]
 
     class _StaticVerifier:
-        """Maps the configured bearer to a read-only principal; anything else → None (deny)."""
+        """Maps the configured bearer to a read-only principal, or a connected local agent's token to that agent; anything else →
+        None (deny)."""
         def verify(self, t):
-            if t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
+            if token and t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
                 return GatewayPrincipal(Principal("external-agent", "service", (), "demo"),
                                         client_id="external-agent", workspace="demo",
                                         scopes=tuple(_GRANTS))
+            if local_agents is not None and t:
+                rec = local_agents.verify(t)
+                if rec is not None:
+                    return GatewayPrincipal(Principal(rec.id, "service", (), "local"), client_id=rec.id, workspace="local",
+                                            scopes=tuple(g for g in rec.grants if g in _GRANTS))
             return None
 
-    registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources())
+    def _authorize(principal, perm):
+        if perm not in _GRANTS:
+            return False
+        if principal.id == "external-agent":
+            return True
+        return local_agents is not None and perm in local_agents.grants_of(principal.id)
+
+    class _Dashboards:
+        """The dashboards the app builds, read for an agent that was granted dashboards.read (installed apps only). The figures and
+        their sources, not the records behind a number: the drill-down stays in the app."""
+        @staticmethod
+        def _svc():
+            return getattr(prov, "dashboards_service", None)
+
+        def catalog(self):
+            svc = self._svc()
+            if svc is None:
+                return {"dashboards": [], "not_connected": []}
+            c = svc.catalog(svc.access("local-owner"))
+            return {"dashboards": c["dashboards"], "not_connected": [{k: d.get(k) for k in ("id", "title", "why")} for d in c["not_connected"]],
+                    "projects": c.get("projects", [])}
+
+        def get(self, dashboard_id, days=30, project=""):
+            from agentic_os.dashboards.contracts import Filters
+            from agentic_os.dashboards.service import Forbidden, NotFound
+            svc = self._svc()
+            if svc is None:
+                return {"error": "the dashboards are not available in this build"}
+            try:
+                return svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), svc.access("local-owner")).to_dict()
+            except NotFound:
+                return {"error": "no such dashboard or project"}
+            except Forbidden:
+                return {"error": "not permitted"}
+
+    registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources(),
+                                   dashboards=_Dashboards() if local_agents is not None else None)
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink
         audit = EventStoreAuditSink.from_path(audit_path)
     else:
         audit = InMemoryAuditSink()
-    gateway = AgentGateway(registry=registry, authorize=lambda p, perm: perm in _GRANTS,
-                           egress=PolicyEgressEngine(), audit=audit)
+    # A local agent acts inside its own authority envelope (issued when the user connected it: read grants at tier 0, an action budget,
+    # an expiry). The guard is the installation's durable one; with it the gateway is fail-closed, so an agent whose envelope is
+    # missing, expired or revoked is denied even with a valid token.
+    authority = None
+    if local_agents is not None:
+        from agentic_os.mission.authority import authority_from_env
+        authority = authority_from_env()
+    gateway = AgentGateway(registry=registry, authorize=_authorize,
+                           egress=PolicyEgressEngine(), audit=audit, authority=authority)
     verifier = _StaticVerifier()
     rest = RestGatewayAdapter(gateway, verifier)
     endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))

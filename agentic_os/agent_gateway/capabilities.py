@@ -30,6 +30,11 @@ class SourcesReadPort(Protocol):
     def search(self, query: str, limit: int = 10) -> List[dict]: ...
 
 
+class DashboardsReadPort(Protocol):
+    def catalog(self) -> dict: ...
+    def get(self, dashboard_id: str, days: int = 30, project: str = "") -> dict: ...
+
+
 class CrmReadPort(Protocol):
     def lookup(self, query: str) -> dict: ...
 
@@ -70,6 +75,16 @@ SOURCES_SEARCH = CapabilityManifest(
                   "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
                   "required": ["query"]},
     data_classes=(DataClass.INTERNAL,))
+DASHBOARDS_LIST = CapabilityManifest(
+    "dashboards.list", "List the dashboards this installation can show (for example QA and release readiness, portfolio health, "
+    "missions) and those that are not available here, with why.", CapabilityKind.DIRECT,
+    permissions=("dashboards.read",), data_classes=(DataClass.INTERNAL,))
+DASHBOARDS_GET = CapabilityManifest(
+    "dashboards.get", "Read one dashboard as the app builds it: its summary, panels with their numbers, sources and how fresh each is. "
+    "Numbers come with the records they were counted from in the app; this returns the figures, not the underlying records.", CapabilityKind.DIRECT,
+    permissions=("dashboards.read",), data_classes=(DataClass.INTERNAL,),
+    input_schema={"type": "object", "properties": {"dashboard_id": {"type": "string"}, "days": {"type": "integer"}, "project": {"type": "string"}},
+                  "required": ["dashboard_id"]})
 CRM_LOOKUP = CapabilityManifest(
     "crm.lookup_account", "Look up a CRM account/contact by name, email, or id.",
     CapabilityKind.DIRECT, permissions=("crm.read",), input_schema=_obj_schema(query="string"),
@@ -84,6 +99,7 @@ def build_read_registry(*, projections: Optional[ProjectionsReadPort] = None,
                         missions: Optional[MissionReadPort] = None,
                         sources: Optional[SourcesReadPort] = None,
                         crm: Optional[CrmReadPort] = None,
+                        dashboards: Optional[DashboardsReadPort] = None,
                         registry: Optional[CapabilityRegistry] = None) -> CapabilityRegistry:
     """Register the read capabilities whose backend is provided, onto a new or given registry."""
     reg = registry or CapabilityRegistry()
@@ -110,6 +126,12 @@ def build_read_registry(*, projections: Optional[ProjectionsReadPort] = None,
                      lambda req, env: _ok(sources.search(str(req.arguments.get("query", "")),
                                                          int(req.arguments.get("limit", 10))),
                                           (DataClass.INTERNAL,)))
+    if dashboards is not None:
+        reg.register(DASHBOARDS_LIST, lambda req, env: _ok(dashboards.catalog(), (DataClass.INTERNAL,)))
+        reg.register(DASHBOARDS_GET,
+                     lambda req, env: _ok(dashboards.get(str(req.arguments.get("dashboard_id", "")),
+                                                          int(req.arguments.get("days", 30) or 30), str(req.arguments.get("project", "") or "")),
+                                          (DataClass.INTERNAL,)))
     if crm is not None:
         reg.register(CRM_LOOKUP,
                      lambda req, env: _ok(crm.lookup(str(req.arguments.get("query", ""))),
@@ -119,7 +141,7 @@ def build_read_registry(*, projections: Optional[ProjectionsReadPort] = None,
 
 READ_CAPABILITIES = (
     PROJECTS_LIST, PROJECTS_GET_STATUS, MISSIONS_LIST, MISSIONS_GET, MISSIONS_EXPLAIN,
-    MISSIONS_PENDING, SOURCES_SEARCH, CRM_LOOKUP)
+    MISSIONS_PENDING, SOURCES_SEARCH, DASHBOARDS_LIST, DASHBOARDS_GET, CRM_LOOKUP)
 
 
 # ── Phase 2: mission delegation + control (plan §4) ────────────────────────────────

@@ -177,7 +177,60 @@ def serve(env: Optional[Dict[str, str]] = None) -> None:
     # Local availability limits: a client that stalls mid-request must not keep the process from exiting
     # (the launcher gives it a short grace period and then force-kills the group), and idle or stalled
     # connections must not exhaust file descriptors.
-    config = uvicorn.Config(app, log_level="info", proxy_headers=False,
+    served_app = _OnShutdown(app, lambda: _unpublish(env)) if (env.get("AGENTIC_OS_LOCAL_AGENTS_DIR") or "").strip() else app
+    config = uvicorn.Config(served_app, log_level="info", proxy_headers=False,
                             access_log=(write is None or handoff_spec != "stdout"),
                             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S, timeout_keep_alive=KEEP_ALIVE_S)
-    uvicorn.Server(config).run(sockets=[sock])
+    # Published for connected agents' bridges (agentic_os/local_agents.py): where this instance listens. Loopback only, removed on exit.
+    agents_dir = (env.get("AGENTIC_OS_LOCAL_AGENTS_DIR") or "").strip()
+    publish = bool(agents_dir) and host in _LOOPBACK and not off
+    if publish:
+        from .local_agents import publish_gateway, unpublish_gateway
+        try:
+            publish_gateway(agents_dir, port=real_port, version=_app_version())
+        except OSError as e:
+            _err(f"the local agent gateway could not be published ({e}); connected agents will not find this instance")
+            publish = False
+    try:
+        uvicorn.Server(config).run(sockets=[sock])
+    finally:
+        if publish:
+            unpublish_gateway(agents_dir)
+
+
+def _app_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("agentic-os")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _unpublish(env) -> None:
+    d = (env.get("AGENTIC_OS_LOCAL_AGENTS_DIR") or "").strip()
+    if d:
+        from .local_agents import unpublish_gateway
+        unpublish_gateway(d)
+
+
+class _OnShutdown:
+    """Run one callback when the server shuts down gracefully (the ASGI lifespan shutdown message), then pass everything on. A stop by
+    signal ends the process as soon as uvicorn's run() returns, so cleanup that must happen belongs here, not after run()."""
+
+    def __init__(self, app, callback) -> None:
+        self.app, self.callback = app, callback
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "lifespan":
+            await self.app(scope, receive, send)
+            return
+
+        async def watched():
+            message = await receive()
+            if message["type"] == "lifespan.shutdown":
+                try:
+                    self.callback()
+                except Exception:  # noqa: BLE001  (cleanup must not block the shutdown)
+                    pass
+            return message
+        await self.app(scope, watched, send)

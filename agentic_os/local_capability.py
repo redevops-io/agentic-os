@@ -66,6 +66,9 @@ _MAX_BODY = 4096
 #: needs to know "this request passed the capability gate" (the drill-down's session-to-principal bridge) reads it and re-checks it
 #: with :meth:`LocalCapability.session_is_live`.
 SESSION_SCOPE_KEY = "agentic_os.local_session"
+AGENT_SCOPE_KEY = "agentic_os.local_agent"          # set by the gate for a request a connected agent's bearer admitted
+AGENT_GATEWAY_PREFIX = "/api/agent-gateway/"
+LOCAL_AGENT_TOKEN_PREFIX = "rla_"                      # agentic_os.local_agents.TOKEN_PREFIX
 
 
 def b64url(raw: bytes) -> str:
@@ -433,11 +436,16 @@ class LocalCapabilityMiddleware:
             return
         if kind != "http":
             return
-        if SESSION_SCOPE_KEY in scope:               # never believe a value that arrived with the request: only this gate sets it
-            scope = {k: v for k, v in scope.items() if k != SESSION_SCOPE_KEY}
+        if SESSION_SCOPE_KEY in scope or AGENT_SCOPE_KEY in scope:   # never believe a value that arrived with the request: only this gate sets it
+            scope = {k: v for k, v in scope.items() if k not in (SESSION_SCOPE_KEY, AGENT_SCOPE_KEY)}
         await self._http(scope, receive, send)
 
     # -------------------------------------------------------------- helpers
+    @staticmethod
+    def _agents():
+        from .local_agents import LocalAgentStore
+        return LocalAgentStore.from_env()
+
     @staticmethod
     def _headers(scope: Dict[str, Any]) -> Dict[str, List[str]]:
         out: Dict[str, List[str]] = {}
@@ -547,6 +555,22 @@ class LocalCapabilityMiddleware:
 
         if rel in LOCAL_PATHS:
             await self._local(rel, method, hdrs, receive, send)
+            return
+
+        # 3b. A connected external agent (agentic_os/local_agents.py): its own bearer admits the Governed Agent Gateway paths and
+        # nothing else. It is not a session: it reaches no other /api route, and a request that carries an Origin (a web page) is
+        # refused here whatever token it holds. The gateway verifies the same bearer again and applies the agent's grants.
+        bearer = hdrs.get("authorization", [])
+        tok = bearer[0][7:].strip() if len(bearer) == 1 and bearer[0][:7].lower() == "bearer " else ""
+        # Only a token of the local-agent kind takes this path. Any other caller of these routes (the window's own session, with the
+        # deployment's static gateway bearer where one is configured) is held to the session rule below, as before.
+        if rel is not None and rel.startswith(AGENT_GATEWAY_PREFIX) and tok.startswith(LOCAL_AGENT_TOKEN_PREFIX):
+            store = self._agents()
+            agent = store.verify(tok) if (store is not None and not origins) else None
+            if agent is None:
+                await self._reply(send, 401, "agent_auth_required", "a connected agent's token is required")
+                return
+            await self.app({**scope, AGENT_SCOPE_KEY: agent.id}, self._guard_receive(receive), self._wrap_send(send, no_store=True))
             return
 
         # 4. Capability: a valid session, plus the CSRF header on anything that can change state.

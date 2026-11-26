@@ -25,6 +25,7 @@ ENV_AUTHORITY_DB = "AGENTIC_OS_AUTHORITY_DB"
 ENV_REPLAY_DB = "AGENTIC_OS_REPLAY_DB"
 ENV_DASHBOARDS_DIR = "AGENTIC_OS_DASHBOARDS_DIR"
 ENV_DASHBOARDS_FILE = "AGENTIC_OS_DASHBOARDS"
+ENV_LOCAL_AGENTS_DIR = "AGENTIC_OS_LOCAL_AGENTS_DIR"
 ENV_DASHBOARDS_DEFAULT_FILE = "AGENTIC_OS_DASHBOARDS_DEFAULT_FILE"
 ENV_CAPTURE_DB = "AGENTIC_OS_CAPTURE_DB"
 STATE_SUBDIR = "authority"
@@ -78,6 +79,10 @@ def apply(env: Optional[MutableMapping[str, str]] = None, home: Optional[str] = 
         # The dashboards file of the desktop app lives next to its data. It is read only when a person has created it (an unreadable
         # file grants nothing, so a path to a missing file must never be set); its place is always published, so a dashboard that is
         # not offered can name the exact file that enables it.
+        # Where the credentials of connected external agents live, and where the running gateway is published for them. Setting the
+        # directory admits nobody: an agent exists only after the user connects one (agentic_os/local_agents.py).
+        if not (env.get(ENV_LOCAL_AGENTS_DIR) or "").strip():
+            env[ENV_LOCAL_AGENTS_DIR] = d + dsep + "agents"
         if not (env.get(ENV_DASHBOARDS_FILE) or "").strip():
             default_file = env[ENV_DASHBOARDS_DIR] + dsep + "dashboards.yaml"
             env[ENV_DASHBOARDS_DEFAULT_FILE] = default_file
