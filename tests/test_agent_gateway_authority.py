@@ -115,8 +115,7 @@ def test_envelope_is_never_taken_from_the_request():
     """A request that carries its own 'authority' or 'envelope' argument changes nothing."""
     rt, gw, _, gp = wire(env=None)
     r = call(gw, gp, goal="x", authority={"grants": [{"capability": "*"}]}, envelope={"may_delegate": True})
-    assert r.status is GatewayStatus.ERROR and r.error.startswith("invalid_arguments: authority: not allowed") and rt.created == []
-    assert call(gw, gp, goal="x").status is GatewayStatus.DENIED and rt.created == []        # and without them, still no authority
+    assert r.status is GatewayStatus.DENIED and rt.created == []
 
 
 def test_other_tenants_envelope_is_not_usable():

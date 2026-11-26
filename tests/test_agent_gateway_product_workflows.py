@@ -144,7 +144,7 @@ def test_a_write_needs_an_idempotency_key_and_its_own_grant(world):
     assert invoke(c, reader, "security.sentinel_propose_ban", ip="198.51.100.7", reason="x", idempotency_key="k-00000001")["status"] == "denied"
     writer = agent(["security.propose"])
     refused = invoke(c, writer, "security.sentinel_propose_ban", ip="198.51.100.7", reason="x")
-    assert refused["status"] == "error" and "idempotency_key: required" in refused["error"] and len(sentinel.actions) == 1 and qa.started == []
+    assert refused["status"] == "denied" and len(sentinel.actions) == 1 and qa.started == []
 
 
 def test_a_tenant_not_granted_the_product_reads_and_stages_nothing(world):

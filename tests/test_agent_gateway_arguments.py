@@ -92,3 +92,23 @@ def test_every_mounted_read_declares_a_contract_and_the_peers_six_calls_are_refu
         assert got["status"] == "error" and got["error"].startswith("invalid_arguments: "), (name, body, got)
     for name, body in (("projects.get_status", {}), ("projects.list", {}), ("sources.search", {"query": "x"}), ("missions.list", {})):
         assert call(name, body)["status"] == "ok", (name, body)
+
+
+def test_under_authority_a_malformed_call_returns_what_it_reserved_and_an_unauthorized_one_learns_nothing_else(tmp_path):
+    from agentic_os.mission.authority import (AuthorityEnvelope, AuthorityGuard, AutonomyBudget, Grant, SqliteEnvelopeStore, SqliteLedger)
+    reg, ran = CapabilityRegistry(), []
+    reg.register(CapabilityManifest("find.read", "find", CapabilityKind.DIRECT, permissions=("find.read",), input_schema=SCHEMA),
+                 lambda req, env: ran.append(1) or HandlerResult(ok=True, output=[]))
+    verifier = DevTokenVerifier()
+    token = verifier.issue("a", tenant="t", grants=("find.read",))
+    store, ledger = SqliteEnvelopeStore(str(tmp_path / "a.db")), SqliteLedger(str(tmp_path / "a.db") + ".usage")
+    gw = AgentGateway(registry=reg, authorize=verifier.authorize, authority=AuthorityGuard(store, ledger), authority_key=lambda p: "key-a")
+    store.put(AuthorityEnvelope(tenant="t", principal="a", mission_id="key-a", grants=(Grant("find.read", max_tier=0),),
+                                budget=AutonomyBudget(usd=0, max_actions=2), issued_at=0, expires_at=4_000_000_000))
+    call = McpGatewayBridge(gw, verifier).call_tool
+    for _ in range(5):                                                       # more malformed calls than the whole budget
+        assert call(token, "find.read", {"query": 5})["error"].startswith("invalid_arguments")
+    assert call(token, "find.read", {"query": "x"})["status"] == "ok" and call(token, "find.read", {"query": "y"})["status"] == "ok"
+    assert len(ran) == 2
+    store.revoke("key-a")
+    assert call(token, "find.read", {"query": 5})["status"] == "denied"      # no authority: the answer says that, not what was wrong

@@ -222,14 +222,6 @@ class AgentGateway:
 
         tier = manifest.risk_tier
 
-        # 1a. the arguments against the capability's published schema, before anything is claimed, spent or dispatched:
-        # a malformed call reaches no handler, uses no budget, authority or idempotency key, and is audited as a refusal.
-        problems = invalid_arguments(request, manifest)
-        if problems:
-            decision = GatewayDecision(allowed=False, reason="invalid_arguments", risk_tier=tier)
-            return self._finalize(request, start, GatewayResult("", GatewayStatus.ERROR, decision,
-                                                               error="invalid_arguments: " + "; ".join(problems[:6])), exposed_reason="permitted")
-
         # 1b. authority envelope (fail-closed when configured): scope, resources, limits, expiry, revocation.
         standing_ok = False
         if self.authority is None:
@@ -296,6 +288,15 @@ class AgentGateway:
                 return self._finalize(request, start, GatewayResult(request.request_id, GatewayStatus.PENDING_APPROVAL, d),
                                       exposed_reason="permitted")
             standing_ok = ordinary and adec.allowed
+
+        # 1c. the arguments against the capability's published schema. AFTER authority, so a caller who may not run the
+        # call learns that and nothing else; before rate limits and dispatch, so a malformed call reaches no handler, and
+        # what authority or an idempotency key reserved for it is released (nothing was dispatched).
+        problems = invalid_arguments(request, manifest)
+        if problems:
+            decision = GatewayDecision(allowed=False, reason="invalid_arguments", risk_tier=tier)
+            return self._finalize(request, start, GatewayResult(request.request_id, GatewayStatus.ERROR, decision,
+                                                               error="invalid_arguments: " + "; ".join(problems[:6])), exposed_reason="permitted")
 
         # 2. budget / rate limit
         ok, why, budget_rules = self.budget.check(gp, manifest)
