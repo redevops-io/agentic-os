@@ -9,6 +9,14 @@ No curated changelog is kept. History:
 - Release procedure and known drift between `pyproject.toml`, tags and release objects: [docs/RELEASING.md](docs/RELEASING.md).
 - Downstream pins: `mission-sdk` `COMPATIBILITY.md`.
 
+## Desktop 0.1.6 (connect an AI agent from the app)
+
+- **AI agents screen.** The launcher can connect, list and disconnect AI agents. Each agent gets its own credential, read-only by default (projects, missions, sources; dashboards only when named), that stops working after 30 days. The credential is a private file on the device; the launcher never receives, shows or stores it. Disconnecting revokes it in the app (server-side), not just by deleting the file.
+- **The app serves a Governed Agent Gateway on loopback and ships an MCP bridge.** Any MCP client that runs a local stdio server (it needs Node.js) can use the entry `agent connect` prints; the bridge is copied to a stable path in the private agents directory (an earlier build handed out a path inside a temporary directory that no longer existed).
+- **A dashboard returned to an agent has at most 10 rows per table** and says how many there are; the counts are of everything.
+- Verified: connect, list and disconnect through the frozen sidecar on macOS arm64, Windows x64, Linux x86_64 and Linux arm64 in CI; the installed macOS app's own bridge speaking MCP to its own server; a local model reading the installed app's projects and status through the gateway; revocation, expiry and restart persistence by tests over a real socket.
+- **Not verified:** a named third-party client (Claude Desktop, Gemini CLI, Grok Build) against this release; the installed Windows and Linux apps by hand; a governed write by an external agent (none exists: agents are read-only and cannot approve anything).
+
 ## Desktop 0.1.5 (unavailable dashboards explain themselves)
 
 - A dashboard that is not offered says why, names every application it could be built on, and how each is enabled; the Dashboards page lists them (Projects UI v0.3.9). How to enable a source is said only to a caller who may read it.
