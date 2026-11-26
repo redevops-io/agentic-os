@@ -21,6 +21,7 @@ BRIDGE = ROOT / "integrations" / "mcp-bridge" / "server" / "index.js"
 NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="needs Node (Claude Desktop ships its own)")
 TOKEN = "test-agent-token-0123456789abcdef"
+_WIN = {k: os.environ[k] for k in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP") if k in os.environ}      # Node on Windows needs SYSTEMROOT to connect
 
 
 def _port():
@@ -60,7 +61,7 @@ def deployment():
 
 
 def bridge(messages, url, token=TOKEN, extra_env=None):
-    env = {"PATH": os.environ.get("PATH", ""), "RAILS_URL": url, "RAILS_TOKEN": token, **(extra_env or {})}
+    env = {"PATH": os.environ.get("PATH", ""), **_WIN, "RAILS_URL": url, "RAILS_TOKEN": token, **(extra_env or {})}
     out = subprocess.run([NODE, str(BRIDGE)], input="".join(json.dumps(m) + "\n" for m in messages), capture_output=True, text=True, timeout=60, env=env)
     return [json.loads(line) for line in out.stdout.splitlines() if line.strip()], out.stderr
 
@@ -130,7 +131,7 @@ def test_with_an_agents_directory_and_a_token_file_the_bridge_finds_the_running_
     ask = [INIT, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
 
     def run():
-        out = subprocess.run([NODE, str(BRIDGE)], input="".join(json.dumps(m) + "\n" for m in ask), capture_output=True, text=True, timeout=60, env={"PATH": os.environ.get("PATH", ""), **env})
+        out = subprocess.run([NODE, str(BRIDGE)], input="".join(json.dumps(m) + "\n" for m in ask), capture_output=True, text=True, timeout=60, env={"PATH": os.environ.get("PATH", ""), **_WIN, **env})
         return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
 
     assert "not running" in run()[1]["error"]["message"]                                   # nothing published: say so, offer nothing
@@ -153,7 +154,7 @@ def test_a_local_agent_gets_its_tools_from_the_bridge_and_cannot_call_one_it_was
     spec = importlib.util.spec_from_file_location("rails_agent", ROOT / "integrations" / "local-agent" / "rails_agent.py")
     agent = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent)
-    mcp = agent.McpStdio([NODE, str(BRIDGE)], {"PATH": os.environ.get("PATH", ""), "RAILS_URL": deployment, "RAILS_TOKEN": TOKEN})
+    mcp = agent.McpStdio([NODE, str(BRIDGE)], {"PATH": os.environ.get("PATH", ""), **_WIN, "RAILS_URL": deployment, "RAILS_TOKEN": TOKEN})
     script = [{"content": None, "tool_calls": [{"id": "1", "function": {"name": "projects_list", "arguments": "{}"}},
                                                {"id": "2", "function": {"name": "sandbox_execute", "arguments": "{\"cmd\": \"id\"}"}}]},
               {"content": "There are projects; the sandbox tool was refused.", "tool_calls": None}]

@@ -50,6 +50,12 @@ It finds the running app from `gateway.json` (a loopback address written by a pr
 file is not followed), reads the token when it is used, and says so plainly when the app is not running or the agent was
 disconnected.
 
+## Windows
+
+Node on Windows needs `SYSTEMROOT` in its environment to open any network connection; a client that starts the bridge with a
+stripped environment gets "connect UNKNOWN" from the bridge. Claude Desktop and the Gemini CLI pass the user's environment; a
+script that builds its own must keep `SYSTEMROOT` (see `integrations/local-agent/rails_agent.py`).
+
 ## What the deployment needs
 
 The gateway must be mounted on the Projects API (`AGENT_GATEWAY_TOKEN`, or per-agent tokens where configured); see
