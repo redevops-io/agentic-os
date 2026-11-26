@@ -53,7 +53,9 @@ SCHEMA = "aos.agent-gateway.agents/v1"
 #: refused, so that a file cannot appear to give an agent something it cannot have.
 READ_GRANTS: FrozenSet[str] = frozenset({"projects.read", "missions.read", "sources.read"})
 #: read grants that expose business figures. Never part of a default set: a token has one only when the operator names it.
-NAMED_GRANTS: FrozenSet[str] = frozenset({"dashboards.read"})
+NAMED_GRANTS: FrozenSet[str] = frozenset({"dashboards.read",
+                                          # the integrated products' tools (product_capabilities.py); two of these stage or start work
+                                          "security.read", "security.propose", "quality.read", "quality.run"})
 ALLOWED_GRANTS: FrozenSet[str] = READ_GRANTS | NAMED_GRANTS
 TOKEN_PREFIX = "aga_"
 MAX_DAYS = 366
@@ -201,15 +203,20 @@ def envelope_key_of(principal: GatewayPrincipal) -> str:
 
 def record_authority(authority_db: str, agent_id: str, grants: List[str], *, tenant: str, issued_at: float, expires_at: float,
                      max_actions: int = MAX_ACTIONS) -> str:
-    """Store what this agent may do: exactly the read capabilities its grants name, at the read tier, for its tenant, until
-    its token ends. No delegation, no spend. Returns the record's digest."""
+    """Store what this agent may do: exactly the capabilities its grants name, each at its own risk tier, for its tenant,
+    until its token ends. No delegation, no spend. Returns the record's digest."""
     from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES  # noqa: PLC0415
+    from agentic_os.agent_gateway.product_capabilities import GRANTS as PRODUCT_GRANTS, manifests as product_manifests  # noqa: PLC0415
     from agentic_os.mission.authority import AuthorityEnvelope, AutonomyBudget, Grant, SqliteEnvelopeStore  # noqa: PLC0415
-    names = sorted(c.name for c in READ_CAPABILITIES if c.permissions and set(c.permissions) <= set(grants) & ALLOWED_GRANTS)
+    held = set(grants) & ALLOWED_GRANTS
+    # the product tools only for a token that holds one of their grants: they need the products package's dependencies
+    known = (*READ_CAPABILITIES, *(product_manifests() if held & set(PRODUCT_GRANTS) else ()))
+    tiers = {c.name: int(c.risk_tier) for c in known if c.permissions and set(c.permissions) <= held}
     env = AuthorityEnvelope(
         tenant=tenant, principal=f"agent:{agent_id}", mission_id=envelope_key(agent_id),
-        goal="read access for an external agent through the governed gateway",
-        grants=tuple(Grant(capability=n, max_tier=0) for n in names),
+        goal="access for an external agent through the governed gateway",
+        # each capability at its own tier and no higher: a read at 0, a proposal or a test run at 1
+        grants=tuple(Grant(capability=n, max_tier=t) for n, t in sorted(tiers.items())),
         budget=AutonomyBudget(usd=0.0, max_actions=int(max_actions), max_children=0, max_depth=0, max_parallel=4),
         may_delegate=False, issued_at=issued_at, expires_at=expires_at)
     SqliteEnvelopeStore(authority_db).put(env)

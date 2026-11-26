@@ -1,6 +1,6 @@
 {
  "app": "deploy-scan",
- "digest": "sha256:94fdd6dc793f23c0bd521c0559aa616b581b0505ff10ec2836a0f0b56d3095a7",
+ "digest": "sha256:3784f569bd2fc69d0af17f615733eb17c9be7ba048d6933b7ee6818388542be3",
  "operations": [
   {
    "action": "unclassified",
@@ -12,6 +12,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "scan_results",
    "typed": false
@@ -26,6 +27,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "scan_start",
    "typed": false
@@ -40,6 +42,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "scan_status",
    "typed": false
@@ -50,6 +53,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 3,
   "reachable_by_external_agents": 0,
   "routes": 0,

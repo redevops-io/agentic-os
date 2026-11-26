@@ -1,6 +1,6 @@
 {
  "app": "billing",
- "digest": "sha256:233b8a9dc17a05ee5d1fe72dd7f5f6db725bfae6428b59117b0c637bbbc02e90",
+ "digest": "sha256:448fa77f98fc253926db173a9bbc57159c382f93fb7ce30c0169e218b7b2c998",
  "operations": [
   {
    "action": "delete",
@@ -15,6 +15,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "cancel_subscription",
@@ -49,6 +50,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "create_subscription",
@@ -84,6 +86,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "billing.dunning",
    "inputs": {},
@@ -112,6 +115,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "billing.refund",
    "inputs": {},
@@ -137,6 +141,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "billing.summary",
    "inputs": {},
@@ -159,6 +168,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -182,6 +196,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "chase_overdue",
@@ -205,6 +220,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "find_customer",
    "typed": false
@@ -219,6 +240,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -241,6 +268,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "refund",
@@ -416,6 +444,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 10,
   "reachable_by_external_agents": 0,
   "routes": 16,

@@ -1572,6 +1572,12 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     from agentic_os.agent_gateway.scope import tenant_project_scope
     registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources(),
                                    dashboards=_Dashboards() if (agents is not None or oauth is not None) else None, scope=tenant_project_scope)
+    hub = getattr(prov, "products_hub", None)
+    if hub is not None and (agents is not None or oauth is not None):
+        # the integrated products' tools, for agents with their own identity only; each behind a named grant
+        from agentic_os.agent_gateway import product_capabilities
+        from agentic_os.products.tools import ProductTools
+        product_capabilities.register(registry, ProductTools(hub))
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink
@@ -1650,8 +1656,11 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     # which the layer treats as advisory, ever reached them). They are queries: this surface registers read capabilities
     # only (held by a test), and the gateway authenticates and authorizes every call itself.
     from agentic_os.app_kit.route_authz import RoutePolicy
-    query = RoutePolicy("projects.agent_gateway_read", "read_only",
-                        rationale="invokes a read capability; the gateway authenticates the bearer and authorizes each call")
+    # "operator_boundary": the gateway is the authorizing boundary. It authenticates the agent's bearer and authorizes
+    # every call by grant, tenant, authority record and rate. Most capabilities only read; the product tools can stage a
+    # proposal or start a test run (held to a pinned list by a test), and nothing here can decide or execute.
+    query = RoutePolicy("projects.agent_gateway_invoke", "operator_boundary",
+                        rationale="the gateway authenticates the agent and authorizes each capability call")
     policies = {"POST /api/agent-gateway/capabilities/{name}/invoke": query, "POST /api/agent-gateway/mcp": query}
     if getattr(app.state, "agent_gateway_mcp_server", False):
         for method in ("POST", "DELETE"):                  # DELETE ends the client's own MCP session
@@ -1662,9 +1671,21 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             from agentic_os.agent_gateway.scope import tenant_is_current
             svc = getattr(prov, "dashboards_service", None)
             acc = svc.access(f"requester:{tenant}") if svc is not None and tenant_is_current(tenant) else None
-            if acc is not None and acc.basis != "deployment" and (acc.grant.sources is None or acc.grant.sources):
-                return {}
-            return {"dashboards.read": f"the tenant {tenant} is not granted any dashboard source here (AGENTIC_OS_TENANT_LIMITS)"}
+            cannot: Dict[str, str] = {}
+            if not (acc is not None and acc.basis != "deployment" and (acc.grant.sources is None or acc.grant.sources)):
+                cannot["dashboards.read"] = f"the tenant {tenant} is not granted any dashboard source here (AGENTIC_OS_TENANT_LIMITS)"
+            from agentic_os.agent_gateway.contracts import GatewayPrincipal as _GP
+            from agentic_os.agent_gateway.product_capabilities import GRANTS, tenant_may_use
+            probe = _GP(Principal("consent", "service", (), tenant), client_id="consent", workspace=tenant)
+            specs = hub.specs() if hub is not None else []
+            for grant in GRANTS:
+                kind = grant.split(".", 1)[0]
+                mine = [s for s in specs if s.kind == kind]
+                if not mine:
+                    cannot[grant] = f"no {kind} product is registered on this deployment"
+                elif not any(tenant_may_use(probe, s.id) for s in mine):
+                    cannot[grant] = f"the tenant {tenant} is not granted that product here (products:<id> in AGENTIC_OS_TENANT_LIMITS)"
+            return cannot
 
         policies.update(oauth_http.mount(app, oauth, single_owner=lambda: hub.registry.single_owner if hub is not None else "",
                                          unavailable=_cannot_grant))

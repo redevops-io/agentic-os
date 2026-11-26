@@ -1,6 +1,6 @@
 {
  "app": "control-tower",
- "digest": "sha256:621e004a98b85ee90e398d51db3b5303e75fe4627d47b5e4f47a8c7da1c5ff27",
+ "digest": "sha256:b604ee8bea385c34352da6db8e3c90b60ccf50535208e5cdc202ddce05865f6c",
  "operations": [
   {
    "action": "read",
@@ -15,6 +15,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -53,6 +57,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "action": "refresh",
@@ -87,6 +96,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -212,6 +225,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 3,
   "reachable_by_external_agents": 0,
   "routes": 12,

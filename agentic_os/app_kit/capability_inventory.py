@@ -14,6 +14,11 @@ already declares:
 
 An operation is ``external_access.gateway = true`` only when the gateway registry holds a capability of that name. Reaching a
 route with the operator's own credential is NOT external-agent access: it has no agent identity, grant, budget or audit.
+
+``gateway_candidate = true`` marks what could be offered next with the least new work: not reachable yet, a read, typed
+inputs and outputs, a GET route, declared data classifications (egress rules act on them) and not a person's decision.
+Every other unreachable read says in ``gateway_blockers`` what it lacks. It is a list for a person to work through:
+nothing is registered because of it.
 An app that cannot be loaded is reported as ``not_loadable``; it never appears as an app with nothing to offer.
 """
 from __future__ import annotations
@@ -249,14 +254,27 @@ def gateway_capabilities() -> Dict[str, Dict[str, Any]]:
         def __getattr__(self, name):
             return lambda *a, **k: None
 
-    registry = build_read_registry(projections=_Port(), missions=_Port(), sources=_Port())
-    return {m.name: {"side_effecting": m.side_effecting, "permissions": sorted(m.permissions)} for m in registry.all()}
+    from agentic_os.agent_gateway.product_capabilities import manifests as product_manifests
+    registry = build_read_registry(projections=_Port(), missions=_Port(), sources=_Port(), dashboards=_Port())
+    # what a deployment with both products registered mounts; a deployment without them offers fewer
+    return {m.name: {"side_effecting": m.side_effecting, "permissions": sorted(m.permissions)} for m in (*registry.all(), *product_manifests())}
 
 
 def _access(name: str, gateway: Dict[str, Any]) -> Dict[str, Any]:
     if name in gateway:
         return {"gateway": True}
     return {"gateway": False, "reason": "not registered in the Governed Agent Gateway"}
+
+
+def gateway_blockers(op: Dict[str, Any]) -> Optional[List[str]]:
+    """What stands between a read and being offered to an agent; ``None`` for an operation the question does not arise
+    for (already reachable, a write, or a person's decision)."""
+    if (op["external_access"]["gateway"] or op["action"] != "read" or op.get("side_effecting")
+            or "human_only" in op.get("route_access", [])):
+        return None
+    return [why for why, blocked in (("no typed inputs and outputs", not op["typed"]),
+                                     ("no GET route", not any(h["method"] == "GET" for h in op["http"])),
+                                     ("no data classification", not op.get("data_classifications"))) if blocked]
 
 
 def _gateway_of(app: str, gateway: Dict[str, Any]) -> Dict[str, Any]:
@@ -315,6 +333,10 @@ def build_manifest(raw: Dict[str, Any], table, gateway: Dict[str, Any]) -> Dict[
             op["route_access"] = policy_classes             # e.g. human_only: a person's decision, never an agent's
         if spec:
             op.update(spec)
+        blockers = gateway_blockers(op)
+        op["gateway_candidate"] = blockers == []
+        if blockers:
+            op["gateway_blockers"] = blockers
         operations.append(op)
     ui = [{"call": call, "route": match_ui_call(call, raw["routes"])} for call in raw.get("ui_calls", [])]
     manifest = {"schema": SCHEMA, "app": app,
@@ -325,6 +347,7 @@ def build_manifest(raw: Dict[str, Any], table, gateway: Dict[str, Any]) -> Dict[
                 "summary": {"operations": len(operations), "typed": sum(o["typed"] for o in operations),
                             "writes_or_deletes": sum(o["action"] in ("write", "delete") for o in operations),
                             "reachable_by_external_agents": sum(o["external_access"]["gateway"] for o in operations),
+                            "gateway_candidates": sum(o["gateway_candidate"] for o in operations),
                             "routes": len(routes), "ui_calls": len(ui), "ui_calls_not_matched": sum(u["route"] is None for u in ui),
                             "routes_without_a_gate_decision": sum(r["gate"] == "not_in_route_table" for r in routes)}}
     body = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
@@ -352,11 +375,35 @@ def coverage_report(manifests: Dict[str, Dict[str, Any]]) -> str:
              f"**{total('reachable_by_external_agents')} of {total('operations')} operations** can be invoked by an external agent through the Governed Agent Gateway.",
              f"{total('writes_or_deletes')} operations write or delete. The applications serve {total('routes')} HTTP routes; calling one with the operator's own",
              "credential is not agent access (no agent identity, grant, budget or audit).", "",
+             "Edge Sentinel and redevops-qa are reached through their product tools, which are listed under `projects` (the gateway "
+             "is mounted there): the `edge-sentinel` row counts that app's own operations, which agents do not call directly.", "",
              "| App | Operations | Reachable by agents | Write or delete | Typed inputs/outputs | Inventory |",
              "|---|---|---|---|---|---|"]
     for app, m in sorted(manifests.items()):
         s = m["summary"]
         lines.append(f"| {app} | {s['operations']} | {s['reachable_by_external_agents']} | {s['writes_or_deletes']} | {s['typed']} | {m['status']} |")
+    candidates = [(a, o["id"]) for a, m in sorted(manifests.items()) for o in m["operations"] if o["gateway_candidate"]]
+    lines += ["", "## Candidates to offer next", "",
+              "Reads with typed inputs and outputs, a GET route and declared data classifications that no agent can reach yet. "
+              "Nothing is registered automatically: each needs a decision about its data, its grant and its tenant scoping.", ""]
+    lines += [f"- {a}: `{n}`" for a, n in candidates] or ["- none yet"]
+    blocked: Dict[str, List[str]] = {}
+    for a, man in sorted(manifests.items()):
+        for o in man["operations"]:
+            if o.get("gateway_blockers"):
+                blocked.setdefault(", ".join(o["gateway_blockers"]), []).append(f"`{o['id']}`")
+    lines += ["", "### What the other unreachable reads lack", ""]
+    lines += [f"- **{why}** ({len(names)}): " + ", ".join(sorted(names)) for why, names in sorted(blocked.items(), key=lambda kv: (kv[0].count(", "), kv[0]))] or ["- nothing"]
+    from agentic_os.products.schemas import FORBIDDEN_TOOLS
+    people = {a: sorted(f"`{o['id']}`" for o in man["operations"] if "human_only" in o.get("route_access", [])) for a, man in sorted(manifests.items())}
+    lines += ["", "## Excluded on purpose, and why", "",
+              "**A person's decision.** The application declares these routes `human_only`: an agent never takes them, because the "
+              "decision is what makes the action authorized. An agent may read the state, and propose where a tool says `propose`.", ""]
+    lines += [f"- {a}: " + ", ".join(names) for a, names in people.items() if names] or ["- none"]
+    lines += ["", "**Never a tool.** Deciding, executing and administering in the integrated products. A person does these in the product or in "
+              "Projects, where the click mints the tenant-bound, single-use approval the product verifies: "
+              + ", ".join(f"`{n}`" for n in sorted(FORBIDDEN_TOOLS)) + "."]
+    lines += ["", "Every other operation below that agents cannot reach is **not yet offered**, not excluded."]
     gaps = [(a, p) for a, m in sorted(manifests.items()) for p in m["problems"]]
     if gaps:
         lines += ["", "## Not inventoried", ""] + [f"- **{a}**: {p}" for a, p in gaps]

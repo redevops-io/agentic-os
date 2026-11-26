@@ -289,6 +289,22 @@ def test_a_dry_run_is_labelled_everywhere_and_touches_nothing(env, monkeypatch):
     assert adm.get(f"/api/v1/actions/{act['request_id']}").json()["receipt"]["dry_run"] is True
 
 
+def test_the_projects_adapter_reads_this_apps_verification_route(env, monkeypatch):
+    """A contract between this route and ``agentic_os.products.sentinel``: its test double once answered a flat object,
+    and the read-back tool said "not run" about every real action, executed ones included."""
+    from agentic_os.products.sentinel import read_back_of
+    monkeypatch.setenv("SENTINEL_BLOCK_ENABLED", "0")
+    admin = basic(client())
+    olga = session(make_user(admin, "olga", "operator"))
+    case = first_case(olga)
+    act = action_of(olga, case["case_id"])
+    route = f"/api/v1/actions/{act['request_id']}/verification"
+    assert read_back_of(olga.get(route).json()) == {"state": "not_run", "detail": "", "at": "", "receipt_id": "", "receipt_status": ""}
+    assert decide(olga, case, act).status_code == 200 and run(olga, case, act).status_code == 200
+    got = read_back_of(olga.get(route).json())
+    assert got["state"] == "dry_run" and got["receipt_status"] == "DRY_RUN" and got["receipt_id"], got
+
+
 def test_an_approval_is_bound_to_the_digest_it_was_shown(env):
     adm = session(ADMIN)
     case = first_case(adm)

@@ -45,20 +45,24 @@ def _obj_schema(**props: str) -> dict:
     """JSON-schema-lite for a flat object of string params (all required)."""
     return {"type": "object",
             "properties": {k: {"type": v} for k, v in props.items()},
-            "required": list(props)}
+            "required": list(props), "additionalProperties": False}
+
+
+_NO_INPUT = {"type": "object", "properties": {}, "additionalProperties": False}
 
 
 # ── manifests (all read-only ⇒ RiskTier.READ, non-side-effecting, auto-approve) ────
 PROJECTS_LIST = CapabilityManifest(
     "projects.list", "List the projects you can see.", CapabilityKind.DIRECT,
-    permissions=("projects.read",), data_classes=(DataClass.INTERNAL,))
+    permissions=("projects.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 PROJECTS_GET_STATUS = CapabilityManifest(
     "projects.get_status", "Get a project's current status overview.", CapabilityKind.DIRECT,
-    permissions=("projects.read",), input_schema=_obj_schema(project_id="string"),
+    permissions=("projects.read",),             # no project_id: the deployment's default project
+    input_schema={"type": "object", "additionalProperties": False, "properties": {"project_id": {"type": "string"}}},
     data_classes=(DataClass.INTERNAL,))
 MISSIONS_LIST = CapabilityManifest(
     "missions.list", "List missions and their state.", CapabilityKind.DIRECT,
-    permissions=("missions.read",), data_classes=(DataClass.INTERNAL,))
+    permissions=("missions.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 MISSIONS_GET = CapabilityManifest(
     "missions.get", "Get one mission's summary and state.", CapabilityKind.DIRECT,
     permissions=("missions.read",), input_schema=_obj_schema(mission_id="string"),
@@ -69,24 +73,24 @@ MISSIONS_EXPLAIN = CapabilityManifest(
     data_classes=(DataClass.INTERNAL,))
 MISSIONS_PENDING = CapabilityManifest(
     "missions.list_pending_approvals", "List mission steps awaiting human approval.",
-    CapabilityKind.DIRECT, permissions=("missions.read",), data_classes=(DataClass.INTERNAL,))
+    CapabilityKind.DIRECT, permissions=("missions.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 SOURCES_SEARCH = CapabilityManifest(
     "sources.search", "Search connected knowledge sources; returns references, not copies.",
     CapabilityKind.DIRECT, permissions=("sources.read",),
-    input_schema={"type": "object",
+    input_schema={"type": "object", "additionalProperties": False,
                   "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
                   "required": ["query"]},
     data_classes=(DataClass.INTERNAL,))
 DASHBOARDS_LIST = CapabilityManifest(
     "dashboards.list", "List the dashboards you can read here (for example QA and release readiness, portfolio health, "
     "missions) and those that are not available, with why.", CapabilityKind.DIRECT,
-    permissions=("dashboards.read",), data_classes=(DataClass.INTERNAL,))
+    permissions=("dashboards.read",), input_schema=_NO_INPUT, data_classes=(DataClass.INTERNAL,))
 DASHBOARDS_GET = CapabilityManifest(
     "dashboards.get", "Read one dashboard: its summary, panels with their numbers, sources and how fresh each is. It returns "
     "figures and at most a few table rows, not the underlying records. E-mail addresses are masked; names of people and "
     "companies are not.", CapabilityKind.DIRECT,
     permissions=("dashboards.read",), data_classes=(DataClass.INTERNAL,),
-    input_schema={"type": "object", "properties": {"dashboard_id": {"type": "string"}, "days": {"type": "integer"}, "project": {"type": "string"}},
+    input_schema={"type": "object", "additionalProperties": False, "properties": {"dashboard_id": {"type": "string"}, "days": {"type": "integer"}, "project": {"type": "string"}},
                   "required": ["dashboard_id"]})
 CRM_LOOKUP = CapabilityManifest(
     "crm.lookup_account", "Look up a CRM account/contact by name, email, or id.",
@@ -210,7 +214,7 @@ MISSIONS_DELEGATE_GOAL = CapabilityManifest(
     "Side effects inside the mission still require human approval.",
     CapabilityKind.MISSION, permissions=("missions.delegate",), risk_tier=RiskTier.BOUNDED_WRITE,
     side_effecting=True, approval_policy=ApprovalPolicy.IF_POLICY,
-    input_schema={"type": "object",
+    input_schema={"type": "object", "additionalProperties": False,
                   "properties": {"goal": {"type": "string"},
                                  "constraints": {"type": "array", "items": {"type": "string"}}},
                   "required": ["goal"]},

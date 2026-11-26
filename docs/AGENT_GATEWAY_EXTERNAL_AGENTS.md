@@ -11,7 +11,7 @@ delegation and the action sandbox are not exposed.
     python -m agentic_os.agent_gateway.agent_tokens revoke agents.json --id claude-laptop
 
 `issue` prints the token once, on standard output; the file keeps only its SHA-256. Grants are `projects.read`,
-`missions.read`, `sources.read` and, only when you name it, `dashboards.read` (see below). Every token expires (at most 366 days). An id is never reused, so the audit stays
+`missions.read`, `sources.read` and, only when you name them, `dashboards.read` and the product grants (see below). Every token expires (at most 366 days). An id is never reused, so the audit stays
 unambiguous. Start the Projects API with:
 
 | Setting | Meaning |
@@ -63,8 +63,36 @@ token expires, so a NEW client process holding an expired one asks the person to
 (the server accepts the refresh token). A longer `AGENTIC_OS_OAUTH_ACCESS_TTL_S` makes that rarer. Not tested: Claude
 Code, Claude Desktop, MCP Inspector, a base-path issuer behind a proxy.
 
+The official TypeScript SDK (1.32.2) was run separately over the same server (37 of 37 checks): unlike the Python SDK,
+a new process with an expired access token refreshes with its refresh token and carries on.
+
 A tenant approver whose only credential is a bearer token cannot answer the consent page from an ordinary browser: a
 browser sends the operator's Basic sign-in, not a bearer. A browser sign-in for approvers is not built.
+
+## Arguments
+
+Every call is checked against the capability's published input schema, on REST and MCP alike, after the caller's
+authority and before rate limits: a malformed call reaches no handler and spends nothing. Required inputs and types are
+always checked; an input the schema does not name is refused where the schema says `additionalProperties: false`, as
+every capability this gateway offers does (`idempotency_key` is always accepted). The answer is `{"status": "error", "error": "invalid_arguments:
+<field>: <problem>"}` (REST: HTTP 200; MCP: `isError` true), and never repeats a value.
+
+## Security and quality products
+
+Where a deployment registers Edge Sentinel or redevops-qa (`AGENTIC_OS_PRODUCTS`), their tools are capabilities too, each
+behind a grant that has to be named:
+
+| Grant | What it allows |
+|---|---|
+| `security.read` | posture, cases, proposed actions, a deployment scan, the read-back that verifies an executed action |
+| `security.propose` | propose blocking or unblocking an address: a **proposal that does nothing** until a person decides it |
+| `quality.read` | targets, runs (including failed ones), progress, evidence, re-verification |
+| `quality.run` | estimate, start and cancel test runs; a run that needs approval waits for a person |
+
+**An agent can never decide or execute.** A person does both in Projects, where the click mints the tenant-bound, single-use
+approval the product verifies; the agent then reads the result back. On a deployment with tenants, a tenant needs
+`products:<id>` (or `products:*`) in its `policy_refs`. Every writing call needs an `idempotency_key`: a retry with the same
+key returns the first result, and the same key with other arguments is refused.
 
 ## Tenants
 
