@@ -8,7 +8,7 @@ webview's initialization script, which is not subject to the page CSP), loads th
   * the About / Legal view works from the keyboard against the fixture build record;
   * inline script, eval, inline handlers, inline style, form posts, base-tag injection, framing and requests to
     any other origin are blocked, and the "other origin" server sees zero requests;
-  * axe-core: 0 violations at 560x640 and at a narrow width, light and dark, main and About view.
+  * axe-core: 0 violations at 560x640 and at a narrow width, light and dark, main, About and AI agents views.
 
 WHAT THIS PROXY CANNOT SHOW (UNVERIFIED until the native GUI acceptance run): the real WKWebView (macOS) and
 WebView2 (Windows); the `tauri://localhost` / `http://tauri.localhost` origins; the `ipc:` custom-protocol fetch
@@ -134,6 +134,16 @@ STUB = """
       ]));
       case "apps_status": return Promise.resolve(JSON.stringify(fixture.appsActive || []));
       case "apply_selected_apps": return Promise.resolve("applied");
+      case "agents_list": return Promise.resolve(JSON.stringify({agents: fixture.agents || []}));
+      case "agents_connect": {
+        const rec = {id: "agent_9", name: args.name, client: args.client, grants: ["projects.read", "missions.read", "sources.read"], created_at: 1.8e9, last_used_at: null, active: true};
+        (fixture.agents = fixture.agents || []).push(rec);
+        return Promise.resolve(JSON.stringify({agent: rec, token_file: "/private/agent_9.token", expires_in_days: 30, mcp_server: {command: "node", args: ["bridge.js"], env: {RAILS_AGENT_TOKEN_FILE: "/private/agent_9.token"}}}));
+      }
+      case "agents_disconnect": {
+        fixture.agents = (fixture.agents || []).map((a) => (a.id === args.id ? {...a, active: false} : a));
+        return Promise.resolve(JSON.stringify({disconnected: true, id: args.id}));
+      }
       case "about_info":
         if (mode === "missing") return Promise.reject("ABOUT_RECORD_MISSING: The build record (Licenses/about.json) is not part of this build.");
         if (mode === "malformed") return Promise.resolve("{not json");
@@ -788,7 +798,7 @@ def _axe_source() -> str:
 
 @pytest.mark.parametrize("viewport", [(560, 640), (320, 640)], ids=["560x640", "narrow-320"])
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize("state", ["main", "main-armed-waiting", "main-armed", "about", "about-viewer", "about-error", "about-states"])
+@pytest.mark.parametrize("state", ["main", "main-armed-waiting", "main-armed", "about", "about-viewer", "about-error", "about-states", "agents", "agents-connected"])
 def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, state):
     axe_src = _axe_source()
     a = _Server(UI, {"Content-Security-Policy": CSP, "X-Content-Type-Options": NOSNIFF})
@@ -801,6 +811,14 @@ def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, st
             assert page.locator("#docker-purge").inner_text() == WAIT_LABEL
             if state == "main-armed":
                 _purge_ready(page)
+        elif state in ("agents", "agents-connected"):
+            page.click("#open-agents")
+            page.wait_for_selector("#agents-list .note")
+            if state == "agents-connected":
+                page.fill("#agent-name", "Gemini CLI")
+                page.click("#agent-connect")
+                page.wait_for_selector("#agent-result:not([hidden])")
+                page.wait_for_selector("#agents-list .agent-row")
         elif state != "main":
             page.click("#open-about")
             page.wait_for_selector("#about-error:not([hidden])" if state == "about-error" else "#about-body h3")
@@ -816,3 +834,38 @@ def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, st
         ctx.close()
     finally:
         a.close()
+
+
+def test_the_agents_screen_connects_lists_and_disconnects_without_ever_showing_a_token(browser, served):
+    ctx, page, problems, _ = _open(browser, served, _stub())
+    page.evaluate("window.__calls.length = 0")
+    page.click("#open-agents")
+    _wait(page, "() => !document.getElementById('view-agents').hidden")
+    _wait(page, "() => document.getElementById('agents-list').textContent.includes('No agent is connected.')")
+    assert _calls(page) == ["agents_list"]
+
+    page.click("#agent-connect")                       # no name: refused in the page, nothing is sent
+    _wait(page, "() => !document.getElementById('agents-error').hidden")
+    assert _calls(page) == ["agents_list"]
+
+    page.fill("#agent-name", "Gemini CLI")
+    page.select_option("#agent-client", "gemini-cli")
+    page.click("#agent-connect")
+    _wait(page, "() => !document.getElementById('agent-result').hidden")
+    connect = [c for c in page.evaluate("window.__calls") if c["name"] == "agents_connect"]
+    assert connect and connect[0]["args"] == {"name": "Gemini CLI", "client": "gemini-cli"}      # no grants, no expiry: the sidecar decides
+    shown = page.inner_text("#view-agents")
+    assert "projects.read, missions.read, sources.read" in shown and "30 days" in shown
+    assert "RAILS_AGENT_TOKEN_FILE" in page.inner_text("#agent-result-config")
+    assert "rla_" not in page.content()                # no credential is ever put in the page
+    _wait(page, "() => document.querySelectorAll('#agents-list .agent-row').length === 1")
+
+    page.click("#agents-list .agent-row button")
+    _wait(page, "() => document.getElementById('agents-list').textContent.includes('No agent is connected.')")
+    assert [c for c in page.evaluate("window.__calls") if c["name"] == "agents_disconnect"][0]["args"] == {"id": "agent_9"}
+
+    page.click("#agents-back")
+    _wait(page, "() => document.getElementById('view-agents').hidden")
+    assert page.evaluate("document.activeElement.id") == "open-agents"
+    assert _viol(page) == [] and problems == []
+    ctx.close()

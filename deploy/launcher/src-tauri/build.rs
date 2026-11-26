@@ -16,6 +16,9 @@ const APP_COMMANDS: &[&str] = &[
     "list_installable_apps",
     "apps_status",
     "apply_selected_apps",
+    "agents_list",
+    "agents_connect",
+    "agents_disconnect",
     "about_info",
     "about_text",
 ];

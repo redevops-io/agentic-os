@@ -92,3 +92,11 @@ label.filter { display: block; font-size: 13px; color: var(--muted); }
   button.danger.armed { background: Highlight; color: HighlightText; border-color: ButtonText; }
 }
 button.danger.armed[aria-disabled="true"] { cursor: progress; }
+
+.agents-form { display: grid; grid-template-columns: max-content 1fr; gap: 8px 10px; align-items: center; margin: 12px 0; }
+.agents-form button { grid-column: 1 / -1; justify-self: start; }
+.agents-form input, .agents-form select { min-width: 0; }
+.agent-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.agent-row .agent-name { flex: 1 1 60%; }
+.agent-row .note { margin: 0; flex: 1 1 100%; }
+#agent-result-config { white-space: pre-wrap; overflow-wrap: anywhere; }

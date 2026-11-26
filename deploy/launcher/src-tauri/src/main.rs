@@ -298,6 +298,50 @@ fn agent_service_name(profile: &str) -> &'static str {
     }
 }
 
+// ── External agents ────────────────────────────────────────────────────────────────────
+// Every rule lives in the frozen sidecar's own `agent` command (agentic_os/local_agents.py): a credential per agent,
+// read-only grants by default, an expiry, the token written only to a 0600 file and never printed. The launcher
+// validates what it passes on and returns the sidecar's JSON; it can neither widen the grants nor read a token.
+const AGENT_CLIENTS: &[&str] = &["generic", "gemini-cli", "claude-desktop", "local-model"];
+
+fn agent_name_ok(name: &str) -> bool {
+    let n = name.trim();
+    !n.is_empty() && n.chars().count() <= 64 && !n.starts_with('-') && !n.chars().any(|c| c.is_control())
+}
+
+fn agent_id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && !id.starts_with('-') && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+#[tauri::command]
+fn agents_list() -> Result<String, String> {
+    run_wait(Command::new(sidecar()).args(["agent", "list"]))
+}
+
+#[tauri::command]
+fn agents_connect(name: String, client: String) -> Result<String, String> {
+    if !agent_name_ok(&name) {
+        return Err("Give the agent a name of 1 to 64 characters that does not start with '-'.".to_string());
+    }
+    if !AGENT_CLIENTS.contains(&client.as_str()) {
+        return Err("Unknown client type.".to_string());
+    }
+    run_wait(
+        Command::new(sidecar())
+            .args(["agent", "connect"])
+            .arg(format!("--name={}", name.trim()))
+            .arg(format!("--client={client}")),
+    )
+}
+
+#[tauri::command]
+fn agents_disconnect(id: String) -> Result<String, String> {
+    if !agent_id_ok(&id) {
+        return Err("Not an agent id.".to_string());
+    }
+    run_wait(Command::new(sidecar()).args(["agent", "disconnect", &id]))
+}
+
 #[tauri::command]
 fn list_installable_apps() -> Result<String, String> {
     serde_json::to_string(INSTALLABLE_APPS).map_err(|e| e.to_string())
@@ -458,6 +502,9 @@ fn main() {
             list_installable_apps,
             apps_status,
             apply_selected_apps,
+            agents_list,
+            agents_connect,
+            agents_disconnect,
             about::about_info,
             about::about_text
         ])
@@ -502,6 +549,19 @@ fn main() {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn agent_arguments_are_checked_before_they_reach_the_sidecar() {
+        assert!(agent_name_ok("Gemini CLI"));
+        assert!(!agent_name_ok("  "));
+        assert!(!agent_name_ok("--grants=everything"));
+        assert!(!agent_name_ok("line\nbreak"));
+        assert!(!agent_name_ok(&"x".repeat(65)));
+        assert!(agent_id_ok("agent_1a2b-3c"));
+        assert!(!agent_id_ok("--all"));
+        assert!(!agent_id_ok("a b"));
+        assert!(!agent_id_ok(""));
+    }
 
     /// R0-prime defect c: the UI calls `window.__TAURI__.core.invoke`, which only exists when the
     /// global API script is compiled in (`app.withGlobalTauri`). v0.3.2 shipped without it (0

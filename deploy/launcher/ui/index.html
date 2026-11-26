@@ -37,6 +37,7 @@
 
         <footer class="foot">
           <button id="open-apps" type="button" class="link" aria-controls="view-apps" hidden>Apps</button>
+          <button id="open-agents" type="button" class="link" aria-controls="view-agents">AI agents</button>
           <button id="open-about" type="button" class="link" aria-controls="view-about">About / Legal</button>
         </footer>
       </div>
@@ -49,6 +50,32 @@
         <div id="apps-error" role="alert" hidden></div>
         <div id="apps-list" role="group" aria-label="Apps"></div>
         <button id="apps-apply" type="button" class="primary">Apply</button>
+      </section>
+
+      <section id="view-agents" aria-labelledby="agents-title" hidden>
+        <button id="agents-back" type="button" class="link">← Back</button>
+        <h2 id="agents-title" tabindex="-1">AI agents</h2>
+        <p class="note" id="agents-note">Connect an AI agent (for example Gemini CLI, Claude Desktop or a local model) to this installation. Each agent gets its own credential, can only read projects, missions and sources, and stops working after 30 days. It cannot approve anything. Disconnect it here at any time. The credential stays in a private file on this device and is never shown.</p>
+        <div id="agents-status" role="status" aria-live="polite"></div>
+        <div id="agents-error" role="alert" hidden></div>
+        <div class="agents-form">
+          <label for="agent-name">Name</label>
+          <input id="agent-name" type="text" maxlength="64" autocomplete="off" placeholder="for example Gemini CLI">
+          <label for="agent-client">Client</label>
+          <select id="agent-client">
+            <option value="generic">Other MCP client</option>
+            <option value="gemini-cli">Gemini CLI</option>
+            <option value="claude-desktop">Claude Desktop</option>
+            <option value="local-model">Local model</option>
+          </select>
+          <button id="agent-connect" type="button" class="primary">Connect</button>
+        </div>
+        <div id="agent-result" hidden>
+          <h3 id="agent-result-title"></h3>
+          <p class="note" id="agent-result-note"></p>
+          <pre id="agent-result-config" tabindex="0" aria-label="MCP server entry for the agent"></pre>
+        </div>
+        <div id="agents-list" role="group" aria-label="Connected agents"></div>
       </section>
 
       <section id="view-about" aria-labelledby="about-title" hidden>
