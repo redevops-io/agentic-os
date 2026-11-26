@@ -18,7 +18,7 @@ from agentic_os.app_kit.route_authz import RoutePolicy as P
 from . import approvals, qa as qamod, remediation, sentinel as sn
 from .client import ProductError
 from .hub import ProductHub
-from .principal import current_principal
+from .principal import SEPARATED, current_principal, may_decide
 from .schemas import ACTION_ID, CASE_ID, RUN_ID
 
 _PID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
@@ -58,11 +58,18 @@ def _http(e: ProductError) -> HTTPException:
     return HTTPException(status, e.as_dict())
 
 
-def _require_principal(hub: ProductHub) -> str:
+def _require_principal(hub: ProductHub, product_id: str = "") -> str:
     p = current_principal(hub.registry.single_owner)
     if not p:
         raise HTTPException(401, {"error": "principal_required",
                                   "detail": "Sign in to Projects so the product can attribute your decision to you."})
+    if not may_decide(p):                                        # every caller of this is a person's decision
+        raise HTTPException(403, {"error": "separation_of_duties", "detail": SEPARATED})
+    role, _, tenant = p.partition(":")
+    if product_id and tenant and role in ("approver", "requester"):
+        from agentic_os.agent_gateway.product_capabilities import tenant_has_product  # noqa: PLC0415
+        if not tenant_has_product(tenant, product_id):           # a decision never crosses a tenant restriction
+            raise HTTPException(403, {"error": "tenant_not_granted", "detail": f"your tenant is not granted the product {product_id}"})
     return p
 
 
@@ -121,7 +128,7 @@ def make_router(hub: ProductHub) -> APIRouter:
         if extra or not isinstance(approved, bool) or not isinstance(digest, str) or not _DIGEST.match(digest) \
                 or not isinstance(body.get("rationale", ""), str) or len(body.get("rationale", "")) > 200:
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, digest: <64 hex>, rationale?: str<=200}"})
-        principal = _require_principal(hub)
+        principal = _require_principal(hub, product_id)
         try:
             out = approvals.sentinel_decision(hub, product_id, request_id, approved=approved, digest=digest,
                                               rationale=body.get("rationale", ""), principal=principal)
@@ -138,7 +145,7 @@ def make_router(hub: ProductHub) -> APIRouter:
         digest = body.get("digest")
         if set(body) - {"digest"} or not isinstance(digest, str) or not _DIGEST.match(digest):
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {digest: <64 hex>}"})
-        principal = _require_principal(hub)
+        principal = _require_principal(hub, product_id)
         try:
             out = approvals.sentinel_execute(hub, product_id, request_id, digest=digest, principal=principal)
         except ProductError as e:
@@ -156,7 +163,7 @@ def make_router(hub: ProductHub) -> APIRouter:
                 or not isinstance(digest, str) or not _DIGEST.match(digest) \
                 or not isinstance(body.get("rationale", ""), str) or len(body.get("rationale", "")) > 200:
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, estimate_digest: <64 hex>, rationale?: str<=200}"})
-        principal = _require_principal(hub)
+        principal = _require_principal(hub, product_id)
         try:
             out = approvals.qa_approval(hub, product_id, run_id, approved=approved, estimate_digest=digest,
                                         rationale=body.get("rationale", ""), principal=principal)
@@ -174,7 +181,7 @@ def make_router(hub: ProductHub) -> APIRouter:
         if set(body) - {"severity", "security_product"} or sev not in remediation.SEVERITIES or not isinstance(sec, str) \
                 or (sec and not _PID.match(sec)):
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {severity?: medium|high|critical, security_product?: id}"})
-        principal = _require_principal(hub)
+        principal = _require_principal(hub, product_id)
         try:
             out = remediation.escalate_finding(hub, product_id, run_id, severity=sev, security_product=sec, principal=principal)
         except ProductError as e:
@@ -195,7 +202,7 @@ def make_router(hub: ProductHub) -> APIRouter:
         if set(body) - {"type", "finding_run_id", "ip", "duration_hours"} or kind != "edge_block" or not isinstance(run, str) or not re.match(RUN_ID, run) \
                 or ip is None or not (hours is None or (isinstance(hours, int) and not isinstance(hours, bool) and 1 <= hours <= 8760)):
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {type: \"edge_block\", finding_run_id, ip: <one address>, duration_hours?: 1..8760}"})
-        principal = _require_principal(hub)
+        principal = _require_principal(hub, product_id)
         try:
             out = remediation.propose_edge_block(hub, product_id, case_id, finding_run_id=run, ip=ip, duration_hours=hours, principal=principal)
         except ProductError as e:
@@ -210,7 +217,7 @@ def make_router(hub: ProductHub) -> APIRouter:
             raise HTTPException(404, {"error": "not_found", "detail": "unknown run"})
         if body:
             raise HTTPException(422, {"error": "invalid", "detail": "this request takes no body: the re-test repeats the finding run's target and profile"})
-        principal = _require_principal(hub)
+        principal = _require_principal(hub, product_id)
         try:
             out = remediation.start_retest(hub, product_id, run_id, principal=principal)
         except ProductError as e:
@@ -226,7 +233,7 @@ def make_router(hub: ProductHub) -> APIRouter:
         if set(body) - {"finding_run_id", "retest_run_id", "quality_product"} or not isinstance(first, str) or not isinstance(again, str) \
                 or not re.match(RUN_ID, first) or not re.match(RUN_ID, again) or not isinstance(qp, str) or (qp and not _PID.match(qp)):
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {finding_run_id, retest_run_id, quality_product?: id}"})
-        principal = _require_principal(hub)
+        principal = _require_principal(hub, product_id)
         try:
             out = remediation.resolve_case(hub, product_id, case_id, finding_run_id=first, retest_run_id=again, quality_product=qp,
                                            principal=principal)

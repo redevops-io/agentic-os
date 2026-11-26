@@ -5,7 +5,8 @@ mandatory gate, approved with ``MissionRuntime.approve`` (which records who, the
 and expires old requests), and performed only when the node carries the runtime's ``_approval`` marker.
 
 Beside the ledger sits one small private database: the inputs (the ledger records only their digest, so customer text can
-be erased; they are removed once a request is finished), the idempotency keys, and the outcome. A request is never
+be erased), the idempotency keys, and the outcome. The inputs are kept for ``retention_s`` after a request finishes, so a
+person can still see exactly what was approved, then erased (0 erases them at once). A request is never
 performed twice: the move from ``pending`` is atomic, and a write whose outcome is unknown is not sent again.
 """
 from __future__ import annotations
@@ -19,8 +20,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from agentic_os.app_gate import kernel_governed
-from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS, Outcome
+from agentic_os import app_gate
+from agentic_os.governed_writes import authorization
+from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS, Outcome, reserved_marker
 from agentic_os.governed_writes.apps import NotApplied
 from agentic_os.mission.approval import canonical
 from agentic_os.mission.executor import Executor
@@ -31,7 +33,7 @@ from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import MissionState
 from agentic_os.schema_check import SchemaError, validate
 
-OPERATOR = "governed-writes"
+OPERATOR = authorization.APP
 PENDING, DECIDING = "pending", "deciding"
 #: where a request ends. ``no_change``: what was asked for already holds. ``previewed``: shadow mode wrote nothing.
 FINAL = ("executed_verified", "executed_unverified", "no_change", "previewed", "failed", "outcome_unknown", "rejected", "expired")
@@ -40,7 +42,7 @@ _STALE_DECIDING_S = 600.0
 
 
 class WriteError(Exception):
-    """A refusal with a stable ``code``: not_found | invalid | conflict | unavailable | refused | too_many."""
+    """A refusal with a stable ``code``: not_found | invalid | conflict | unavailable | refused | too_many | denied."""
 
     def __init__(self, code: str, detail: str) -> None:
         super().__init__(detail)
@@ -49,10 +51,13 @@ class WriteError(Exception):
 
 class GovernedWrites:
     def __init__(self, state_dir: "str | Path", writers: Mapping[str, Any], *, ttl_s: float = 86400.0,
-                 clock: Callable[[], float] = time.time, authority: Any = None) -> None:
+                 clock: Callable[[], float] = time.time, authority: Any = None, retention_s: float = 7 * 86400.0,
+                 single_owner: Optional[Callable[[], bool]] = None) -> None:
         root = Path(state_dir)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.writers, self.ttl_s, self.clock = dict(writers), float(ttl_s), clock
+        self._single_owner = single_owner                        # a declared single owner can also approve
+        self.retention_s = max(0.0, float(retention_s))
         self._lock = threading.RLock()
         self._ran: Dict[str, "tuple[str, Any]"] = {}              # mission id -> what the handler really did
         db = root / "requests.sqlite"
@@ -65,7 +70,7 @@ class GovernedWrites:
             id TEXT PRIMARY KEY, tenant TEXT NOT NULL, requester TEXT NOT NULL, action TEXT NOT NULL, app TEXT NOT NULL,
             idem TEXT NOT NULL, digest TEXT NOT NULL, intent TEXT NOT NULL, inputs TEXT, preview TEXT NOT NULL,
             created REAL NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, approver TEXT, decided REAL,
-            record TEXT, read_back TEXT, note TEXT, executed INTEGER, verified INTEGER,
+            record TEXT, read_back TEXT, note TEXT, executed INTEGER, verified INTEGER, finished REAL,
             UNIQUE(tenant, requester, idem))""")
         if authority is None:
             from agentic_os.mission.authority import authority_from_env  # noqa: PLC0415
@@ -74,10 +79,10 @@ class GovernedWrites:
             a.name, self._handler(a.name), provides=[self._fact(a.name)], outputs={self._fact(a.name): "s"},
             side_effecting=True, approval_required=True, permissions=[self._permission(a.app)],
             irreversible="a person removes the record in the application itself") for a in ACTIONS.values()])
-        # Not an app operator: no app tool table describes it. What lets one of these run is this plane's own chain (writes
-        # enabled by the operator, a named grant, the tenant's application, a person's approval in the runtime's gate). A
-        # permissions gate installed under this operator's name still applies and wins. It is served on no HTTP route.
-        kernel_governed(operator, "governed writes: a named gateway grant, the tenant's application and a person's approval in the Mission Runtime gate")
+        # Gated like any app: its tools are classified in tool_actions["governed-writes"], and the Operator seam asks the
+        # installed permissions gate before the handler runs (denied when permissions are requested and none is installed).
+        # It is served on no HTTP route.
+        self.operator = operator
         registry = CapabilityRegistry()
         registry.register(operator.manifest)
         self.runtime = MissionRuntime(registry, Executor(LocalOperatorClient({OPERATOR: operator})),
@@ -94,6 +99,11 @@ class GovernedWrites:
     def configured(self, app: str) -> bool:
         return app in self.writers
 
+    def authorization(self, action: str, *, requester: str, tenant: str) -> authorization.Authorization:
+        """May this requester of this tenant have this action done? Never changed by an approval."""
+        return authorization.authorize(action, app=ACTIONS[action].app, requester=requester, tenant=tenant,
+                                       someone_else_can_approve=self._single_owner)
+
     # ── the operator: runs only with the runtime's approval marker ───────────────
     def _handler(self, name: str) -> Callable[[dict], dict]:
         action = ACTIONS[name]
@@ -107,6 +117,12 @@ class GovernedWrites:
             footer = f"Proposed by an external agent and approved by {marker['by']} (request {mid})"
             try:
                 validate(args, action.input_schema)
+                row = self._row(mid)
+                if row is None:
+                    raise NotApplied("this execution belongs to no request")
+                allowed = self.authorization(name, requester=row["requester"], tenant=row["tenant"])
+                if allowed.denied:                               # checked again at the last moment, after the approval
+                    raise NotApplied(allowed.error)
                 writer = self.writers.get(action.app)
                 if writer is None:
                     raise NotApplied(f"{action.app} is not connected")
@@ -142,8 +158,14 @@ class GovernedWrites:
             validate(args, spec.input_schema)
         except SchemaError as e:
             raise WriteError("invalid", str(e)) from None
+        marker = reserved_marker(args)
+        if marker:
+            raise WriteError("invalid", f"the text {marker!r} is reserved for approval records and cannot be written through a proposal")
         if not self.configured(spec.app):
             raise WriteError("unavailable", f"{spec.app} is not connected on this deployment")
+        allowed = self.authorization(action, requester=requester, tenant=tenant)
+        if allowed.denied:                                       # nothing is created for something that cannot be done
+            raise WriteError("denied", allowed.error)
         intent = hashlib.sha256(canonical({"action": action, "inputs": args})).hexdigest()
         with self._lock:
             old = self._db.execute("SELECT * FROM requests WHERE tenant=? AND requester=? AND idem=?",
@@ -191,10 +213,15 @@ class GovernedWrites:
 
     def _finish(self, request_id: str, state: str, *, from_state: str = DECIDING, note: str = "", outcome: Optional[Outcome] = None) -> None:
         o = outcome or Outcome(False, False)
-        self._db.execute("UPDATE requests SET state=?, inputs=NULL, note=?, record=?, read_back=?, executed=?, verified=?"
-                         " WHERE id=? AND state=?",
-                         (state, note or o.note, o.record, o.read_back,
+        self._db.execute("UPDATE requests SET state=?, finished=?, inputs=CASE WHEN ? THEN inputs END, note=?, record=?, read_back=?,"
+                         " executed=?, verified=? WHERE id=? AND state=?",
+                         (state, self.clock(), int(self.retention_s > 0), note or o.note, o.record, o.read_back,
                           None if state == "outcome_unknown" else int(o.executed), int(o.verified), request_id, from_state))
+
+    def _erase_old(self) -> None:
+        """Remove the inputs of requests that finished longer ago than the retention."""
+        self._db.execute("UPDATE requests SET inputs=NULL WHERE inputs IS NOT NULL AND finished IS NOT NULL AND finished <= ?",
+                         (self.clock() - self.retention_s,))
 
     def _view(self, row: sqlite3.Row, *, for_approver: bool = False) -> Dict[str, Any]:
         out = {"request_id": row["id"], "action": row["action"], "app": row["app"], "state": row["state"], "summary": row["preview"],
@@ -204,14 +231,19 @@ class GovernedWrites:
                "verified": bool(row["verified"]), "record": row["record"] or "", "read_back": row["read_back"] or "", "note": row["note"] or ""}
         if row["state"] == PENDING:
             out["executed"] = False
-            if for_approver:                                  # exactly what would be written, and the digest a decision names
-                out["inputs"], out["digest"] = json.loads(row["inputs"]), row["digest"]
+        if for_approver:                                       # for a person: exactly what would be, or was, written
+            out["inputs"] = None if row["inputs"] is None else json.loads(row["inputs"])    # None: erased after the retention
+            if row["state"] == PENDING:                        # and the digest a decision names
+                allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"])
+                out["authorization"] = {"verdict": allowed.verdict.value, "reason": allowed.reason}
+                out["digest"] = row["digest"]
         return out
 
     def get(self, request_id: str, *, tenant: Optional[str] = None, requester: Optional[str] = None,
             for_approver: bool = False) -> Dict[str, Any]:
         """``tenant`` None = a deployment operator (every tenant). A request outside the filters does not exist."""
         with self._lock:
+            self._erase_old()
             row = self._row(request_id)
             if row is None or (tenant is not None and row["tenant"] != tenant) or (requester is not None and row["requester"] != requester):
                 raise WriteError("not_found", "no such request")
@@ -225,6 +257,7 @@ class GovernedWrites:
                 sql += f" AND {column}=?"
                 args.append(value)
         with self._lock:
+            self._erase_old()
             rows = [self._fresh(r) for r in self._db.execute(sql + " ORDER BY created DESC LIMIT 500", args).fetchall()]
             return [self._view(r, for_approver=for_approver) for r in rows if not state or r["state"] == state][: max(1, min(limit, 200))]
 
@@ -241,8 +274,17 @@ class GovernedWrites:
                 raise WriteError("conflict", f"this request is already {current['state']}")
             if digest != row["digest"]:
                 raise WriteError("conflict", "the digest is not this request's: read it again and decide on what is shown")
-            if approve and not self.configured(row["app"]):
-                raise WriteError("unavailable", f"{row['app']} is not connected now; the request is still waiting")
+            if approve:
+                if not self.configured(row["app"]):
+                    raise WriteError("unavailable", f"{row['app']} is not connected now; the request is still waiting")
+                # an approval never overrides a denial: not the requester's (checked again, as things stand now) and not
+                # the deciding person's own, as the Operator seam would judge this execution. The request stays waiting.
+                allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"])
+                if allowed.denied:
+                    raise WriteError("denied", allowed.error)
+                own = app_gate.operator_denial(OPERATOR, row["action"], self.operator)
+                if own:
+                    raise WriteError("denied", f"not_authorized (permission_denied): you may not have this performed: {own}"[:400])
             taken = self._db.execute("UPDATE requests SET state=?, approver=?, decided=? WHERE id=? AND state=?",
                                      (DECIDING, approver, self.clock(), request_id, PENDING)).rowcount
             if taken != 1:

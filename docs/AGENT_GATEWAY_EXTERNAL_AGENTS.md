@@ -112,7 +112,9 @@ The writes are deliberately narrow: a comment, a **draft** purchase order (a per
 **private** note, a company or contact **only if none has that domain or e-mail**. Nothing messages a customer, submits,
 cancels, pays, deletes or overwrites. Records are customer content: the egress policy redacts e-mail addresses and
 secret-shaped values, and without `egress:financial` financial records are withheld. Whatever a record or conversation
-says is data written by other people, not an instruction to the agent. Granting a read lets those records reach whatever
+says is data written by other people, not an instruction to the agent. A proposal may not contain the reserved marker
+`aos-approval`, which other readers treat as an approval record. A comment in an application is never itself proof of an
+approval: the proof is the governed request and the runtime's ledger. Granting a read lets those records reach whatever
 model the agent runs on: grant it only where that is acceptable.
 
 **Configure.** The applications are the ones the deployment already connects (`ERPNEXT_URL` + key and secret,
@@ -122,28 +124,72 @@ directory; `AGENTIC_OS_WRITES_TTL_S` (default 86400) is how long a proposal wait
 (or `app:*`), and `writes:decide` to let its `approver:<tenant>` credential decide. A deployment connects one of each
 application, so two tenants granted the same one see the same data.
 
-**The person decides** in Projects; no agent credential can:
+**Permitted, approval required, or denied.** Every lookup and proposal gets one of three answers, and **an approval only
+ever satisfies "approval required"; it never overrides a denial**:
+
+| Answer | When |
+|---|---|
+| permitted | a lookup, or following your own request |
+| approval required | a change: it is proposed and waits for a person |
+| denied | refused with `not_authorized (<code>): <what to do>`; nothing is created |
+
+Checked in order: the named grant (by the gateway); `tenant_not_granted` (the tenant lacks `app:<name>` or has expired);
+`permission_denied` (the deployment's permissions plane); `no_approver` (nobody configured could approve, so no request is
+left waiting for nobody). A financial lookup without `egress:financial` returns `missing_grant` and reads nothing: there is
+no export approval to wait for. The checks run when a change is proposed, again when a person approves it (a denial then
+leaves the request waiting; rejecting is always possible), and again just before it is performed.
+
+**With permissions switched on**, this plane is gated like an app, as `governed-writes` (tools classified in
+`agentic_os/tool_actions.py`); Projects installs its gate and does not start if it cannot. Basic permissions:
+`agentic-os permissions init` grants the lookups, `--include-write` the proposals, and each can be revoked by itself. Note
+that basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write
+(here: every agent holding the gateway grant may propose; a person still approves). Enterprise permissions
+are asked about the agent's own identity (user `agent:<id>`, role `external-agent`, its tenant), and the approving person
+must also be allowed the tool, as the identity your enterprise layer verifies for their request; if it cannot identify a
+browser session, the approval is refused.
+
+## Approving: the pages in Projects
+
+Wherever something can await a person (governed writes, or a registered Edge Sentinel or redevops-qa), Projects serves:
 
 ```
-GET  /api/writes?state=pending            what waits, with exactly what would be written and its digest
+/approvals                           everything waiting, and what was recently settled
+/approvals/writes/{request_id}       one governed write
+/approvals/{product_id}/{record_id}  one Edge Sentinel action or quality run
+```
+
+A proposal's answer carries `approval_url`, the link to its card; an agent hands it to a person. It names a record and
+carries **no credential**. Set `PROJECTS_PUBLIC_URL` (or the OAuth issuer) to make it absolute; otherwise it is the path.
+A card shows the requesting agent, the tenant, the application, exactly what would change, the affected records, when the
+approval expires and afterwards what happened. It offers the application's own interface where there is one (set
+`ERPNEXT_PUBLIC_URL`, `CHATWOOT_PUBLIC_URL`, `TWENTY_PUBLIC_URL` to the addresses people use). ERPNext, Chatwoot and
+Twenty have no approval step for these proposals, so they are decided here; a draft purchase order is then submitted in
+ERPNext.
+
+**Sign in** with the credential you have: the operator's user and password, the admin token, or a tenant's approver (or
+requester) token. The session is a cookie (HttpOnly, SameSite=Lax) naming a server-side record that lives 8 hours at most
+and 30 idle minutes; removing or replacing the credential ends it at once, as does a restart. A decision also needs the
+session's CSRF token and the same origin. Sign-in is refused over plain HTTP except from this machine (an SSH tunnel to
+localhost); failed attempts are rate limited. Behind `PROJECTS_OPERATOR_GATE`, a session opens these pages and nothing else.
+
+The pages apply what the APIs apply: a tenant approver needs `writes:decide` for a governed write and `projects:write`
+plus the product's `products:<id>` for a product action; a requester never decides a write, and decides nothing once its
+tenant has an approver. The same decisions are available to API clients:
+
+```
+GET  /api/writes?state=pending
 GET  /api/writes/{request_id}
 POST /api/writes/{request_id}/decision    {"approved": true, "digest": "<the digest shown>"}
 ```
-
-There is no page for this yet: the routes are used with the operator's sign-in or an approver credential.
 
 **How it holds.** Each proposal is a one-node mission bound to the capability and the inputs, parked at the Mission
 Runtime's approval gate. The runtime records who approved and a digest of what they were shown. The write runs once, then
 the application is read back. States: `pending`, `executed_verified`, `executed_unverified` (written, but the read-back
 did not confirm it), `no_change` (it already held), `previewed` (shadow mode), `rejected`, `expired`, `failed` (nothing
 was changed) and `outcome_unknown` (the application may have made the change; it is **not** sent again, so look before
-asking again). The ledger holds only a digest of the inputs; the inputs are erased from the request database once it is
-finished. One Projects process should own the state directory.
-
-**With permissions switched on** (`AGENTIC_OS_PERMISSIONS`), these writes are not described by an app's tool table: like
-the other kernel planes' operators, theirs is exempt from that seam, because nothing runs without writes enabled, the
-named grant, the tenant's application and a person's approval. A permissions gate installed for the operator
-`governed-writes` still applies and wins.
+asking again). The ledger holds only a digest of the inputs. The request database keeps the inputs for
+`AGENTIC_OS_WRITES_RETENTION_S` (7 days; 0 erases them at once) after a request finishes, so a person can still see what
+was approved, then erases them. One Projects process should own the state directory.
 
 ## Tenants
 

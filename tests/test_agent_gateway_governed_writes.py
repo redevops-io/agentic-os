@@ -22,7 +22,9 @@ OTHER_APPROVER = {"Authorization": "Bearer " + "B" * 40}
 REQUESTER = {"Authorization": "Bearer " + "R" * 40}
 CLEAR = ("AGENT_GATEWAY_TOKEN", "AGENT_GATEWAY_AUDIT_PATH", "AGENT_GATEWAY_MCP", "PROJECTS_OPERATOR_GATE", "AGENTIC_OS_CONTROL_TOKEN",
          "AGENTIC_OS_TENANT_TOKENS", "AGENTIC_OS_APPROVER_TOKENS", "AGENTIC_OS_DASHBOARDS", "AGENTIC_OS_OAUTH_DB", "PROJECTS_CORS_ORIGINS",
-         "AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "AGENTIC_OS_PRODUCTS", "AGENTIC_OS_WRITES_DIR", "AGENTIC_OS_WRITES_TTL_S")
+         "AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "AGENTIC_OS_PRODUCTS", "AGENTIC_OS_WRITES_DIR", "AGENTIC_OS_WRITES_TTL_S",
+         "OPERATOR_BASIC_AUTH", "OUTREACH_BASIC_AUTH", "OPERATOR_BASIC_AUTH_USER", "OPERATOR_BASIC_AUTH_PASS", "AGENTIC_OS_PERMISSIONS",
+         "CR_PERMISSIONS", "PERMISSIONS_KEY", "PERMISSIONS_DIR")
 LIMITS = {"acme": {"policy_refs": ["app:erpnext", "app:chatwoot", "app:twenty", "writes:decide"]},
           "globex": {"policy_refs": ["project:*", "writes:decide"]}}
 ALL = ["erp.read", "erp.propose", "support.read", "support.propose", "crm.records.read", "crm.propose"]
@@ -109,8 +111,13 @@ def test_support_and_crm_retrieve_propose_approve_verify(world):
 
 def test_financial_records_leave_only_with_the_financial_grant(world):
     c, agent, *_ = world
-    without = invoke(c, agent(["erp.read"]), "erp.get_record", **INVOICE)
-    assert without["status"] != "ok" and "Acme" not in json.dumps(without), without
+    fake = world[2]
+    reader = agent(["erp.read"])
+    for tool, args in (("erp.get_record", INVOICE), ("erp.find_records", {"doctype": "Sales Invoice"})):
+        without = invoke(c, reader, tool, **args)
+        assert without["status"] == "error" and without["error"].startswith("not_authorized (missing_grant)") and "egress:financial" in without["error"], without
+        assert "Acme" not in json.dumps(without)
+    assert not fake.posts and invoke(c, reader, "erp.find_records", doctype="Supplier")["status"] == "ok"     # the rest is unaffected
     with_grant = invoke(c, agent(["erp.read", "egress:financial"]), "erp.get_record", **INVOICE)
     assert with_grant["status"] == "ok" and with_grant["output"]["record"]["customer"] == "Acme", with_grant
 

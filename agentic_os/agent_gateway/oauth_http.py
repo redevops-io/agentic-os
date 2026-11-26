@@ -141,10 +141,11 @@ def from_env(environ=None, *, audit=None) -> Optional[OAuthGateway]:
 
 # ── who is consenting ─────────────────────────────────────────────────────────────────────────────────────────────
 def approver_of(single_owner: str = "") -> Optional[Tuple[str, str]]:
-    """``(person, tenant)`` for the signed-in person of this request, or ``None``."""
-    from agentic_os.products.principal import current_principal  # noqa: PLC0415
+    """``(person, tenant)`` for the signed-in person of this request who may give an agent access, or ``None``. Giving
+    access is a decision, so a requester whose tenant has an approver is not one."""
+    from agentic_os.products.principal import current_principal, may_decide  # noqa: PLC0415
     who = current_principal(single_owner)
-    if not who:
+    if not may_decide(who):
         return None
     role, _, tenant = who.partition(":")
     if role in ("approver", "requester"):

@@ -6,6 +6,8 @@ turns that on. Every request then needs one of:
 
 * the operator's HTTP Basic credential (``OPERATOR_BASIC_AUTH`` or ``OPERATOR_BASIC_AUTH_USER``/``_PASS``); a browser is asked for
   it once (``WWW-Authenticate``) and then sends it with every request, so the person is the same principal for reads and writes;
+* on the approval pages only, a session signed in there (``agentic_os/projects/approval_pages.py``); the sign-in page itself
+  needs none, and a deep link without a session is redirected to it;
 * a control-plane bearer (``AGENTIC_OS_CONTROL_TOKEN``, ``AGENTIC_OS_TENANT_TOKENS``, ``AGENTIC_OS_APPROVER_TOKENS``), for an API
   client. What a tenant bearer may then see is still decided per route (for the dashboards: ``AGENTIC_OS_TENANT_LIMITS``).
 
@@ -85,8 +87,10 @@ def _agent_may_pass(rel: str, auth: str, agent_check) -> bool:
 class OperatorGateMiddleware:
     """Pure ASGI, outermost: a refused request reaches no route, no static file and no other middleware."""
 
-    def __init__(self, app, agent_check=None, open_routes=frozenset(), agent_challenge: str = "") -> None:
+    def __init__(self, app, agent_check=None, open_routes=frozenset(), agent_challenge: str = "", session_check=None) -> None:
         self.app, self.agent_check = app, agent_check
+        # (relative path, Cookie header) -> a signed-in approval session opens the approval pages and nothing else
+        self.session_check = session_check
         # exact (method, path) pairs an OAuth client calls before it holds any credential: discovery and its own endpoints
         self.open_routes, self.agent_challenge = frozenset(open_routes), agent_challenge
 
@@ -111,6 +115,18 @@ class OperatorGateMiddleware:
         auth = vals[0].decode("latin-1") if len(vals) == 1 else ""          # a repeated header is refused, not guessed at
         if scope["type"] == "http" and _agent_may_pass(rel, auth, self.agent_check):
             return await self.app(scope, receive, send)
+        if scope["type"] == "http" and self.session_check is not None:
+            cookies = [v for k, v in scope.get("headers", []) if k.lower() == b"cookie"]
+            if len(cookies) == 1 and self.session_check(rel, cookies[0].decode("latin-1")):
+                return await self.app(scope, receive, send)
+        # a person who follows a deep link without a session is sent to sign in, not shown a bare refusal
+        if scope["type"] == "http" and self.session_check is not None and scope.get("method") == "GET" and not auth \
+                and (rel == "/approvals" or rel.startswith("/approvals/")) and ".." not in rel.split("/"):
+            from .approval_pages import safe_next  # noqa: PLC0415  (only a path of those pages ever reaches the header)
+            target = (root.rstrip("/") + "/approvals/signin?next=" + safe_next(rel)).encode("ascii", "ignore")
+            await send({"type": "http.response.start", "status": 303, "headers": [(b"location", target), (b"cache-control", b"no-store")]})
+            await send({"type": "http.response.body", "body": b""})
+            return
         if not _configured():
             return await self._refuse(scope, send, 503, "sign-in is required here but no credential is configured on this deployment", False, origin)
         if not _valid(auth):

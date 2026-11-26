@@ -71,8 +71,17 @@ def manifests() -> Tuple[CapabilityManifest, ...]:
     return tuple(out)
 
 
+#: the tools that CREATE a record a person may be asked about: only these name its proposer (cancelling a run does not)
+CREATING_TOOLS = frozenset({"security.sentinel_propose_ban", "security.sentinel_propose_unban", "quality.qa_start_run"})
+
+
 def tenant_may_use(principal: GatewayPrincipal, product_id: str) -> bool:
     """On a deployment with tenants: whether the caller's tenant is granted this product. Fail closed."""
+    return tenant_has_product(principal.tenant, product_id)
+
+
+def tenant_has_product(tenant: str, product_id: str) -> bool:
+    """The same question about a tenant, whoever is asking (an agent, or a person deciding)."""
     import os  # noqa: PLC0415
 
     from agentic_os.mission.control_auth import ENV_TENANT_LIMITS, ConfigError, tenant_limits  # noqa: PLC0415
@@ -80,17 +89,19 @@ def tenant_may_use(principal: GatewayPrincipal, product_id: str) -> bool:
     from .scope import tenant_is_current  # noqa: PLC0415
     if not os.environ.get(ENV_TENANT_LIMITS, "").strip():
         return True
-    if not tenant_is_current(principal.tenant):
+    if not tenant_is_current(tenant):
         return False
     try:
-        refs, _ = tenant_limits(principal.tenant)
+        refs, _ = tenant_limits(tenant)
     except ConfigError:
         return False
     return "products:*" in refs or f"products:{product_id}" in refs
 
 
-def register(registry: CapabilityRegistry, tools: Any) -> CapabilityRegistry:
-    """``tools`` is a ``products.tools.ProductTools`` bound to the deployment's product hub."""
+def register(registry: CapabilityRegistry, tools: Any, *, proposals: Optional[Any] = None,
+             approval_url: Optional[Any] = None) -> CapabilityRegistry:
+    """``tools`` is a ``products.tools.ProductTools`` bound to the deployment's product hub. ``proposals`` records which
+    agent made each proposal or run; ``approval_url(product, record)`` is the deep link returned for what awaits a person."""
     from .capabilities import mask_emails  # noqa: PLC0415
 
     def handler(name: str):
@@ -104,6 +115,12 @@ def register(registry: CapabilityRegistry, tools: Any) -> CapabilityRegistry:
             if data.get("status") in _OUTPUT_REFUSALS:          # never an empty success: say what the product said
                 return HandlerResult(ok=False, error=f"{data['status']}: {result.answer}"[:500])
             output = {"answer": result.answer, **data, "evidence": list(result.evidence or ())}
+            record = str(data.get("request_id") or data.get("run_id") or "")
+            if product is not None and record:
+                if proposals is not None and name in CREATING_TOOLS:
+                    proposals.record(product, record, req.principal.principal.id, req.principal.tenant)
+                if approval_url is not None and data.get("approval"):         # the card of something that awaits a person
+                    output["approval_url"] = approval_url(product, record)
             return HandlerResult(ok=True, output=mask_emails(output), data_classes=(DataClass.INTERNAL,),
                                  evidence_refs=tuple(str(e) for e in (result.evidence or ())[:20]))
         return run

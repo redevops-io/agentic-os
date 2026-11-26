@@ -445,7 +445,16 @@ class SampleProjectionProvider:
             raise err
         return {**hit, "why": hit["reason"], "evidence": [], "action": None, "history": [], "receipt": None}
 
+    def _require_decider(self) -> None:
+        """A requester whose tenant has an approver is identified and keeps its access, but does not decide."""
+        from agentic_os.products.principal import SEPARATED, may_decide
+        actor = self._caller()[0]
+        if actor and not may_decide(actor):
+            from agentic_os.today import TodayError
+            raise TodayError(403, "separation_of_duties", SEPARATED)
+
     def today_approve(self, pid: str, item_id: str, session: str = "", **kw) -> dict:
+        self._require_decider()
         actor = self._caller()[0]
         if actor and kw.get("approver", "user:operator") == "user:operator":
             kw["approver"] = actor                # the decision record names who the server authenticated, never the built-in label
@@ -453,6 +462,8 @@ class SampleProjectionProvider:
 
     def today_reconcile(self, pid: str, item_id: str, session: str = "", manual: Optional[str] = None,
                         by: str = "user:operator") -> dict:
+        if manual is not None:
+            self._require_decider()                              # a person's own statement closes the question: a decision
         actor = self._caller()[0]
         if actor and by == "user:operator":
             by = actor
@@ -1452,6 +1463,44 @@ def _mount_mcp_server(app: "FastAPI", gateway: Any, verifier: Any) -> None:
     app.state.agent_gateway_mcp_server = True
 
 
+def _approvals_public_base() -> str:
+    """The address a person opens this Projects at: ``PROJECTS_PUBLIC_URL``, else the OAuth issuer (the same public base)."""
+    import os
+    return (os.environ.get("PROJECTS_PUBLIC_URL", "").strip() or os.environ.get("AGENTIC_OS_OAUTH_ISSUER", "").strip()).rstrip("/")
+
+
+def _approval_link(source: str, record_id: str) -> str:
+    """The deep link to one approval card. Without a public address it is the path under this deployment."""
+    import os
+    from agentic_os.projects.approval_pages import link
+    return link(_approvals_public_base() or os.environ.get("PROJECTS_BASE_PATH", "").strip().rstrip("/"), source, record_id)
+
+
+def _proposals(app: "FastAPI") -> Any:
+    """Who proposed each product record, kept beside the governed writes when those have a state directory."""
+    import os
+    if getattr(app.state, "approval_proposals", None) is None:
+        from agentic_os.projects.approval_center import Proposals
+        directory = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
+        app.state.approval_proposals = Proposals(os.path.join(directory, "proposals.sqlite") if directory else None)
+    return app.state.approval_proposals
+
+
+def mount_approvals(app: "FastAPI", prov: "ProjectionProvider") -> Dict[str, Any]:
+    """The sign-in and approval pages, wherever something here can await a person: governed writes or a registered product.
+    Returns their route policies ({} when there is nothing to approve here)."""
+    writes, hub = getattr(app.state, "governed_writes", None), getattr(prov, "products_hub", None)
+    if writes is None and hub is None:
+        return {}
+    from agentic_os.projects.approval_center import ApprovalCenter
+    from agentic_os.projects.approval_pages import ApprovalPages
+    labels = getattr(app.state, "agent_label", None)
+    center = ApprovalCenter(writes=writes, hub=hub, proposals=_proposals(app), agent_label=labels or (lambda principal: ""))
+    pages = ApprovalPages(center, public_base=_approvals_public_base())
+    app.state.approval_pages = pages
+    return pages.mount(app)
+
+
 def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     """Expose a read-only, governed slice of this deployment to external agents over MCP + REST
     (the Governed Agent Gateway). Opt-in: does nothing unless ``AGENT_GATEWAY_TOKEN`` is set — the
@@ -1578,7 +1627,8 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         # the integrated products' tools, for agents with their own identity only; each behind a named grant
         from agentic_os.agent_gateway import product_capabilities
         from agentic_os.products.tools import ProductTools
-        product_capabilities.register(registry, ProductTools(hub))
+        product_capabilities.register(registry, ProductTools(hub), proposals=_proposals(app),
+                                      approval_url=_approval_link)
     app_writers, app_writes = {}, None
     if agents is not None or oauth is not None:
         # ERP, support and CRM: lookups behind named grants; proposals only where a state directory is configured, and each
@@ -1586,12 +1636,23 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         from agentic_os.agent_gateway import app_record_capabilities
         from agentic_os.governed_writes.apps import writers_from_env
         app_writers = writers_from_env()
+        from agentic_os import app_gate as _app_gate
+        if app_writers and _app_gate.permissions_requested():
+            # permissions were requested: this plane joins them like an app (it refuses to start if the gate cannot be
+            # installed), and the request is made visible so enterprise permissions judge the person who approves
+            from agentic_os.governed_writes.authorization import APP as _WRITES_APP
+            _app_gate.install_gate(_WRITES_APP)
+            app.add_middleware(_app_gate.RequestContext)
         writes_dir = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
         if writes_dir and app_writers:
             from agentic_os.governed_writes.routes import WRITE_ROUTE_POLICIES, make_router
             from agentic_os.governed_writes.service import GovernedWrites
             from agentic_os.products.principal import current_principal
-            app_writes = GovernedWrites(writes_dir, app_writers,
+            def _single_owner() -> bool:
+                hub_ = getattr(prov, "products_hub", None)
+                return bool(hub_ is not None and hub_.registry.single_owner)
+            app_writes = GovernedWrites(writes_dir, app_writers, single_owner=_single_owner,
+                                        retention_s=float(os.environ.get("AGENTIC_OS_WRITES_RETENTION_S", "") or 7 * 86400),
                                         ttl_s=max(60.0, float(os.environ.get("AGENTIC_OS_WRITES_TTL_S", "") or 86400)))
 
             def _person():
@@ -1599,7 +1660,26 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                 return current_principal(hub_.registry.single_owner if hub_ is not None else "")
             app.include_router(make_router(app_writes, _person))
             app.state.governed_writes = app_writes
-        app_record_capabilities.register(registry, app_writers, app_writes)
+        app_record_capabilities.register(registry, app_writers, app_writes,
+                                         approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+
+    def _agent_label(principal: str) -> str:
+        """What an agent calls itself (a connection's client name) or what the operator labelled its token: for a card."""
+        ident = principal.split("projects:", 1)[-1]
+        if not ident.startswith("agent:"):
+            return ""
+        name = ident[len("agent:"):]
+        try:
+            if oauth is not None:
+                made = oauth.server.store.get_connection(name)
+                if made is not None:
+                    return str((oauth.server.store.get_client(made.get("client_id", "")) or {}).get("name", ""))
+            if agents is not None:
+                return agents.label_of(name)
+        except Exception:  # noqa: BLE001 - a label is decoration; its store failing must not hide a card
+            return ""
+        return ""
+    app.state.agent_label = _agent_label
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink
@@ -2393,6 +2473,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # AGENT_GATEWAY_TOKEN is set. Every call runs the one governed path (permissions → egress →
     # audit); writes/mission-delegation are NOT exposed here (read-only surface).
     mount_agent_gateway(app, prov)
+    _approval_policies = mount_approvals(app, prov)
 
     # Serve the bundled Projects UI at the SAME origin as the API (no CORS) — mounted LAST so
     # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
@@ -2426,15 +2507,20 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
     from agentic_os.app_kit import route_authz as _route_authz
     from agentic_os.projects_route_policy import APP as _APP, PROJECTS_ROUTE_POLICIES
-    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **_product_policies, **_dashboard_policies,
+    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **_product_policies, **_dashboard_policies, **_approval_policies,
                                      **getattr(app.state, "agent_gateway_policies", {})})
 
     # An optional sign-in in front of everything (PROJECTS_OPERATOR_GATE=1): added last, so it is the outermost layer and a
     # refused request reaches no route, no static file and no other middleware. See agentic_os/projects/operator_gate.py.
     from agentic_os.projects.operator_gate import OperatorGateMiddleware as _OperatorGate, gate_enabled as _gate_enabled
     if _gate_enabled():
+        _pages = getattr(app.state, "approval_pages", None)
+        _open = frozenset(getattr(app.state, "agent_gateway_open_routes", frozenset()))
+        if _pages is not None:
+            from agentic_os.projects.approval_pages import OPEN_ROUTES as _APPROVAL_OPEN
+            _open |= _APPROVAL_OPEN
         app.add_middleware(_OperatorGate, agent_check=getattr(app.state, "agent_gateway_gate_check", None),
-                           open_routes=getattr(app.state, "agent_gateway_open_routes", frozenset()),
+                           open_routes=_open, session_check=_pages.gate_admits if _pages is not None else None,
                            agent_challenge=getattr(app.state, "agent_gateway_challenge", ""))
 
     return app

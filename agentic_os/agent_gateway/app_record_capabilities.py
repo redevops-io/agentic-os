@@ -19,6 +19,7 @@ import os
 import re
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from agentic_os.governed_writes import authorization
 from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS
 from agentic_os.governed_writes.apps import ERP_DOCTYPES, NotApplied, OutcomeUnknown
 
@@ -106,18 +107,17 @@ def manifests() -> Tuple[CapabilityManifest, ...]:
 
 def tenant_may_use_app(principal: GatewayPrincipal, app: str) -> bool:
     """On a deployment with tenants: whether the caller's tenant is granted this application. Fail closed."""
-    from agentic_os.mission.control_auth import ENV_TENANT_LIMITS, ConfigError, tenant_limits  # noqa: PLC0415
+    return authorization.tenant_may_use_app(principal.tenant, app)
 
-    from .scope import tenant_is_current  # noqa: PLC0415
-    if not os.environ.get(ENV_TENANT_LIMITS, "").strip():
-        return True
-    if not tenant_is_current(principal.tenant):
-        return False
-    try:
-        refs, _ = tenant_limits(principal.tenant)
-    except ConfigError:
-        return False
-    return "app:*" in refs or f"app:{app}" in refs
+
+def missing_financial_grant(principal: GatewayPrincipal, arguments: Mapping[str, Any]) -> Optional[str]:
+    """The actionable refusal for a financial lookup by an agent without ``egress:financial``. Said BEFORE the application
+    is read: there is no export approval to wait for, so the call must not look as if one were coming."""
+    if arguments.get("doctype") in FINANCIAL_DOCTYPES and FINANCIAL_EGRESS not in principal.scopes:
+        return (f"not_authorized (missing_grant): {arguments.get('doctype')} records need the grant {FINANCIAL_EGRESS} on this agent, "
+                "besides erp.read. Ask the person who manages its access to add it (a new consent or token). Nothing was read, "
+                "requested or left waiting for approval.")
+    return None
 
 
 # ── what a read returns: named fields only ───────────────────────────────────────
@@ -179,20 +179,29 @@ _READERS: Dict[str, Callable[[Any, Mapping[str, Any]], Dict[str, Any]]] = {
     "support.get_conversation": _support_get, "crm.find_companies": _crm_companies, "crm.find_people": _crm_people}
 
 
-def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: Optional[Any] = None) -> CapabilityRegistry:
-    """``writers`` are the connected applications; ``writes`` is the ``GovernedWrites`` service, or None = reads only."""
+def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: Optional[Any] = None,
+             approval_url: Optional[Callable[[str], str]] = None) -> CapabilityRegistry:
+    """``writers`` are the connected applications; ``writes`` is the ``GovernedWrites`` service, or None = reads only.
+    ``approval_url(request_id)`` is the deep link a person opens to decide; it names the request and carries no credential."""
+    def linked(view: Dict[str, Any]) -> Dict[str, Any]:
+        return {**view, "approval_url": approval_url(view["request_id"])} if approval_url is not None else view
+
     from .capabilities import mask_emails  # noqa: PLC0415
 
-    def refused(req, app: str) -> Optional[HandlerResult]:
-        if not tenant_may_use_app(req.principal, app):
-            return HandlerResult(ok=False, error="not permitted: your tenant is not granted this application")
+    def refused(req, app: str, tool: str) -> Optional[HandlerResult]:
+        allowed = authorization.authorize(tool, app=app, requester=req.principal.principal.id, tenant=req.principal.tenant)
+        if allowed.denied:
+            return HandlerResult(ok=False, error=allowed.error)
         return None
 
     def reader(name: str, app: str):
         def run(req, envelope) -> HandlerResult:
-            no = refused(req, app)
+            no = refused(req, app, name)
             if no is not None:
                 return no
+            missing = missing_financial_grant(req.principal, req.arguments)
+            if missing:
+                return HandlerResult(ok=False, error=missing)
             try:
                 out = _READERS[name](writers[app], dict(req.arguments))
             except (NotApplied, OutcomeUnknown) as e:
@@ -206,24 +215,21 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: O
     def proposer(name: str, app: str):
         def run(req, envelope) -> HandlerResult:
             from agentic_os.governed_writes.service import WriteError  # noqa: PLC0415
-            no = refused(req, app)
-            if no is not None:
-                return no
             inputs = {k: v for k, v in dict(req.arguments).items() if k != "idempotency_key"}
             key = req.arguments.get("idempotency_key") or req.idempotency_key
             try:
                 view = writes.request(tenant=req.principal.tenant, requester=req.principal.principal.id, action=name,
                                       inputs=inputs, idempotency_key=str(key or ""))
-            except WriteError as e:
-                return HandlerResult(ok=False, error=f"{e.code}: {e.detail}"[:500])
-            return HandlerResult(ok=True, output=mask_emails(view), data_classes=(DataClass.INTERNAL,),
+            except WriteError as e:                      # the service asks the same authorization before it creates anything
+                return HandlerResult(ok=False, error=(e.detail if e.code == "denied" else f"{e.code}: {e.detail}")[:600])
+            return HandlerResult(ok=True, output=linked(mask_emails(view)), data_classes=(DataClass.INTERNAL,),
                                  evidence_refs=(view["request_id"],))
         return run
 
     def follower(app: str):
         def run(req, envelope) -> HandlerResult:
             from agentic_os.governed_writes.service import WriteError  # noqa: PLC0415
-            no = refused(req, app)
+            no = refused(req, app, status_tool(app))
             if no is not None:
                 return no
             mine = {"tenant": req.principal.tenant, "requester": req.principal.principal.id}
@@ -233,9 +239,9 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: O
                     one = writes.get(str(wanted), **mine)
                     if one["app"] != app:
                         return HandlerResult(ok=False, error="not_found: no such request")
-                    out: Any = one
+                    out: Any = linked(one)
                 else:
-                    out = {"requests": writes.list(app=app, limit=req.arguments.get("limit", 20), **mine)}
+                    out = {"requests": [linked(v) for v in writes.list(app=app, limit=req.arguments.get("limit", 20), **mine)]}
             except WriteError as e:
                 return HandlerResult(ok=False, error=f"{e.code}: {e.detail}"[:500])
             return HandlerResult(ok=True, output=mask_emails(out), data_classes=(DataClass.INTERNAL,))

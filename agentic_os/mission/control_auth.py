@@ -102,6 +102,17 @@ def approver_tokens() -> "dict[str, str]":
     return out
 
 
+def separation_applies(tenant: "str | None") -> bool:
+    """Separation of duties, per tenant: once a tenant has its own approver credential, that tenant's requester credential no
+    longer decides. Another tenant's approver changes nothing for it. It is about DECIDING only: a requester stays
+    identified, with its own tenant's access. An expired approver still counts (expiry must never switch this off), and a
+    token table that cannot be read applies it."""
+    try:
+        return tenant in approver_tokens()
+    except ConfigError:
+        return True
+
+
 def tenant_limits(tenant: str) -> "tuple[list[str], float | None]":
     """Server-side ceiling for a tenant caller: (allowed grants, max budget USD or None = default cap).
 

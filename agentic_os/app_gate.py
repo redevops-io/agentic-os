@@ -413,6 +413,32 @@ def _enterprise_denial(app_name: str, tool: str):
         return f"authorizer error ({type(e).__name__})"
 
 
+def requester_denial(app_name: str, tool: str, *, requester: str, tenant: str = "") -> str | None:
+    """Whether the gate lets a REQUESTER the platform authenticated itself (an external agent, not the caller of an app
+    route) have ``tool`` of ``app_name``: the deny reason, or None. Nothing requested allows, as everywhere. Permissions
+    requested and no gate installed denies. BASIC permissions authorise the app instance, not callers, so the local profile's
+    grants decide. ENTERPRISE permissions are asked about the requester's own identity: user = its id, role
+    ``external-agent``, its tenant. Both installed: both must allow."""
+    gate = _GATES.get(app_name)
+    if gate is None and app_name not in _ENTERPRISE:
+        if not permissions_requested():
+            return None
+        return f"permissions are on and no permissions gate is installed for {app_name!r}; denied (fail closed)"
+    basic = None if gate is None else gate.check(tool)
+    if basic or app_name not in _ENTERPRISE:
+        return basic
+    from .permissions import Identity
+    _principal_for, table = _ENTERPRISE[app_name]
+    auth = _cr_default_authorizer()
+    if auth is None:
+        return "enterprise permissions are on but no authorizer is installed; denied (fail closed)"
+    spec = SimpleNamespace(name=tool, side_effecting=table.get(tool) in ("write", "delete"), approval_required=False)
+    try:
+        return _deny_reason(auth(Identity(app=app_name, user=requester, roles=["external-agent"], tenant=tenant), spec, {}))
+    except Exception as e:  # noqa: BLE001 — fail closed
+        return f"authorizer error ({type(e).__name__})"
+
+
 def tool_denial(app_name: str, tool: str) -> str | None:
     """The deny reason for executing ``tool`` of ``app_name`` under the ACTIVE gate, or None: basic permissions (the local profile principal), or the ENTERPRISE
     gate (the principal of the current request, anonymous when there is none), whichever the app was started with; the basic default (neither) allows."""
@@ -470,8 +496,7 @@ def denial_result(app_name: str, *tools: str):
 # Operators of the kernel's own planes are governed by those planes (the customer-interaction layer; the Agent Gateway's social and external-agent operators, behind the gateway's token auth, capability
 # filtering and approvals), not by an app's tool table. That exemption is trusted metadata about a specific OPERATOR OBJECT and its specific CAPABILITIES, registered by the three kernel modules that build
 # them, never a property of an operator NAME (DR-04): an operator someone calls "social" is gated like any other. ``kernel_governed`` refuses any other caller.
-KERNEL_GOVERNED_MODULES = frozenset({"agentic_os.agent_gateway.social.operator", "agentic_os.agent_gateway.external.operator", "agentic_os.interaction.operator",
-                                     "agentic_os.governed_writes.service"})
+KERNEL_GOVERNED_MODULES = frozenset({"agentic_os.agent_gateway.social.operator", "agentic_os.agent_gateway.external.operator", "agentic_os.interaction.operator"})
 _KERNEL_GOVERNED: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()      # Operator object -> {capability name: why a kernel plane governs it}
 
 
