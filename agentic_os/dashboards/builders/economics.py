@@ -27,6 +27,17 @@ def _event(r: Record) -> EconomicEvent:
                          note=str(f.get("note") or ""))
 
 
+def _docs(sources: Any, limit: int = 4) -> str:
+    """The documents behind an aggregate row, by name (``ACC-SINV-2026-00001``), so a reader can open them; the row itself has no single document."""
+    names = [str(x).split("/", 1)[-1] for x in sources]
+    return ", ".join(names[:limit]) + (f" and {len(names) - limit} more" if len(names) > limit else "")
+
+
+def _handling_for(cc: Any, invoice: Any) -> str:
+    total = sum((Decimal(h["cost"]) for h in cc["handling"] if h["invoice"] == invoice), Decimal("0"))
+    return str(total.quantize(Decimal("0.01")))
+
+
 def build(b: Build) -> None:
     d, S = b.d, ("economics",)
     if not b.usable("economics"):
@@ -67,20 +78,31 @@ def build(b: Build) -> None:
         b.metric("mismatch", "Payments not matching the bank", needs=S, value=len(disc), drill="payments:mismatch" if disc else "", tone="bad" if disc else "ok", good="down")]))
     d.panels.append(panel("customers", "Profit by customer", "table", sources=S, span=2, empty="" if cust else "No sales in this range.",
                           rows=[row({"customer": c["customer"], "net": c["net_revenue"], "goods": c["cost_of_goods"], "support": c["support"],
-                                     "rework": c["rework"], "handling": c["cancellation_handling"], "profit": c["profit"], "margin": c["margin_pct"] or "—"},
-                                    tone="bad" if c["unprofitable"] else "", ref=(c["sources"] or [""])[0]) for c in cust],
+                                     "rework": c["rework"], "handling": c["cancellation_handling"], "profit": c["profit"], "margin": c["margin_pct"] or "—", "documents": _docs(c["sources"])},
+                                    tone="bad" if c["unprofitable"] else "") for c in cust],
                           columns=[col("customer", "Customer"), col("net", "Net revenue", "right"), col("goods", "Goods", "right"), col("support", "Support (est.)", "right"),
                                    col("rework", "Rework (est.)", "right"), col("handling", "Cancel handling (est.)", "right"), col("profit", "Profit", "right"),
-                                   col("margin", "Margin %", "right")]))
+                                   col("margin", "Margin %", "right"), col("documents", "Documents")]))
     d.panels.append(panel("discount_rows", "Discounts and who approved them", "table", sources=S, span=2, empty="" if dl["discounts"] else "No discount in this range.",
                           rows=[row({"invoice": x["invoice"], "customer": x["customer"], "amount": x["amount"], "approval": x["approval"] or "no reference",
                                      "approver": x["approver"] or "—"}, tone="" if x["approval"] else "warn", ref=(x["sources"] or [""])[0]) for x in dl["discounts"]],
                           columns=[col("invoice", "Invoice"), col("customer", "Customer"), col("amount", "Discount", "right"), col("approval", "Approval"), col("approver", "Approver")]))
     d.panels.append(panel("supplier_rows", "Supplier cost", "table", sources=S, empty="" if sup else "No supplier cost in this range.",
-                          rows=[row({"supplier": x["supplier"], "purchases": x["net_purchases_posted"], "rework": x["rework_estimated"], "total": x["total"]}, ref=(x["sources"] or [""])[0])
+                          rows=[row({"supplier": x["supplier"], "purchases": x["net_purchases_posted"], "rework": x["rework_estimated"], "total": x["total"], "documents": _docs(x["sources"])})
                                 for x in sup],
                           columns=[col("supplier", "Supplier"), col("purchases", "Net purchases (posted)", "right"), col("rework", "Rework (estimated)", "right"),
-                                   col("total", "Total", "right")]))
+                                   col("total", "Total", "right"), col("documents", "Documents")]))
+    d.panels.append(panel("cancellation_rows", "Cancellations and what they cost", "table", sources=S, span=2,
+                          empty="" if cc["invoices"] else "No invoice was cancelled in this range.",
+                          rows=[row({"invoice": x["invoice"], "customer": x["customer"], "outcome": x["note"], "forgone": x["forgone"], "handling": h},
+                                    tone="warn" if not x["note"].startswith("replaced") else "") for x, h in
+                                [(x, _handling_for(cc, x["invoice"])) for x in cc["invoices"]]],
+                          columns=[col("invoice", "Cancelled invoice"), col("customer", "Customer"), col("outcome", "Outcome"),
+                                   col("forgone", "Revenue forgone (estimated)", "right"), col("handling", "Handling time (estimated)", "right")]))
+    d.panels.append(panel("approver_rows", "Discounts by approver", "table", sources=S, empty="" if dl["discounts"] else "No discount in this range.",
+                          rows=[row({"approver": k, "amount": v}) for k, v in dl["by_approver"].items()] +
+                               [row({"approver": "no approval reference", "amount": dl["without_approval_reference"]}, tone="warn")],
+                          columns=[col("approver", "Approver"), col("amount", "Discounts approved", "right")]))
     d.panels.append(panel("mismatch_rows", "Payments the bank does not confirm", "table", sources=S, empty="" if disc else "Every payment with a bank line matches it.",
                           rows=[row({"reference": r.id, "customer": r.get("customer"), "posted": r.get("posted"), "bank": r.get("bank"), "difference": r.get("difference"),
                                      "invoices": r.get("invoices")}, tone="bad", ref=r.ref) for r in disc],

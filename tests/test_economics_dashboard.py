@@ -24,6 +24,13 @@ def test_the_dashboard_is_offered_when_erpnext_is_enabled_and_shows_profit_disco
     sup = [r["cells"]["supplier"] for r in _panel(dash, "supplier_rows")["rows"]]
     assert sup == ["Quartz", "Northwind"]
     assert _panel(dash, "mismatch_rows")["rows"][0]["cells"]["difference"] == 420.0
+    canc = {r["cells"]["invoice"]: r["cells"] for r in _panel(dash, "cancellation_rows")["rows"]}
+    assert (canc["S5"]["forgone"], canc["S5"]["outcome"].startswith("not replaced")) == ("1000.00", True)
+    assert (canc["S6"]["forgone"], canc["S6"]["outcome"]) == ("0.00", "replaced by S6-1")
+    appr = {r["cells"]["approver"]: r["cells"]["amount"] for r in _panel(dash, "approver_rows")["rows"]}
+    assert appr == {"usr-cfo": "200.00", "no approval reference": "910.00"}
+    assert "ref" not in _panel(dash, "customers")["rows"][0] or not _panel(dash, "customers")["rows"][0]["ref"]      # an aggregate row names no single document
+    assert "S1" in _panel(dash, "customers")["rows"][0]["cells"]["documents"] or "S1" in str([r["cells"]["documents"] for r in _panel(dash, "customers")["rows"]])
 
 
 def test_a_source_that_could_not_be_fully_read_makes_the_dashboard_say_so(monkeypatch, tmp_path):
