@@ -32,6 +32,10 @@ def _cents(rate: object) -> int:
         return 0
 
 
+class ErpnextReadError(Exception):
+    """A read of ERPNext failed. The text names the doctype and the status, never a body or a credential."""
+
+
 @dataclass
 class ErpnextClient:
     base_url: str
@@ -54,18 +58,37 @@ class ErpnextClient:
         except Exception:  # noqa: BLE001
             return False
 
-    def get_list(self, doctype: str, fields: List[str], filters: Optional[list] = None,
-                 limit: int = 0) -> List[dict]:
-        """GET an ERPNext doctype collection via the REST resource API. Empty on any failure (self-skip)."""
+    # ERPNext v16 answers a read of a CHILD table without ``parent=<parent doctype>`` with rows that hold only ``name``: no error, no fields.
+    CHILD_PARENT = {"Sales Invoice Item": "Sales Invoice", "Purchase Invoice Item": "Purchase Invoice", "Purchase Order Item": "Purchase Order",
+                    "Purchase Receipt Item": "Purchase Receipt", "Sales Order Item": "Sales Order", "Timesheet Detail": "Timesheet",
+                    "Delivery Note Item": "Delivery Note", "Quotation Item": "Quotation", "Payment Entry Reference": "Payment Entry"}
+
+    def read_list(self, doctype: str, fields: List[str], filters: Optional[list] = None, limit: int = 0) -> List[dict]:
+        """GET a doctype collection and RAISE when it cannot be read, so a caller that must not mistake "unreadable" for "empty" can tell."""
         import httpx
         params = {"fields": _json.dumps(fields), "limit_page_length": str(limit)}
         if filters:
             params["filters"] = _json.dumps(filters)
+        if doctype in self.CHILD_PARENT:
+            params["parent"] = self.CHILD_PARENT[doctype]
         try:
             r = httpx.get(f"{self.base_url}/api/resource/{doctype.replace(' ', '%20')}",
                           headers=self._headers(), params=params, timeout=self.timeout)
-            return r.json().get("data", []) if r.status_code < 400 else []
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            raise ErpnextReadError(f"{doctype}: could not be reached ({type(e).__name__})") from None
+        if r.status_code >= 400:
+            raise ErpnextReadError(f"{doctype}: the application answered HTTP {r.status_code}")
+        try:
+            return list(r.json().get("data", []))
+        except ValueError:
+            raise ErpnextReadError(f"{doctype}: the answer could not be read") from None
+
+    def get_list(self, doctype: str, fields: List[str], filters: Optional[list] = None,
+                 limit: int = 0) -> List[dict]:
+        """GET an ERPNext doctype collection via the REST resource API. Empty on any failure (self-skip)."""
+        try:
+            return self.read_list(doctype, fields, filters, limit)
+        except ErpnextReadError:
             return []
 
     def catalog(self, item_codes: List[str]) -> Dict[str, CatalogItem]:

@@ -49,6 +49,7 @@ SOURCE_META: Dict[str, Tuple[str, str, str]] = {
     "sentinel": ("Edge Sentinel", "edge-sentinel", ""),
     "twenty": ("Twenty CRM", "twenty", "twenty"),
     "erpnext": ("ERPNext", "erpnext", "erpnext"),
+    "economics": ("Economic events (ERPNext)", "erpnext", "erpnext"),
     "chatwoot": ("Chatwoot", "chatwoot", "chatwoot"),
     "lago": ("Lago billing", "lago", "lago"),
     "umami": ("Umami analytics", "umami", "umami"),
@@ -710,6 +711,43 @@ def erpnext(ctx: Context) -> SourceResult:
 CHATWOOT_PAGES = 80
 
 
+def economics(ctx: Context) -> SourceResult:
+    """Money events projected from ERPNext's own documents (sales, discounts and their approval references, credit notes, cancellations,
+    supplier bills, time logged as support or rework) and payment-against-bank discrepancies. Enabled with ``erpnext``."""
+    from agentic_os.economics import reconcile as _rec  # noqa: PLC0415
+    from agentic_os.economics.erpnext_events import extract  # noqa: PLC0415
+    from agentic_os.integrations.erpnext import erpnext_from_env  # noqa: PLC0415
+    c, bad = _client(ctx, "economics", erpnext_from_env, "ERPNEXT_URL, ERPNEXT_API_KEY and ERPNEXT_API_SECRET")
+    if bad:
+        return SourceResult(bad)
+    now, project, rows = ctx.now(), ctx.config.source_project("erpnext"), []
+    ex = extract(c)
+    for e in ex.events:
+        rows.append(Record(source="economics", kind="event", id=e.id, title=f"{e.kind.value} · {e.subjects.get('customer') or e.subjects.get('supplier') or ''}",
+                           status=e.basis.value, project=project, at=parse_ts(e.at),
+                           fields={"kind": e.kind.value, "basis": e.basis.value, "amount": float(e.amount), "currency": e.currency,
+                                   "customer": e.subjects.get("customer", ""), "supplier": e.subjects.get("supplier", ""), "invoice": e.subjects.get("invoice", ""),
+                                   "approval": e.approval.id if e.approval else "", "approver": e.approval.approver if e.approval else "", "approval_verified": False, "note": e.note},
+                           ref=e.sources[0] if e.sources else ""))
+    rec = _rec.find(c)
+    for d in rec.events:
+        rows.append(Record(source="economics", kind="discrepancy", id=d.reference, title=f"{d.reference} · {d.customer}", status="open", project=project, at=now,
+                           fields={"posted": float(d.posted), "bank": float(d.bank), "difference": float(d.difference), "payment": d.payment,
+                                   "invoices": ", ".join(d.invoices), "customer": d.customer}, ref=d.sources[0] if d.sources else ""))
+    fixed = _rec.corrections(c)
+    for k in fixed.events:
+        rows.append(Record(source="economics", kind="payment_correction", id=f"{k.reference}:{k.replacement_payment}", title=f"{k.reference} · {k.customer}", status="reconciled" if k.reconciled else "not reconciled",
+                           project=project, at=now, fields={"cancelled": k.cancelled_payment, "cancelled_amount": float(k.cancelled_amount), "replacement": k.replacement_payment,
+                                                            "replacement_amount": float(k.replacement_amount), "bank": float(k.bank_amount) if k.bank_amount is not None else None,
+                                                            "invoices": ", ".join(k.invoices), "customer": k.customer}, ref=k.sources[0] if k.sources else ""))
+    gaps = ex.gaps + rec.gaps + fixed.gaps
+    if gaps:
+        return SourceResult(_status("economics", STALE, at=now, n=len(rows),
+                                    detail="; ".join(f"{g['source']}: {g['what']} ({g['effect']})" for g in gaps[:4]) + ": the figures built on this are incomplete",
+                                    remedy="fix what is named, then reload"), rows)
+    return SourceResult(_status("economics", at=now, n=len(rows)), rows)
+
+
 def chatwoot(ctx: Context) -> SourceResult:
     from agentic_os.integrations.chatwoot import chatwoot_from_env  # noqa: PLC0415
     c, bad = _client(ctx, "chatwoot", chatwoot_from_env, "CHATWOOT_API_URL and CHATWOOT_API_TOKEN")
@@ -959,7 +997,7 @@ def sim_runs(ctx: Context) -> SourceResult:
 COLLECTORS: Dict[str, Callable[[Context], SourceResult]] = {
     "missions": missions, "attention": attention, "runtime": runtime, "context_sources": context_sources,
     "deployment": deployment, "ai_usage": ai_usage, "qa": qa, "qa_ingest": qa_ingest, "sentinel": sentinel, "sim_runs": sim_runs,
-    "twenty": twenty, "erpnext": erpnext, "chatwoot": chatwoot, "lago": lago, "umami": umami, "postiz": postiz,
+    "twenty": twenty, "erpnext": erpnext, "economics": economics, "chatwoot": chatwoot, "lago": lago, "umami": umami, "postiz": postiz,
     "listmonk": listmonk, "metabase": metabase,
 }
 
