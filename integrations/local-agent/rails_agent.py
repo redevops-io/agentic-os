@@ -64,7 +64,14 @@ def chat(base_url: str, model: str, messages: List[Dict[str, Any]], tools: List[
         return json.load(r)["choices"][0]["message"]
 
 
-def run(question: str, *, mcp: McpStdio, complete: Callable[[List[Dict[str, Any]], List[Dict[str, Any]]], Dict[str, Any]], max_steps: int = 6) -> Dict[str, Any]:
+#: How much of one tool result is given back to the model. The first version cut every result at 8,000 characters, silently, in the middle of
+#: the JSON (a busy dashboard is 17,000 to 25,000): a model that cannot see the end of a document it was given asks again with other filters,
+#: and one of three runs used its whole step budget doing so (acceptance/edge-sentinel/step-limit). A cut is now always SAID to the model.
+RESULT_CHARS = int(os.environ.get("RAILS_AGENT_RESULT_CHARS", "24000") or "24000")
+
+
+def run(question: str, *, mcp: McpStdio, complete: Callable[[List[Dict[str, Any]], List[Dict[str, Any]]], Dict[str, Any]], max_steps: int = 6,
+        result_chars: Optional[int] = None) -> Dict[str, Any]:
     """One question. Returns the answer and the transcript of tool calls (name, arguments, whether the gateway refused)."""
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", "")[:900], "parameters": t.get("inputSchema") or {"type": "object", "properties": {}}}}
              for t in mcp.request("tools/list")["tools"]]
@@ -91,8 +98,10 @@ def run(question: str, *, mcp: McpStdio, complete: Callable[[List[Dict[str, Any]
             else:
                 res = mcp.request("tools/call", {"name": name, "arguments": args if isinstance(args, dict) else {}})
                 text, refused = (res.get("content") or [{}])[0].get("text", ""), bool(res.get("isError"))
-            calls.append({"tool": name, "arguments": args, "refused": refused})
-            messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": text[:8000]})
+            limit = RESULT_CHARS if result_chars is None else int(result_chars)
+            calls.append({"tool": name, "arguments": args, "refused": refused, "result_chars": len(text), "given_to_model_chars": min(len(text), limit), "cut": len(text) > limit})
+            shown = text[:limit] if len(text) <= limit else text[:limit] + f"\n[RESULT CUT: {limit} of {len(text)} characters are shown. Asking again with the same or other filters returns the same result; answer from what is shown, and say that it is incomplete.]"
+            messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": shown})
     return {"answer": "", "calls": calls, "tools_offered": sorted(names), "stopped": "step limit reached"}
 
 
