@@ -103,7 +103,8 @@ def main(argv=None) -> int:
     ap.add_argument("--model", required=True)
     ap.add_argument("--no-thinking", action="store_true", help="send chat_template_kwargs.enable_thinking=false (Qwen on vLLM)")
     a = ap.parse_args(argv)
-    env = {k: os.environ[k] for k in ("PATH", "RAILS_URL", "RAILS_TOKEN", "RAILS_AGENTS_DIR", "RAILS_TOKEN_FILE") if k in os.environ}
+    # SYSTEMROOT, WINDIR, TEMP and TMP: Node on Windows cannot open a network connection without SYSTEMROOT in its environment.
+    env = {k: os.environ[k] for k in ("PATH", "RAILS_URL", "RAILS_TOKEN", "RAILS_AGENTS_DIR", "RAILS_TOKEN_FILE", "SYSTEMROOT", "WINDIR", "TEMP", "TMP") if k in os.environ}
     mcp = McpStdio(["node", str(BRIDGE)], env)
     try:
         extra = {"chat_template_kwargs": {"enable_thinking": False}} if a.no_thinking else None
