@@ -1,6 +1,6 @@
 {
  "app": "agentic-privacy",
- "digest": "sha256:d139784d62fc80f68b25f071299084f1c76019d406d96c43f901cb6ff53119d9",
+ "digest": "sha256:5249451830b5d7c8f6278b69821c32bd1b268907ef3bb1ead667cef4b245a6c2",
  "operations": [
   {
    "action": "read",
@@ -12,6 +12,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "data_map",
    "typed": false
@@ -26,6 +32,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "list_requests",
    "typed": false
@@ -43,6 +55,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "privacy.access",
    "inputs": {
@@ -71,6 +84,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -113,6 +127,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "privacy.intake",
    "inputs": {},
@@ -138,6 +153,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -168,6 +188,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -362,6 +387,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 7,
   "reachable_by_external_agents": 0,
   "routes": 20,

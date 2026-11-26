@@ -1,6 +1,6 @@
 {
  "app": "compliance",
- "digest": "sha256:983900b4666f993d9498d53c99e4d7527b45db07a7227c3edabdb02c787689df",
+ "digest": "sha256:ba1d675f00c48f6085e6fe0aa16c0087d918ded5bd3918df9f3e7dc78f6dd48b",
  "operations": [
   {
    "action": "read",
@@ -15,6 +15,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "action": "explain",
@@ -49,6 +54,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "file_consent",
@@ -83,6 +89,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "remediate",
@@ -117,6 +124,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "scan",
@@ -148,6 +156,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "explain_finding",
    "typed": false
@@ -162,6 +176,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -184,6 +204,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "run_scan",
    "typed": false
@@ -198,6 +224,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -329,6 +360,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 8,
   "reachable_by_external_agents": 0,
   "routes": 12,

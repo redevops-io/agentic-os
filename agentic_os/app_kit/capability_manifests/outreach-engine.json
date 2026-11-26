@@ -1,6 +1,6 @@
 {
  "app": "outreach-engine",
- "digest": "sha256:99225dc529e7e29005ed55a4edde141ef4798788900375152528de4287eff0fa",
+ "digest": "sha256:f65b42dec4133cbc50d88503ed873f4da6c5518e773be68a568815f9ca778eba",
  "operations": [
   {
    "action": "write",
@@ -15,6 +15,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "approve",
@@ -49,6 +50,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "action": "check_replies",
@@ -80,6 +86,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "method": "POST",
@@ -106,6 +113,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "outreach.draft_followup",
    "typed": false
@@ -123,6 +136,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "action": "draft_pitch",
@@ -157,6 +175,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "action": "enrich",
@@ -191,6 +214,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "action": "follow_up",
@@ -222,6 +250,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "outreach.pipeline_summary",
    "typed": false
@@ -239,6 +273,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -286,6 +324,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "send_all",
@@ -317,6 +356,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -499,6 +543,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 11,
   "reachable_by_external_agents": 0,
   "routes": 15,

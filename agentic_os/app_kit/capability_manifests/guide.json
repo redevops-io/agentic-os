@@ -1,6 +1,6 @@
 {
  "app": "guide",
- "digest": "sha256:427202c3a59f1184bab4958734c89f2a3b62edf63a6a3a949cd0fc14805b5e67",
+ "digest": "sha256:46e6ebf67125a5bed1b398fac5f7eb807adee2e8a191b6d037ae72fb1c66950e",
  "operations": [
   {
    "action": "read",
@@ -15,6 +15,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -52,6 +56,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -158,6 +166,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 2,
   "reachable_by_external_agents": 0,
   "routes": 11,

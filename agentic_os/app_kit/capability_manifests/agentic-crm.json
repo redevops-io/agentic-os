@@ -1,6 +1,6 @@
 {
  "app": "agentic-crm",
- "digest": "sha256:36c3274a2b9768b32ac384d108cd5aec52c1e67238eb19841c261a8aabb4ee2a",
+ "digest": "sha256:aeffacd653b9aad0255991403c9cd4c45c31cf46cf3b4af063c2120d3ce30698",
  "operations": [
   {
    "action": "read",
@@ -12,6 +12,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "connection_status",
    "typed": false
@@ -29,6 +35,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "draft_outreach",
@@ -63,6 +70,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "qualify",
@@ -97,6 +105,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "research",
@@ -131,6 +140,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [
     {
      "action": "score_lead",
@@ -162,6 +172,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "lead_queue",
    "typed": false
@@ -176,6 +192,11 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [
     {
      "method": "GET",
@@ -211,6 +232,12 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "stage_breakdown",
    "typed": false
@@ -337,6 +364,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 8,
   "reachable_by_external_agents": 0,
   "routes": 12,

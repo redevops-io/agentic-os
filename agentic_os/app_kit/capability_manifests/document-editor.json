@@ -1,6 +1,6 @@
 {
  "app": "document-editor",
- "digest": "sha256:f2b6c9dc9dd28d5d4e42893319a2eb4a5e0b674b02d948777af995e617e0d6c3",
+ "digest": "sha256:78bab76a2676c3e54fcd964f9db2faaed3d9bb45a6e46089bc34fb7427a8b382",
  "operations": [
   {
    "action": "write",
@@ -17,6 +17,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "document.apply_patch",
    "inputs": {},
@@ -46,6 +47,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "document.connect_check",
    "inputs": {},
@@ -74,6 +79,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "document.convert",
    "inputs": {},
@@ -102,6 +108,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "document.export",
    "inputs": {},
@@ -130,6 +137,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "document.inspect",
    "inputs": {},
@@ -158,6 +169,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "document.open_session",
    "inputs": {},
@@ -185,6 +200,10 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_blockers": [
+    "no GET route"
+   ],
+   "gateway_candidate": false,
    "http": [],
    "id": "document.propose_patch",
    "inputs": {},
@@ -213,6 +232,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "document.publish",
    "inputs": {},
@@ -241,6 +261,7 @@
     "gateway": false,
     "reason": "not registered in the Governed Agent Gateway"
    },
+   "gateway_candidate": false,
    "http": [],
    "id": "document.set_label",
    "inputs": {},
@@ -292,6 +313,7 @@
  "schema": "rails.app-capabilities/1",
  "status": "complete",
  "summary": {
+  "gateway_candidates": 0,
   "operations": 9,
   "reachable_by_external_agents": 0,
   "routes": 5,
