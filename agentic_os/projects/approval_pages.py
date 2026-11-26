@@ -30,6 +30,7 @@ _STYLE = """:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-seri
 table{border-collapse:collapse;width:100%;margin:.4rem 0 1rem}th,td{border:1px solid #8886;padding:.35rem .6rem;text-align:left;vertical-align:top;
 white-space:pre-wrap;overflow-wrap:anywhere}th{width:12rem}.tables th{width:auto}code{overflow-wrap:anywhere}.card{border:1px solid #8886;border-radius:8px;padding:.6rem 1rem;margin:.6rem 0}
 button{font:inherit;padding:.5rem 1.2rem;margin-right:.6rem}input{font:inherit;padding:.4rem;width:100%;box-sizing:border-box;margin:.2rem 0 .8rem}
+@media (max-width:32rem){th{width:34%}.tables th{width:auto}}
 .note{padding:.6rem 1rem;border-left:4px solid #c80}.muted{opacity:.75;font-size:.9em}header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}"""
 _BUTTONS = {"approve": "Approve", "reject": "Reject", "execute": "Execute now"}
 
