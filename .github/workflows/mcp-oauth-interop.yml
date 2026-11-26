@@ -1,0 +1,55 @@
+name: mcp-oauth-interop
+
+# Real-client interoperability of the OAuth-protected MCP server, on every change that can affect it. The client is the OFFICIAL TypeScript SDK
+# (@modelcontextprotocol/sdk), and consent is given in a real Chromium: discovery, dynamic registration, PKCE, consent, token, connect, call, restart,
+# expiry and refresh, revocation, per-tenant isolation behind the operator gate, administrator versus tenant-approver authority, malformed arguments.
+# Known defects are recorded as strict expected failures in integrations/mcp-oauth-harness/scenarios.mjs: the run fails when one starts passing
+# (remove its marker) as well as when anything else fails. The harness stops only the gateway it started (pid recorded, own port, own directory).
+
+on:
+  pull_request:
+    paths:
+      - "agentic_os/agent_gateway/**"
+      - "agentic_os/projects_api.py"
+      - "agentic_os/products/principal.py"
+      - "agentic_os/mission/control_auth.py"
+      - "integrations/mcp-oauth-harness/**"
+      - ".github/workflows/mcp-oauth-interop.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: The gateway's environment (with the MCP extra)
+        run: uv sync --frozen --extra mcp
+      - name: The harness's packages and a Chromium for the consent step
+        working-directory: integrations/mcp-oauth-harness
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Isolation test and every scenario
+        working-directory: integrations/mcp-oauth-harness
+        env:
+          RESULTS_OUT: ${{ runner.temp }}/mcp-oauth-interop-results.json
+        run: ./run_all.sh "$GITHUB_WORKSPACE" 28300
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: mcp-oauth-interop-results
+          path: ${{ runner.temp }}/mcp-oauth-interop-results.json
+          if-no-files-found: ignore
