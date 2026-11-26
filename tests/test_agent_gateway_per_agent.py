@@ -256,3 +256,59 @@ def test_over_a_real_socket_a_capability_can_actually_be_invoked(env, tmp_path):
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+# ── temporary identities: a lifetime in minutes and a rate limit ─────────────────────────────────
+def test_a_lifetime_in_minutes_ends_when_it_says(tmp_path):
+    f, now = str(tmp_path / "agents.json"), [1_000_000.0]
+    store = AT.AgentTokenStore(f, clock=lambda: now[0])
+    token = AT.issue(f, "visitor", ["projects.read"], minutes=60, now=now[0])
+    now[0] += 3599
+    assert store.verify(token) is not None
+    now[0] += 1
+    assert store.verify(token) is None
+
+
+@pytest.mark.parametrize("bad", [dict(), dict(days=1, minutes=5), dict(minutes=0), dict(minutes=1441), dict(minutes=5, rate_per_minute=0),
+                                 dict(minutes=5, rate_per_minute=601)])
+def test_a_lifetime_or_rate_out_of_range_issues_nothing(tmp_path, bad):
+    f = tmp_path / "agents.json"
+    with pytest.raises(ValueError):
+        AT.issue(str(f), "visitor", ["projects.read"], **bad)
+    assert not f.exists()
+
+
+@pytest.mark.parametrize("bad", [0, -1, 601, "30", True, 1.5, None])
+def test_an_entry_with_an_unreadable_rate_signs_nobody_in(tmp_path, bad):
+    f = str(tmp_path / "agents.json")
+    token = AT.issue(f, "visitor", ["projects.read"], minutes=5, rate_per_minute=5)
+    doc = json.load(open(f))
+    doc["agents"][0]["rate_per_minute"] = bad
+    json.dump(doc, open(f, "w"))
+    assert AT.AgentTokenStore(f).verify(token) is None
+
+
+def test_each_agent_is_held_to_its_own_rate_over_any_sixty_seconds(tmp_path):
+    f, tick = str(tmp_path / "agents.json"), [0.0]
+    store = AT.AgentTokenStore(f)
+    tokens = {n: AT.issue(f, n, ["projects.read"], minutes=5, **kw) for n, kw in (("b", {"rate_per_minute": 2}), ("c", {"rate_per_minute": 1}), ("free", {}))}
+    who = {n: store.verify(t) for n, t in tokens.items()}
+    limit = AT.AgentRateLimit(store, clock=lambda: tick[0])
+    assert [limit.check(who["b"], None)[0] for _ in range(3)] == [True, True, False]
+    assert limit.check(who["c"], None)[0] and not limit.check(who["c"], None)[0]          # its own window
+    assert all(limit.check(who["free"], None)[0] for _ in range(50))                      # no limit set
+    tick[0] = 59.9
+    assert not limit.check(who["b"], None)[0]
+    tick[0] = 60.0
+    assert limit.check(who["b"], None)[0], "refused calls must not have extended the window"
+
+
+def test_over_the_mounted_gateway_the_limit_refuses_the_call(env, tmp_path):
+    f = str(tmp_path / "agents.json")
+    token = AT.issue(f, "visitor", ["projects.read"], minutes=5, rate_per_minute=2)
+    env.setenv("AGENT_GATEWAY_AGENTS_FILE", f)
+    client = TestClient(create_app(SampleProjectionProvider()))
+    name = _names(client.get("/api/agent-gateway/capabilities", headers=bearer(token)))[0]
+    replies = [client.post(f"/api/agent-gateway/capabilities/{name}/invoke", json={}, headers=bearer(token)) for _ in range(3)]
+    statuses = [r.json()["status"] for r in replies]
+    assert "denied" not in statuses[:2] and statuses[2] == "denied", statuses        # the caller is not told why
