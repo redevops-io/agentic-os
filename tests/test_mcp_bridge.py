@@ -168,7 +168,8 @@ def test_a_local_agent_gets_its_tools_from_the_bridge_and_cannot_call_one_it_was
     finally:
         mcp.close()
     assert out["answer"].startswith("There are projects") and "projects_list" in out["tools_offered"] and "sandbox_execute" not in out["tools_offered"]
-    assert out["calls"] == [{"tool": "projects_list", "arguments": {}, "refused": False}, {"tool": "sandbox_execute", "arguments": {"cmd": "id"}, "refused": True}]
+    assert [{k: c[k] for k in ("tool", "arguments", "refused")} for c in out["calls"]] == [{"tool": "projects_list", "arguments": {}, "refused": False}, {"tool": "sandbox_execute", "arguments": {"cmd": "id"}, "refused": True}]
+    assert all(set(c) >= {"result_chars", "given_to_model_chars", "cut"} and c["cut"] is False for c in out["calls"])        # what the model was given is recorded
     tool_msgs = [m for m in seen[1][0] if m["role"] == "tool"]
     assert json.loads(tool_msgs[0]["content"])["status"] == "ok" and json.loads(tool_msgs[1]["content"])["status"] == "denied"
     assert all(t["function"]["parameters"]["type"] == "object" for t in seen[0][1])
