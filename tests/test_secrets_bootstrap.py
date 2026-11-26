@@ -3,6 +3,7 @@ import logging
 import os
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -321,6 +322,15 @@ def test_sidekick_answers_secrets_questions(q, eid):
     assert "SECRETS.md" in str(r) and "secret" in r["text"].lower()
 
 
+def _bundle_env(tmp: Path):
+    """Keep the bundle step away from the repo's own .env and the machine's Docker: a stand-in `docker` with no volumes."""
+    fake = tmp / "bin" / "docker"
+    fake.parent.mkdir(parents=True, exist_ok=True)
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    return {"REDEVOPS_BUNDLE_ENV": str(tmp / "bundle.env")}
+
+
 def test_shell_bootstrap_script_idempotent(tmp_path):
     import shutil
     import subprocess
@@ -328,12 +338,12 @@ def test_shell_bootstrap_script_idempotent(tmp_path):
     script = os.path.join(os.path.dirname(__file__), "..", "deploy", "apps", "bootstrap-secrets.sh")
     if not sh or sys.platform.startswith("win"):
         pytest.skip("no sh")
-    env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
+    env = {"HOME": str(tmp_path), **_bundle_env(tmp_path), "PATH": f"{tmp_path}/bin{os.pathsep}{os.environ['PATH']}"}
     subprocess.run([sh, script], env=env, check=True, capture_output=True)
     f = tmp_path / ".config/redevops/secrets.env"
     first = f.read_text()
     out = subprocess.run([sh, script], env=env, check=True, capture_output=True, text=True).stdout
-    assert f.read_text() == first and out.count("already-set") == 3
+    assert f.read_text() == first and out.count("already-set") == 3 + 4    # platform secrets + the bundle's passwords
     vals = bs.parse_dotenv(first)
     assert all(MANAGED[n].validate(vals[n])[0] for n in NAMES)
     assert stat.S_IMODE(f.stat().st_mode) == 0o600
@@ -351,8 +361,9 @@ def _run_shell_bootstrap(env, check=True):
     sh = shutil.which("sh")
     if not sh or sys.platform.startswith("win"):
         pytest.skip("no sh")
-    full_env = {"PATH": os.environ["PATH"]}
+    full_env = {"PATH": os.environ["PATH"], **_bundle_env(Path(env["HOME"]))}
     full_env.update(env)
+    full_env["PATH"] = f"{full_env['HOME']}/bin{os.pathsep}{full_env['PATH']}"
     return subprocess.run([sh, _shell_script_path()], env=full_env, check=check,
                           capture_output=True, text=True)
 

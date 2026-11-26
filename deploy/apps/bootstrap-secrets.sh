@@ -36,10 +36,16 @@ find_python_with_agentic_os() {
 
 PY="$(find_python_with_agentic_os || true)"
 
+# This bundle's own database passwords and signing key (into ./.env), after the platform secrets.
+bundle_passwords() { sh "$(dirname -- "$0")/bundle-passwords.sh"; }
+
 if [ -n "$PY" ]; then
   set -- secrets init --backend "$BACKEND"
   [ "${REDEVOPS_SECRETS_NO_SHELL_PROFILE:-0}" = "1" ] && set -- "$@" --no-shell-profile
-  exec "$PY" -m agentic_os.cli "$@"
+  "$PY" -m agentic_os.cli "$@"
+  bundle_passwords
+  echo "  next, in this directory: make up  (compose needs BOTH .env and the secrets file: --env-file .env --env-file <secrets file>)"
+  exit 0
 fi
 
 if [ "$BACKEND" = "vault" ]; then
@@ -80,4 +86,5 @@ gen AGENTIC_OS_APPROVAL_SECRET "$(hex32)"
 gen TWENTY_APP_SECRET "$(hex32)"
 gen OUTREACH_BASIC_AUTH "operator:$(urlsafe24)"
 echo "  secrets file: $F"
-echo "  next: docker compose --env-file \"$F\" up -d"
+bundle_passwords
+echo "  next: docker compose --env-file .env --env-file \"$F\" up -d"
