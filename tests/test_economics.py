@@ -226,6 +226,19 @@ def test_a_matching_payment_is_not_a_discrepancy_and_an_unreadable_bank_is_not_a
     assert f.events == [] and any("no statement" in g["effect"] for g in f.gaps)
 
 
+def test_a_payment_cancelled_and_entered_again_is_a_correction_and_it_says_whether_the_bank_now_agrees():
+    rows = recon_rows(3380)
+    rows["Payment Entry"] = [{"name": "PAY-1", "docstatus": 2, "party": "Cedar", "paid_amount": 3800, "reference_no": "WIRE-C1", "payment_type": "Receive"},
+                             {"name": "PAY-2", "docstatus": 1, "party": "Cedar", "paid_amount": 3380, "reference_no": "WIRE-C1", "payment_type": "Receive"}]
+    rows["Payment Entry Reference"] = [{"parent": "PAY-2", "reference_doctype": "Sales Invoice", "reference_name": "S5"}]
+    k = reconcile.corrections(Erp(rows)).events[0]
+    assert (k.cancelled_payment, k.cancelled_amount, k.replacement_payment, k.replacement_amount, k.reconciled, list(k.invoices)) == (
+        "PAY-1", Decimal("3800.00"), "PAY-2", Decimal("3380.00"), True, ["S5"])
+    assert reconcile.find(Erp(rows)).events == []                                       # and no discrepancy is open any more
+    rows["Bank Transaction"][0]["deposit"] = 3000
+    assert reconcile.corrections(Erp(rows)).events[0].reconciled is False
+
+
 # ── the independent ledger check ───────────────────────────────────────────────────────────────────────
 def gl_rows():
     acc = [{"name": "Sales - X", "root_type": "Income", "account_type": "Income Account"}, {"name": "COGS - X", "root_type": "Expense", "account_type": "Cost of Goods Sold"},

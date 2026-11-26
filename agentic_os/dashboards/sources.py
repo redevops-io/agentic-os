@@ -734,7 +734,13 @@ def economics(ctx: Context) -> SourceResult:
         rows.append(Record(source="economics", kind="discrepancy", id=d.reference, title=f"{d.reference} · {d.customer}", status="open", project=project, at=now,
                            fields={"posted": float(d.posted), "bank": float(d.bank), "difference": float(d.difference), "payment": d.payment,
                                    "invoices": ", ".join(d.invoices), "customer": d.customer}, ref=d.sources[0] if d.sources else ""))
-    gaps = ex.gaps + rec.gaps
+    fixed = _rec.corrections(c)
+    for k in fixed.events:
+        rows.append(Record(source="economics", kind="payment_correction", id=f"{k.reference}:{k.replacement_payment}", title=f"{k.reference} · {k.customer}", status="reconciled" if k.reconciled else "not reconciled",
+                           project=project, at=now, fields={"cancelled": k.cancelled_payment, "cancelled_amount": float(k.cancelled_amount), "replacement": k.replacement_payment,
+                                                            "replacement_amount": float(k.replacement_amount), "bank": float(k.bank_amount) if k.bank_amount is not None else None,
+                                                            "invoices": ", ".join(k.invoices), "customer": k.customer}, ref=k.sources[0] if k.sources else ""))
+    gaps = ex.gaps + rec.gaps + fixed.gaps
     if gaps:
         return SourceResult(_status("economics", STALE, at=now, n=len(rows),
                                     detail="; ".join(f"{g['source']}: {g['what']} ({g['effect']})" for g in gaps[:4]) + ": the figures built on this are incomplete",

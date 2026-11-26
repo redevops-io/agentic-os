@@ -103,6 +103,14 @@ def build(b: Build) -> None:
                           rows=[row({"approver": k, "amount": v}) for k, v in dl["by_claimed_approver"].items()] +
                                [row({"approver": "no approval claim", "amount": dl["without_approval_claim"]}, tone="warn")],
                           columns=[col("approver", "Claimed approver (unverified)"), col("amount", "Discounts claimed as approved", "right")]))
+    fixed = b.records("economics", "payment_correction", timed=False)
+    d.panels.append(panel("correction_rows", "Payments corrected: cancelled and entered again", "table", sources=S, span=2,
+                          empty="" if fixed else "No payment was cancelled and entered again.",
+                          rows=[row({"reference": r.get("cancelled") and r.id.split(":")[0], "customer": r.get("customer"), "was": r.get("cancelled_amount"), "now": r.get("replacement_amount"),
+                                     "bank": r.get("bank") if r.get("bank") is not None else "—", "status": r.status, "invoices": r.get("invoices"),
+                                     "cancelled": r.get("cancelled"), "replacement": r.get("replacement")}, tone="" if r.status == "reconciled" else "warn", ref=r.ref) for r in fixed],
+                          columns=[col("reference", "Reference"), col("customer", "Customer"), col("was", "Was", "right"), col("now", "Now", "right"), col("bank", "Bank", "right"),
+                                   col("status", "Status"), col("cancelled", "Cancelled entry"), col("replacement", "New entry"), col("invoices", "Invoice")]))
     d.panels.append(panel("mismatch_rows", "Payments the bank does not confirm", "table", sources=S, empty="" if disc else "Every payment with a bank line matches it.",
                           rows=[row({"reference": r.id, "customer": r.get("customer"), "posted": r.get("posted"), "bank": r.get("bank"), "difference": r.get("difference"),
                                      "invoices": r.get("invoices")}, tone="bad", ref=r.ref) for r in disc],

@@ -54,6 +54,7 @@ def find(client: Any) -> Extraction:
     if pays is None or bank is None:
         ex.gap("reconciliation", "payments or bank lines could not be read", "no statement about discrepancies can be made")
         return ex
+    pays = [p for p in pays if int(p.get("docstatus") or 0) == 1]       # a cancelled entry is not a posting; do not rely on the server honouring the filter
     by_pay: Dict[str, List[str]] = {}
     for r in refs or []:
         if r.get("reference_doctype") == "Sales Invoice":
@@ -79,3 +80,62 @@ def propose(d: Discrepancy) -> CorrectionProposal:
     return CorrectionProposal(d, f"cancel Payment Entry {d.payment} and record it again for {d.bank} (the amount the bank shows)",
                               f"the books show {d.bank} received for {d.reference}; invoice(s) {', '.join(d.invoices)} stay open for {d.difference}, "
                               f"which {d.customer} still owes")
+
+
+@dataclass(frozen=True)
+class Correction:
+    """A payment that was cancelled and recorded again for another amount: the history of a discrepancy that was dealt with. The cancelled entry stays in the application."""
+    reference: str
+    cancelled_payment: str
+    cancelled_amount: Decimal
+    replacement_payment: str
+    replacement_amount: Decimal
+    bank_amount: Optional[Decimal]
+    invoices: Sequence[str]
+    customer: str
+    sources: Sequence[str]
+
+    @property
+    def reconciled(self) -> bool:
+        return self.bank_amount is not None and self.bank_amount == self.replacement_amount
+
+    def to_json(self) -> Dict[str, Any]:
+        return {"reference": self.reference, "cancelled_payment": self.cancelled_payment, "cancelled_amount": str(self.cancelled_amount),
+                "replacement_payment": self.replacement_payment, "replacement_amount": str(self.replacement_amount),
+                "bank_amount": None if self.bank_amount is None else str(self.bank_amount), "reconciled": self.reconciled,
+                "invoices": list(self.invoices), "customer": self.customer, "sources": list(self.sources)}
+
+
+def corrections(client: Any) -> Extraction:
+    """Payments cancelled and re-entered under the same reference with a different amount, and whether the replacement now agrees with the bank."""
+    ex = Extraction()
+    pays = _read(client, ex, "Payment Entry", ["name", "docstatus", "party", "paid_amount", "reference_no"], None)
+    refs = _read(client, ex, "Payment Entry Reference", ["parent", "reference_doctype", "reference_name"], None)
+    bank = _read(client, ex, "Bank Transaction", ["name", "deposit", "withdrawal", "reference_number", "docstatus"], None)
+    if pays is None:
+        return ex
+    by_pay: Dict[str, List[str]] = {}
+    for r in refs or []:
+        if r.get("reference_doctype") == "Sales Invoice":
+            by_pay.setdefault(str(r["parent"]), []).append(str(r["reference_name"]))
+    lines: Dict[str, Decimal] = {}
+    for b in bank or []:
+        if int(b.get("docstatus") or 0) != 2 and b.get("reference_number"):
+            k = str(b["reference_number"])
+            lines[k] = lines.get(k, Decimal("0.00")) + money(b.get("deposit")) - money(b.get("withdrawal"))
+    groups: Dict[str, List[dict]] = {}
+    for p in pays:
+        if p.get("reference_no"):
+            groups.setdefault(str(p["reference_no"]), []).append(p)
+    for ref, rows in sorted(groups.items()):
+        live = [r for r in rows if int(r.get("docstatus") or 0) == 1]
+        dead = [r for r in rows if int(r.get("docstatus") or 0) == 2]
+        if len(live) != 1 or not dead:
+            continue
+        for d in dead:
+            if money(d.get("paid_amount")) != money(live[0].get("paid_amount")):
+                inv = by_pay.get(str(live[0]["name"]), []) or by_pay.get(str(d["name"]), [])
+                ex.events.append(Correction(ref, str(d["name"]), money(d.get("paid_amount")), str(live[0]["name"]), money(live[0].get("paid_amount")), lines.get(ref),
+                                            inv, str(live[0].get("party") or ""), (f"erpnext:Payment Entry/{d['name']}", f"erpnext:Payment Entry/{live[0]['name']}",
+                                                                                   *[f"erpnext:Sales Invoice/{i}" for i in inv])))
+    return ex

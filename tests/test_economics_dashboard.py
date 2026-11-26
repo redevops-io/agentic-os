@@ -33,6 +33,21 @@ def test_the_dashboard_is_offered_when_erpnext_is_enabled_and_shows_profit_disco
     assert "S1" in _panel(dash, "customers")["rows"][0]["cells"]["documents"] or "S1" in str([r["cells"]["documents"] for r in _panel(dash, "customers")["rows"]])
 
 
+def test_a_corrected_payment_leaves_no_open_mismatch_and_its_history_is_shown(monkeypatch, tmp_path):
+    rows = {**base_rows(), **recon_rows(3380)}
+    rows["Payment Entry"] = [{"name": "PAY-1", "docstatus": 2, "party": "Cedar", "paid_amount": 3800, "reference_no": "WIRE-C1", "payment_type": "Receive"},
+                             {"name": "PAY-2", "docstatus": 1, "party": "Cedar", "paid_amount": 3380, "reference_no": "WIRE-C1", "payment_type": "Receive"}]
+    rows["Payment Entry Reference"] = [{"parent": "PAY-2", "reference_doctype": "Sales Invoice", "reference_name": "S5"}]
+    c, svc, _ = _app(monkeypatch, tmp_path)
+    svc.config.sources.update({"erpnext": {"project": "billing"}})
+    svc.ctx.clients["economics"] = Erp(rows)
+    svc.cache.invalidate()
+    dash = c.get("/api/dashboards/economics", params={"days": 200}).json()
+    assert _metric(dash, "mismatch")["value"] == 0 and _panel(dash, "mismatch_rows")["rows"] == []
+    k = _panel(dash, "correction_rows")["rows"][0]["cells"]
+    assert (k["was"], k["now"], k["bank"], k["status"], k["replacement"]) == (3800.0, 3380.0, 3380.0, "reconciled", "PAY-2")
+
+
 def test_a_source_that_could_not_be_fully_read_makes_the_dashboard_say_so(monkeypatch, tmp_path):
     _, dash = _dash(monkeypatch, tmp_path, base_rows(), fail=["Purchase Invoice"])
     st = next(s for s in dash["sources"] if s["id"] == "economics")

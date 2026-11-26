@@ -30,7 +30,7 @@ Two behaviours of ERPNext 16 found while building this, both silent: a read of a
 2. What cancellations cost in a period: forgone revenue and handling time, both estimates; posted effect nil.
 3. Discounts given, split by whether the document carries an approval claim, and by claimed approver. Both are labelled unverified (see `approval` above).
 4. Supplier cost: net purchases (posted, after debit notes) plus rework the time logs attribute to the supplier (estimated).
-5. Discrepancies between a payment the books recorded and the bank line with the same reference, traced to payment, invoice and customer, with a **proposed** correction (`applied: false`). Making and approving the correction is a person's act through the application, or a governed write once those are enabled; this module then shows from the application's records that the discrepancy is gone.
+5. Discrepancies between a payment the books recorded and the bank line with the same reference, traced to payment, invoice and customer, with a **proposed** correction (`applied: false`). Making and approving the correction is a person's act through the application, or a governed write once those are enabled; this module then shows from the application's records that the discrepancy is gone, and `corrections` lists a payment that was cancelled and entered again under the same reference (the cancelled entry stays in the application) with whether the bank now agrees.
 
 ## Checks
 
