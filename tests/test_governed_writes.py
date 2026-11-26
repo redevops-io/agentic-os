@@ -22,8 +22,16 @@ CASES = {
 }
 
 
+#: what a developer's shell may export and CI does not: each would silently change who can approve or what is permitted
+AMBIENT = ("OPERATOR_BASIC_AUTH", "OUTREACH_BASIC_AUTH", "OPERATOR_BASIC_AUTH_USER", "OPERATOR_BASIC_AUTH_PASS", "AGENTIC_OS_CONTROL_TOKEN",
+           "AGENTIC_OS_APPROVER_TOKENS", "AGENTIC_OS_TENANT_LIMITS", "AGENTIC_OS_PERMISSIONS", "CR_PERMISSIONS", "PERMISSIONS_KEY", "PERMISSIONS_DIR")
+
+
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
+    for k in AMBIENT:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AGENTIC_OS_APPROVER_TOKENS", "acme=" + "A" * 40)           # the person who can approve acme's changes
     monkeypatch.setenv("AGENTIC_OS_PROFILE", "production")
     monkeypatch.setenv("AGENTIC_OS_AUTHORITY_DB", str(tmp_path / "authority.db"))
     monkeypatch.setenv("AGENTIC_OS_REPLAY_DB", str(tmp_path / "replay.db"))
@@ -252,25 +260,6 @@ def test_an_unconnected_app_and_a_flood_are_refused(tmp_path, monkeypatch):
     with pytest.raises(WriteError) as e:
         w.ask(key="key-00000003")
     assert e.value.code == "too_many"
-
-
-def test_with_permissions_requested_it_still_needs_the_approval_and_an_installed_gate_wins(tmp_path, monkeypatch):
-    from agentic_os import app_gate
-    monkeypatch.setattr(app_gate, "_GATES", {})
-    monkeypatch.setenv("AGENTIC_OS_PERMISSIONS", "1")
-    w = World(tmp_path)
-    operator = w.writes.runtime.executor.client._ops["governed-writes"]
-    # the exemption from the app tool-table seam does not exempt anything from the approval: without it, it only stages
-    out = operator.invoke("erp.request_comment", dict(COMMENT))
-    assert out["status"] == "pending_approval" and out["executed"] is False and _changes(w.apps) == []
-    assert w.approve(w.ask()["request_id"])["state"] == "executed_verified"
-
-    class Deny:
-        def check(self, capability):
-            return "this deployment's gate refuses it"
-    monkeypatch.setitem(app_gate._GATES, "governed-writes", Deny())
-    done = w.approve(w.ask(key="key-00000002")["request_id"])
-    assert done["state"] == "failed" and len(w.apps.comments) == 1
 
 
 def test_the_private_database_is_owner_only(tmp_path):

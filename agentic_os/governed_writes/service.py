@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from agentic_os.app_gate import kernel_governed
+from agentic_os import app_gate
+from agentic_os.governed_writes import authorization
 from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS, Outcome
 from agentic_os.governed_writes.apps import NotApplied
 from agentic_os.mission.approval import canonical
@@ -31,7 +32,7 @@ from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import MissionState
 from agentic_os.schema_check import SchemaError, validate
 
-OPERATOR = "governed-writes"
+OPERATOR = authorization.APP
 PENDING, DECIDING = "pending", "deciding"
 #: where a request ends. ``no_change``: what was asked for already holds. ``previewed``: shadow mode wrote nothing.
 FINAL = ("executed_verified", "executed_unverified", "no_change", "previewed", "failed", "outcome_unknown", "rejected", "expired")
@@ -40,7 +41,7 @@ _STALE_DECIDING_S = 600.0
 
 
 class WriteError(Exception):
-    """A refusal with a stable ``code``: not_found | invalid | conflict | unavailable | refused | too_many."""
+    """A refusal with a stable ``code``: not_found | invalid | conflict | unavailable | refused | too_many | denied."""
 
     def __init__(self, code: str, detail: str) -> None:
         super().__init__(detail)
@@ -49,10 +50,12 @@ class WriteError(Exception):
 
 class GovernedWrites:
     def __init__(self, state_dir: "str | Path", writers: Mapping[str, Any], *, ttl_s: float = 86400.0,
-                 clock: Callable[[], float] = time.time, authority: Any = None) -> None:
+                 clock: Callable[[], float] = time.time, authority: Any = None,
+                 single_owner: Optional[Callable[[], bool]] = None) -> None:
         root = Path(state_dir)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.writers, self.ttl_s, self.clock = dict(writers), float(ttl_s), clock
+        self._single_owner = single_owner                        # a declared single owner can also approve
         self._lock = threading.RLock()
         self._ran: Dict[str, "tuple[str, Any]"] = {}              # mission id -> what the handler really did
         db = root / "requests.sqlite"
@@ -74,10 +77,10 @@ class GovernedWrites:
             a.name, self._handler(a.name), provides=[self._fact(a.name)], outputs={self._fact(a.name): "s"},
             side_effecting=True, approval_required=True, permissions=[self._permission(a.app)],
             irreversible="a person removes the record in the application itself") for a in ACTIONS.values()])
-        # Not an app operator: no app tool table describes it. What lets one of these run is this plane's own chain (writes
-        # enabled by the operator, a named grant, the tenant's application, a person's approval in the runtime's gate). A
-        # permissions gate installed under this operator's name still applies and wins. It is served on no HTTP route.
-        kernel_governed(operator, "governed writes: a named gateway grant, the tenant's application and a person's approval in the Mission Runtime gate")
+        # Gated like any app: its tools are classified in tool_actions["governed-writes"], and the Operator seam asks the
+        # installed permissions gate before the handler runs (denied when permissions are requested and none is installed).
+        # It is served on no HTTP route.
+        self.operator = operator
         registry = CapabilityRegistry()
         registry.register(operator.manifest)
         self.runtime = MissionRuntime(registry, Executor(LocalOperatorClient({OPERATOR: operator})),
@@ -94,6 +97,11 @@ class GovernedWrites:
     def configured(self, app: str) -> bool:
         return app in self.writers
 
+    def authorization(self, action: str, *, requester: str, tenant: str) -> authorization.Authorization:
+        """May this requester of this tenant have this action done? Never changed by an approval."""
+        return authorization.authorize(action, app=ACTIONS[action].app, requester=requester, tenant=tenant,
+                                       someone_else_can_approve=self._single_owner)
+
     # ── the operator: runs only with the runtime's approval marker ───────────────
     def _handler(self, name: str) -> Callable[[dict], dict]:
         action = ACTIONS[name]
@@ -107,6 +115,12 @@ class GovernedWrites:
             footer = f"Proposed by an external agent and approved by {marker['by']} (request {mid})"
             try:
                 validate(args, action.input_schema)
+                row = self._row(mid)
+                if row is None:
+                    raise NotApplied("this execution belongs to no request")
+                allowed = self.authorization(name, requester=row["requester"], tenant=row["tenant"])
+                if allowed.denied:                               # checked again at the last moment, after the approval
+                    raise NotApplied(allowed.error)
                 writer = self.writers.get(action.app)
                 if writer is None:
                     raise NotApplied(f"{action.app} is not connected")
@@ -144,6 +158,9 @@ class GovernedWrites:
             raise WriteError("invalid", str(e)) from None
         if not self.configured(spec.app):
             raise WriteError("unavailable", f"{spec.app} is not connected on this deployment")
+        allowed = self.authorization(action, requester=requester, tenant=tenant)
+        if allowed.denied:                                       # nothing is created for something that cannot be done
+            raise WriteError("denied", allowed.error)
         intent = hashlib.sha256(canonical({"action": action, "inputs": args})).hexdigest()
         with self._lock:
             old = self._db.execute("SELECT * FROM requests WHERE tenant=? AND requester=? AND idem=?",
@@ -204,6 +221,9 @@ class GovernedWrites:
                "verified": bool(row["verified"]), "record": row["record"] or "", "read_back": row["read_back"] or "", "note": row["note"] or ""}
         if row["state"] == PENDING:
             out["executed"] = False
+            if for_approver:
+                allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"])
+                out["authorization"] = {"verdict": allowed.verdict.value, "reason": allowed.reason}
             if for_approver:                                  # exactly what would be written, and the digest a decision names
                 out["inputs"], out["digest"] = json.loads(row["inputs"]), row["digest"]
         return out
@@ -241,8 +261,17 @@ class GovernedWrites:
                 raise WriteError("conflict", f"this request is already {current['state']}")
             if digest != row["digest"]:
                 raise WriteError("conflict", "the digest is not this request's: read it again and decide on what is shown")
-            if approve and not self.configured(row["app"]):
-                raise WriteError("unavailable", f"{row['app']} is not connected now; the request is still waiting")
+            if approve:
+                if not self.configured(row["app"]):
+                    raise WriteError("unavailable", f"{row['app']} is not connected now; the request is still waiting")
+                # an approval never overrides a denial: not the requester's (checked again, as things stand now) and not
+                # the deciding person's own, as the Operator seam would judge this execution. The request stays waiting.
+                allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"])
+                if allowed.denied:
+                    raise WriteError("denied", allowed.error)
+                own = app_gate.operator_denial(OPERATOR, row["action"], self.operator)
+                if own:
+                    raise WriteError("denied", f"not_authorized (permission_denied): you may not have this performed: {own}"[:400])
             taken = self._db.execute("UPDATE requests SET state=?, approver=?, decided=? WHERE id=? AND state=?",
                                      (DECIDING, approver, self.clock(), request_id, PENDING)).rowcount
             if taken != 1:

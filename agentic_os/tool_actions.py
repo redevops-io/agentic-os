@@ -176,6 +176,16 @@ for _app, _caps in _OPERATOR_CAPABILITIES.items():
 # Tools that touch no controlled data and are candidates for ``make_authorizer(public_tools=...)``. A public tool is NOT exempt from
 # classification: it is listed in TOOL_ACTIONS too, as ``read`` (the gate denies an unlisted public tool, and refuses to build when a
 # public tool is registered write or delete). (app, tool) pairs.
+#: The kernel's governed-writes plane (agentic_os.governed_writes): what external agents do with ERPNext, support and CRM.
+#: A lookup or following one's own request reads; a proposal is a write (it becomes a change once a person approves it).
+TOOL_ACTIONS["governed-writes"] = {
+    "erp.find_records": "read", "erp.get_record": "read", "erp.request_status": "read",
+    "support.list_conversations": "read", "support.get_conversation": "read", "support.request_status": "read",
+    "crm.find_companies": "read", "crm.find_people": "read", "crm.request_status": "read",
+    "erp.request_comment": "write", "erp.request_draft_purchase_order": "write", "support.request_private_note": "write",
+    "crm.request_company": "write", "crm.request_person": "write",
+}
+
 PUBLIC_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("agentic-privacy", "data_map"),
     ("edge-sentinel", "list_scannable_apps"),

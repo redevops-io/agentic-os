@@ -23,7 +23,7 @@ WRITE_ROUTE_POLICIES = {
         "writes.decide", "human_only", permission=DECIDE_PERMISSION,
         rationale="approving or rejecting a change an agent proposed is a person's decision"),
 }
-_STATUS = {"not_found": 404, "invalid": 422, "conflict": 409, "unavailable": 503, "refused": 403, "too_many": 429}
+_STATUS = {"not_found": 404, "invalid": 422, "conflict": 409, "unavailable": 503, "refused": 403, "too_many": 429, "denied": 403}
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _ID = re.compile(r"^[A-Za-z0-9_-]{4,80}$")
 

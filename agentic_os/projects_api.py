@@ -1597,12 +1597,22 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         from agentic_os.agent_gateway import app_record_capabilities
         from agentic_os.governed_writes.apps import writers_from_env
         app_writers = writers_from_env()
+        from agentic_os import app_gate as _app_gate
+        if app_writers and _app_gate.permissions_requested():
+            # permissions were requested: this plane joins them like an app (it refuses to start if the gate cannot be
+            # installed), and the request is made visible so enterprise permissions judge the person who approves
+            from agentic_os.governed_writes.authorization import APP as _WRITES_APP
+            _app_gate.install_gate(_WRITES_APP)
+            app.add_middleware(_app_gate.RequestContext)
         writes_dir = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
         if writes_dir and app_writers:
             from agentic_os.governed_writes.routes import WRITE_ROUTE_POLICIES, make_router
             from agentic_os.governed_writes.service import GovernedWrites
             from agentic_os.products.principal import current_principal
-            app_writes = GovernedWrites(writes_dir, app_writers,
+            def _single_owner() -> bool:
+                hub_ = getattr(prov, "products_hub", None)
+                return bool(hub_ is not None and hub_.registry.single_owner)
+            app_writes = GovernedWrites(writes_dir, app_writers, single_owner=_single_owner,
                                         ttl_s=max(60.0, float(os.environ.get("AGENTIC_OS_WRITES_TTL_S", "") or 86400)))
 
             def _person():
