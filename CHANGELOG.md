@@ -21,7 +21,6 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - A tenant credential can expire: `expires_at` in a tenant's `AGENTIC_OS_TENANT_LIMITS` entry makes its requester and approver tokens 401 from that moment, with no restart and nothing to revoke. An unreadable value counts as expired; entries without it behave as before.
 - `integrations/mcp-bridge` on Windows keeps `SYSTEMROOT` in the Node process environment.
-
 - Agent gateway: a token's lifetime can be given in minutes (`--minutes`, at most a day) and an entry can set `rate_per_minute` (`--rate`); the gateway refuses calls over it. The window is kept in memory per process.
 - Self-improvement dashboard: runs are set side by side only when a reviewer's `RUN_NOTES.json` marks them comparable, and only within that file's runs; every caveat is shown word for word.
 - **Self-improvement dashboard** (`sim_runs`, off until listed in the dashboards file): reads the records a harness optimizer writes (`agent-harness.sim-run/1`, `agent-harness.sim/1`) - every candidate edit with its prediction written before evaluation, measured fixed / missed / broken tasks, accepted and not-adopted edits, memory carried between runs and models, and rollbacks; each figure drills into its records. Task replies and traces are not read. Runs that accepted nothing say so.
