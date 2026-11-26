@@ -605,6 +605,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&token_file).unwrap().permissions().mode() & 0o777, 0o600);
         }
+        let bridge = std::path::PathBuf::from(v["mcp_server"]["args"][0].as_str().unwrap());
+        assert!(bridge.is_file(), "the bridge path handed to an MCP client must still exist after the sidecar that printed it has exited: {bridge:?}");
+        assert!(!bridge.to_string_lossy().contains("_MEI"), "it must not point into the sidecar's temporary extraction directory");
         let agents = listed(&agents_list().unwrap());
         assert_eq!(agents.len(), 1);
         assert!(agents[0]["active"].as_bool().unwrap() && !agents_list().unwrap().contains(&token));

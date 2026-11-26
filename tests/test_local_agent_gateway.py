@@ -367,3 +367,28 @@ def test_an_agent_whose_authority_has_run_out_is_refused_by_the_server_though_it
         assert out.get("status") == "denied" or s in (401, 403), (s, out)
     finally:
         _stop_app(p)
+
+
+# ── the bridge path handed to an MCP client must outlive the command that printed it ─────────────────────────
+
+def test_the_bridge_path_handed_out_is_a_stable_copy_not_the_packaged_one(tmp_path, monkeypatch):
+    """Found on the INSTALLED app: `agent connect` printed a path inside PyInstaller's temporary extraction directory, which is deleted when the
+    command exits, so an MCP client configured from it found no bridge."""
+    from agentic_os import local_agents
+    ephemeral = tmp_path / "_MEIxxxx" / "agentic_os" / "mcp_bridge"
+    ephemeral.mkdir(parents=True)
+    (ephemeral / "index.js").write_text("// bridge v1\n")
+    monkeypatch.setattr(local_agents, "bridge_path", lambda: ephemeral / "index.js")
+    agents = tmp_path / "agents"
+    cfg = local_agents.mcp_server_config(str(agents / "tokens" / "a.token"), str(agents))
+    handed = Path(cfg["args"][0])
+    assert handed.parent == agents / "bridge" and handed.read_text() == "// bridge v1\n"
+    import shutil
+    shutil.rmtree(tmp_path / "_MEIxxxx")                                             # the process that unpacked it exits
+    assert handed.is_file() and handed.read_text() == "// bridge v1\n"
+    if os.name != "nt":
+        assert oct(handed.parent.stat().st_mode & 0o777) == "0o700"                  # the directory is private like the rest of the agents directory
+    (tmp_path / "_MEIyyyy" / "agentic_os" / "mcp_bridge").mkdir(parents=True)
+    (tmp_path / "_MEIyyyy" / "agentic_os" / "mcp_bridge" / "index.js").write_text("// bridge v2\n")
+    monkeypatch.setattr(local_agents, "bridge_path", lambda: tmp_path / "_MEIyyyy" / "agentic_os" / "mcp_bridge" / "index.js")
+    assert Path(local_agents.mcp_server_config("t", str(agents))["args"][0]).read_text() == "// bridge v2\n"      # an upgraded app upgrades the copy
