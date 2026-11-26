@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from . import access as accessmod
 from .access import Access
 from .build import Build
-from .builders import business, ops, qa
+from .builders import business, economics, ops, qa
 from .builders.self_improvement import self_improvement
 from .config import DashboardsConfig, config_from_env
 from .contracts import NOT_CONNECTED, UNAUTHORIZED, Dashboard, Drill, Filters, Record
@@ -50,6 +50,8 @@ DEFINITIONS: Tuple[Definition, ...] = (
                "How missions end, what fails, and what is waiting for a person."),
     Definition("revenue", "Revenue and sales", "P1", "Business", ("twenty", "metabase"), business.revenue, "Pipeline, wins and stalled deals from the CRM."),
     Definition("finance", "Financial health", "P1", "Business", ("erpnext", "lago"), business.finance, "Receivables, payables, overdue invoices and billing."),
+    Definition("economics", "Profit and loss events", "P1", "Business", ("economics",), economics.build,
+               "Profit per customer after discounts, support and rework, what cancellations and discounts cost and who approved them, supplier cost, payments the bank does not confirm."),
     Definition("market", "Market and conversion", "P1", "Business", ("umami",), business.market, "Traffic, top pages and the path from visitor to won deal."),
     Definition("support", "Customer support", "P1", "Business", ("chatwoot",), business.support, "Backlog, response time and conversations waiting on you."),
     Definition("procurement", "Suppliers and procurement", "P1", "Business", ("erpnext",), business.procurement, "Open and late purchase orders, spend by supplier."),
@@ -66,7 +68,7 @@ DEFINITIONS: Tuple[Definition, ...] = (
 BY_ID = {d.id: d for d in DEFINITIONS}
 #: every source a dashboard reads (not only the ones that decide whether it is offered), fetched together before it is built
 WARM = {"portfolio": ("missions", "attention", "qa", "qa_ingest", "sentinel"), "missions": ("missions", "attention"), "market": ("umami", "twenty"),
-        "revenue": ("twenty", "metabase"), "finance": ("erpnext", "lago", "metabase"), "marketing": ("postiz", "listmonk")}
+        "revenue": ("twenty", "metabase"), "finance": ("erpnext", "lago", "metabase"), "economics": ("economics",), "marketing": ("postiz", "listmonk")}
 
 
 class NotFound(LookupError):

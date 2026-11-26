@@ -1,0 +1,32 @@
+"""The economics dashboard reads the same ERPNext documents as the finance dashboard and shows the same numbers a person would compute from them."""
+from tests.test_dashboards import _app, _metric, _panel
+from tests.test_economics import Erp, base_rows, recon_rows
+
+
+def _dash(monkeypatch, tmp_path, rows, **kw):
+    c, svc, _ = _app(monkeypatch, tmp_path)
+    svc.config.sources.update({"erpnext": {"project": "billing"}})
+    svc.ctx.clients["economics"] = Erp({**rows, **recon_rows(3380)}, **kw)
+    svc.cache.invalidate()
+    return c, c.get("/api/dashboards/economics", params={"days": 200}).json()
+
+
+def test_the_dashboard_is_offered_when_erpnext_is_enabled_and_shows_profit_discounts_cancellations_and_the_bank_mismatch(monkeypatch, tmp_path):
+    c, dash = _dash(monkeypatch, tmp_path, base_rows())
+    assert "economics" in {d["id"] for d in c.get("/api/dashboards").json()["dashboards"]}
+    assert _metric(dash, "unprofitable")["value"] == 1                                       # Birch, once rework is counted
+    assert _metric(dash, "discounts")["value"] == 1110.0 and _metric(dash, "discounts_unref")["value"] == 910.0
+    assert _metric(dash, "cancel_cost")["value"] == 1000.0 and _metric(dash, "mismatch")["value"] == 1
+    cust = {r["cells"]["customer"]: r["cells"] for r in _panel(dash, "customers")["rows"]}
+    assert (cust["Acme"]["profit"], cust["Birch"]["profit"]) == ("1700.00", "-70.00")
+    disc = {r["cells"]["invoice"]: r["cells"] for r in _panel(dash, "discount_rows")["rows"]}
+    assert disc["S2"]["approver"] == "usr-cfo" and disc["S3"]["approval"] == "no reference"
+    sup = [r["cells"]["supplier"] for r in _panel(dash, "supplier_rows")["rows"]]
+    assert sup == ["Quartz", "Northwind"]
+    assert _panel(dash, "mismatch_rows")["rows"][0]["cells"]["difference"] == 420.0
+
+
+def test_a_source_that_could_not_be_fully_read_makes_the_dashboard_say_so(monkeypatch, tmp_path):
+    _, dash = _dash(monkeypatch, tmp_path, base_rows(), fail=["Purchase Invoice"])
+    st = next(s for s in dash["sources"] if s["id"] == "economics")
+    assert st["state"] != "ok" and "Purchase Invoice" in st["detail"] and "incomplete" in st["detail"]

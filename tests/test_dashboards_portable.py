@@ -22,7 +22,7 @@ def test_it_starts_with_nothing_and_says_what_cannot_work_here():
     s, d = api.handle("GET", "/api/dashboards/_portable")
     assert s == 200 and d["mode"] == "standalone" and not d["durable"]
     assert [a["id"] for a in d["available"]] == list(STANDALONE)
-    assert len(d["unavailable"]) == 10 and all(u["needs"] and u["why"] for u in d["unavailable"])
+    assert len(d["unavailable"]) == 11 and all(u["needs"] and u["why"] for u in d["unavailable"])
     why = {u["id"]: u["why"] for u in d["unavailable"]}
     assert "record files" in why.pop("self_improvement")                     # files on a server: no application credential is involved
     assert all("credential" in w for w in why.values()), why
