@@ -1,4 +1,5 @@
 """What a person approved survives a restart, ends when it should, and cannot be replayed: on both stores."""
+import os
 import sqlite3
 import threading
 
@@ -131,7 +132,8 @@ def test_nothing_on_disk_can_be_presented_as_a_credential(tmp_path):
     blob = b"".join(p.read_bytes() for p in tmp_path.iterdir() if p.name.startswith("oauth.sqlite"))
     for secret in (srv_codes, tokens.access_token, tokens.refresh_token, "client-secret-value-123", VERIFIER):
         assert secret.encode() not in blob
-    assert path.stat().st_mode & 0o077 == 0
+    if os.name == "posix":                                     # Windows reports no group/other bits to check
+        assert path.stat().st_mode & 0o077 == 0
 
 
 def test_two_workers_cannot_both_spend_one_refresh_token(tmp_path):
