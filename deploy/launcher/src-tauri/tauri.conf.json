@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Agentic Apps R0-prime",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "identifier": "io.redevops.agentic-apps.r0prime",
   "mainBinaryName": "agentic-r0prime",
   "build": {
@@ -41,7 +41,7 @@
     "copyright": "Copyright (c) 2025-2026 RedevOps.",
     "publisher": "ReDevOps.io LLC",
     "resources": {"licenses/": "Licenses/"},
-    "macOS": {"minimumSystemVersion": "11.0", "bundleVersion": "0.1.5"},
+    "macOS": {"minimumSystemVersion": "11.0", "bundleVersion": "0.1.6"},
     "windows": {
       "wix": {"upgradeCode": "f13fc625-f77d-5c30-b308-a3c3ec1045fc"},
       "webviewInstallMode": {"type": "offlineInstaller"}

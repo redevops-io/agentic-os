@@ -17,7 +17,7 @@
 # distribution=no throughout: this authorizes a signed CANDIDATE, not a distribution build. It does not
 # invoke --distribution and does not claim the distribution-blocking legal decisions are resolved.
 #
-# Same source tree, same product version (0.1.5) as windows-signing-r0prime.yml — this is a second
+# Same source tree, same product version (0.1.6) as windows-signing-r0prime.yml — this is a second
 # ARCHITECTURE of the same release, not a separate version. The two Windows jobs run on windows-11-arm
 # (confirmed real, native ARM64-based PC, usable on this public repo at no extra cost) instead of
 # windows-2022, with no other change needed for the build itself — it has no explicit --target; it
@@ -155,7 +155,7 @@ permissions:
 
 env:
   BUILD_COMMIT: c40c5619280642c8c9f8289f0322feb6ca9572b3
-  PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.5"
+  PRODUCT_SLUG: "Agentic Apps R0-prime_0.1.6"
 
 jobs:
   guard:
