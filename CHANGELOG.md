@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.25; no version set)
 
+- Fixed: the real MCP server (`AGENT_GATEWAY_MCP=1`) did not work under `PROJECTS_BASE_PATH`: every client failed at `initialize`, because a mounted application's lifespan, which starts the MCP session manager, was never run.
+
 ## v0.4.25 (the dashboards kernel archive runs again)
 
 - Fixed: the v0.4.24 `dashboards-kernel.zip` could not run: `agentic_os/economics` had no `__init__.py`, which the archive needs. A test now builds the archive and runs every dashboard with nothing else of the kernel available.

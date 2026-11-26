@@ -2551,7 +2551,15 @@ def mounted_app(base_path: str = "", provider: Optional[ProjectionProvider] = No
     base = (base_path or "").rstrip("/")
     if not base:
         return inner
-    outer = FastAPI(title="ReDevOps Projects", version="0.1.0")
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(_outer):
+        # a parent never runs a mounted application's own lifespan, and the app's lives there (the MCP session manager)
+        async with inner.router.lifespan_context(inner) as state:
+            yield state
+
+    outer = FastAPI(title="ReDevOps Projects", version="0.1.0", lifespan=_lifespan)
     outer.mount(base, inner)   # Starlette strips the prefix before the inner app sees it
     return outer
 
