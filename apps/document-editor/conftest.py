@@ -180,11 +180,11 @@ def env(tmp_path, monkeypatch, mods, fake_backend_cls):
     return ns
 
 
-def mint(operator: str, capability: str, inputs: dict, marker=None, mission_id="m-1", node_id="n-1", ttl_s=300):
+def mint(operator: str, capability: str, inputs: dict, marker=None, mission_id="m-1", node_id="n-1", ttl_s=300, tenant="acme"):
     from agentic_os.mission.approval import mint_approval_token
     return mint_approval_token(None, operator=operator, capability=capability, mission_id=mission_id,
                                node_id=node_id, inputs=inputs, marker=marker or {"approved": True, "by": "alice"},
-                               ttl_s=ttl_s)
+                               tenant=tenant, ttl_s=ttl_s)       # a tenant caller needs an approval of ITS tenant
 
 
 @pytest.fixture(scope="session")

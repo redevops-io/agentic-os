@@ -59,11 +59,11 @@ class ContentMissionRun:
             "awaiting_approval": self.state is MissionState.WAITING_HUMAN,
         }
 
-    def approve(self) -> ContentResult:
+    def approve(self, actor: str = "") -> ContentResult:
         """Owner approves the publish gate → the publish step posts to the approved channels."""
         node = self._pending_node()
         if node is not None:
-            self.rt.approve(self.mission_id, node, "approve")
+            self.rt.approve(self.mission_id, node, "approve", **({"actor": actor} if actor else {}))
         return self.finalize()
 
     def reject(self) -> ContentResult:

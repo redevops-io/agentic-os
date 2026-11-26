@@ -363,12 +363,16 @@ class Operator:
             # A runtime-delivered approval arrives ONLY as a signed, operator/capability/inputs-bound,
             # single-use token. Verified => inject the marker AFTER the strip. Anything else => ignored (stages).
             if body.approval_token:
+                approved_for: dict = {}
                 marker = verify_approval_token(None, body.approval_token, operator=self.name,
                                                capability=body.capability, inputs=inputs,
                                                mission_id=body.mission_id, node_id=body.node_id,
+                                               caller_tenant=caller.tenant, binding=approved_for,
                                                replay_guard=self.replay_guard)
                 if marker is not None:
                     inputs["_approval"] = marker
+                    if approved_for.get("tenant"):
+                        inputs["_tenant"] = approved_for["tenant"]      # the tenant whose work was approved, not a body claim
                 else:
                     _warn_unverified_approval()
             spec = self._specs.get(body.capability)
