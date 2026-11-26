@@ -15,7 +15,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.23; no version set)
+## Unreleased (after v0.4.24; no version set)
+
+## v0.4.24 (governed writes with approval pages; explicit authorization; economic events)
 
 - **Approval pages in Projects** (`/approvals`): sign-in for approvers and one list for governed writes, Edge Sentinel actions and quality runs, with cards showing the requesting agent, tenant, application, exact changes, affected records, expiry and outcome. A proposal returns `approval_url`, a deep link that carries no credential. Decisions go through the existing gates and require the same permissions as the APIs.
 - Governed writes: every lookup and proposal is **permitted, approval-required or denied** (`not_authorized (<code>): ...`); an approval never overrides a denial, checked at proposal, approval and execution. Replaces the permission-seam exemption: with permissions on, the plane is gated as `governed-writes`. A change nobody could approve is refused. A proposal may not contain the reserved marker `aos-approval`.
