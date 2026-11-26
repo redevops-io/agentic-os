@@ -31,6 +31,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
 DEMO_ENV = "EDGE_SENTINEL_DEMO"
+#: Pins the fixture's "now" (an ISO-8601 UTC instant, e.g. 2026-11-26T00:00:00Z) so a qualification run is reproducible across restarts.
+NOW_ENV = "EDGE_SENTINEL_DEMO_NOW"
 SCENARIO_ENV = "EDGE_SENTINEL_DEMO_SCENARIO"
 
 #: Label the UI and every JSON payload carry, so synthetic data cannot be mistaken for a detection.
@@ -92,9 +94,25 @@ def scenario(env: Optional[dict] = None) -> str:
     return s if s in SCENARIOS else "mixed"
 
 
+_ANCHOR = datetime.now(timezone.utc).replace(microsecond=0)        # fixed when the process starts
+
+
+def anchor(env: Optional[dict] = None) -> datetime:
+    """The instant the fixture's alerts are placed relative to. It does NOT move while the process runs, so reading the same fixture twice
+    yields the same bytes (ingestion is content-addressed: a clock that moves would open a new case on every read). Pin it across restarts
+    with ``EDGE_SENTINEL_DEMO_NOW``; an unreadable value falls back to the process start."""
+    raw = str(_env(env).get(NOW_ENV, "")).strip()
+    if raw:
+        try:
+            return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return _ANCHOR
+
+
 def _stamp(offset_seconds: float) -> str:
-    """CrowdSec's wire format, relative to now so the 24-hour window and the 'ago' column behave."""
-    return (datetime.now(timezone.utc) - timedelta(seconds=offset_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """CrowdSec's wire format, relative to the fixture's fixed anchor so the 24-hour window and the 'ago' column behave and the bytes are stable."""
+    return (anchor() - timedelta(seconds=offset_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ── raw fixtures, in the shapes the LAPI and cscli actually return ────────────────────────────────────

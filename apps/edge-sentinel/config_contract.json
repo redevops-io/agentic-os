@@ -37,7 +37,9 @@
     { "name": "REDEVOPS_LLM_SETTINGS_FILE", "owner": "agentic-os", "default": "", "purpose": "JSON file holding the endpoint, model and a non-secret key reference instead of the environment." },
     { "name": "REDEVOPS_LLM_TIMEOUT", "owner": "agentic-os", "default": "60", "purpose": "Seconds allowed for the model request." },
     { "name": "OPENAI_API_KEY", "owner": "agentic-os", "default": "EMPTY", "purpose": "Bearer token sent to the operator's own configured endpoint - the OpenAI-compatible wire format, not a subscription to any vendor." },
-    { "name": "REDEVOPS_PRIVACY_MODE", "owner": "agentic-os", "default": "private_with_engineering_assist", "purpose": "Kernel-wide routing mode. The app's narration call registers only the in-boundary endpoint, so no external endpoint is a candidate for it in any mode." }
+    { "name": "REDEVOPS_PRIVACY_MODE", "owner": "agentic-os", "default": "private_with_engineering_assist", "purpose": "Kernel-wide routing mode. The app's narration call registers only the in-boundary endpoint, so no external endpoint is a candidate for it in any mode." },
+    { "name": "SENTINEL_SYNC_INTERVAL_S", "owner": "edge-sentinel", "default": "15", "purpose": "Seconds between background ingestions of CrowdSec alerts into cases; 0 turns the loop off. Reads never ingest." },
+    { "name": "EDGE_SENTINEL_DEMO_NOW", "owner": "edge-sentinel", "default": "", "purpose": "Pins the demo fixture's 'now' (2026-11-26T12:00:00Z form) so a qualification run is reproducible across restarts." }
   ],
   "model_narration": {
     "doc": "Verified behaviour of the optional `triage` narration blurb. The README's prose is checked against these values so a claim here and a claim there cannot drift apart.",
