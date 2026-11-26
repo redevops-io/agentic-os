@@ -152,13 +152,24 @@ const s1 = fresh('main'); let a;
   const tools = (await r.client.listTools()).tools; const caps = (await http('GET', ISSUER + '/api/agent-gateway/capabilities', { headers: H })).json.capabilities;
   const same = caps.every((c) => { const t = tools.find((x) => x.name === c.name); const a = c.input_schema || {}; const b = t?.inputSchema || {}; return t && JSON.stringify(a.required || []) === JSON.stringify(b.required || []) && JSON.stringify(Object.keys(a.properties || {}).sort()) === JSON.stringify(Object.keys(b.properties || {}).sort()); });
   check('8.1 every MCP tool publishes the same input schema (properties and required) as the REST capability list', same && tools.length === caps.length, `${tools.length} tools, ${caps.length} capabilities`);
-  const bad = [['sources.search', {}, 'a missing required property'], ['sources.search', { query: 5 }, 'a string given a number'], ['sources.search', { query: 'x', limit: 'many' }, 'an integer given a string'], ['projects.get_status', { project_id: 7 }, 'a string given a number']];
+  // Agreed shape (owner, 2026-11-26): validated against the capability's input_schema after visibility and before idempotency/authority/rate limits; unknown properties refused;
+  // idempotency_key always accepted; REST answers HTTP 200 {status:"error", error:"invalid_arguments: <path>: <problem>"}; MCP isError:true with the same JSON text; values never echoed.
+  const bad = [['sources.search', {}, 'a missing required property'], ['sources.search', { query: 5 }, 'a string given a number'], ['sources.search', { query: 'x', limit: 'many' }, 'an integer given a string'],
+                ['projects.get_status', { project_id: 7 }, 'a string given a number'], ['projects.list', { surprise: 1 }, 'an unknown property']];
   for (const [name, args, why] of bad) {
     const rest = await http('POST', `${ISSUER}/api/agent-gateway/capabilities/${name}/invoke`, { headers: H, body: args });
-    const restRejected = rest.status >= 400 || (rest.json?.status && !['ok', 'error'].includes(rest.json.status)) || rest.json?.status === 'invalid_arguments';
-    const mcp = await attempt(() => r.client.callTool({ name, arguments: args })); const mcpRejected = !!mcp.error || mcp.value?.isError === true;
-    check(`8.2 ${name} with ${why} is rejected by REST and by MCP alike`, restRejected && mcpRejected, `REST ${rest.status} ${rest.json?.status}; MCP ${mcp.error ? 'threw ' + mcp.error.code : 'isError=' + mcp.value?.isError}`, { xfail: true });   // KNOWN DEFECT: neither interface validates arguments against the input schema
+    const mcp = await attempt(() => r.client.callTool({ name, arguments: args }));
+    const mcpText = mcp.value?.content?.[0]?.text || ''; let mcpJson = null; try { mcpJson = JSON.parse(mcpText); } catch {}
+    const restOk = rest.status === 200 && rest.json?.status === 'error' && String(rest.json?.error || '').startsWith('invalid_arguments');
+    const mcpOk = mcp.value?.isError === true && mcpJson?.status === 'error' && String(mcpJson?.error || '').startsWith('invalid_arguments');
+    const echoed = JSON.stringify(args && Object.values(args).filter((v) => typeof v === 'string' && v.length > 0)).includes(String(rest.json?.error || '#none#')) && Object.values(args).some((v) => typeof v === 'string' && String(rest.json?.error || '').includes(v));
+    const same = restOk && mcpOk && (rest.json.error === mcpJson.error);
+    check(`8.2 ${name} with ${why} is rejected with the same invalid_arguments error on REST and on MCP, and the value is not echoed`, same && !echoed, `REST ${rest.status} ${JSON.stringify(rest.json)?.slice(0, 90)}; MCP isError=${mcp.value?.isError} ${mcpText.slice(0, 90)}`, { xfail: true });   // KNOWN DEFECT until the validation PR lands
   }
+  const idem = await http('POST', `${ISSUER}/api/agent-gateway/capabilities/projects.list/invoke`, { headers: H, body: { idempotency_key: 'k-1' } });
+  check('8.3 idempotency_key is accepted on every capability although no schema declares it', idem.status === 200 && idem.json?.status === 'ok', JSON.stringify(idem.json)?.slice(0, 100));
+  const before = (await http('GET', ISSUER + '/api/agent-gateway/capabilities', { headers: H })).status;
+  check('8.4 a caller still sees the capability list after invalid calls (they spent no budget or session)', before === 200, before);
   await r.client.close();
 }
 
