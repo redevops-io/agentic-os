@@ -162,7 +162,9 @@ class ApprovalCenter:
                     state_words=_STATE_WORDS.get(v["state"], v["state"]), tenant=v["tenant"], requested_by=v["requested_by"],
                     requester_label=self.agent_label(v["requested_by"]), created_at=v["created_at"], expires_at=v["expires_at"],
                     waiting=v["state"] == "pending")
-        if inputs is None:
+        if person.role == "requester":
+            card.changes = [("Proposed values", "shown to those who can decide: sign in as an approver")]
+        elif inputs is None:
             card.changes = [("Proposed values", "erased after the retention period; the ledger keeps their digest")]
         else:
             for key, value in inputs.items():
@@ -314,7 +316,7 @@ class ApprovalCenter:
     def listing(self, person: Person, *, recent: int = 20) -> Dict[str, Any]:
         waiting, done, problems = [], [], []
         if self.writes is not None:
-            for v in self.writes.list(tenant=person.tenant, limit=200, for_approver=True):
+            for v in self.writes.list(tenant=person.tenant, limit=200, for_approver=person.role != "requester"):
                 (waiting if v["state"] == "pending" else done).append(self._write_card(person, v))
         product_cards, problems = self._product_cards(person)
         for c in product_cards:
@@ -332,7 +334,8 @@ class ApprovalCenter:
                 raise missing
             from agentic_os.governed_writes.service import WriteError  # noqa: PLC0415
             try:
-                return self._write_card(person, self.writes.get(record_id, tenant=person.tenant, for_approver=True))
+                # as in the API: a requester sees what is proposed and its outcome; the exact values are for those who can decide
+                return self._write_card(person, self.writes.get(record_id, tenant=person.tenant, for_approver=person.role != "requester"))
             except WriteError:
                 raise missing from None
         spec = next((s for s in (self.hub.specs() if self.hub is not None else []) if s.id == source), None)

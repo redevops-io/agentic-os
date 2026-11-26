@@ -171,6 +171,7 @@ def test_another_tenant_sees_nothing_and_a_requester_sees_but_cannot_decide(worl
     sign_in(requester, A_REQUESTER)                                               # acme has an approver: separation of duties
     card = requester.get(path)
     assert card.status_code == 200 and "SINV-1" in card.text and 'name="decision"' not in card.text and "separation of duties" in card.text
+    assert "please check" not in card.text and "sign in as an approver" in card.text           # as the API: no exact values
     forced = requester.post(path + "/decision", data={"csrf": field(card, "csrf"), "digest": "0" * 64, "decision": "approve"},
                             headers={"Origin": "http://localhost"})
     assert forced.status_code == 403 and not world["apps"].posts
@@ -216,6 +217,16 @@ def test_sign_in_refuses_wrong_cross_site_cleartext_and_repeated_attempts(world)
     lan = world["browser"]("http://192.0.2.10")
     refused = lan.post("/approvals/signin", data={"token": A_APPROVER}, headers={"Origin": "http://192.0.2.10"})
     assert refused.status_code == 403 and "HTTPS" in refused.text and "set-cookie" not in refused.headers
+    # a public HTTPS address does not make a plain-HTTP LAN address acceptable, only its own hostname behind the proxy
+    world["env"].setenv("PROJECTS_PUBLIC_URL", "https://projects.example")
+    from agentic_os.projects.approval_pages import ApprovalPages
+    pages = ApprovalPages(None, public_base="https://projects.example")
+
+    class _At:
+        def __init__(self, scheme, host):
+            self.url = type("U", (), {"scheme": scheme, "hostname": host})()
+    assert pages.may_receive_a_credential(_At("http", "projects.example")) and pages.may_receive_a_credential(_At("https", "other.example"))
+    assert not pages.may_receive_a_credential(_At("http", "192.0.2.10")) and pages.may_receive_a_credential(_At("http", "localhost"))
     secure = world["browser"]("https://projects.example")
     ok = secure.post("/approvals/signin", data={"token": A_APPROVER}, headers={"Origin": "https://projects.example"})
     assert ok.status_code == 303 and "secure" in ok.headers["set-cookie"].lower()
@@ -279,6 +290,18 @@ def test_a_qa_run_waiting_for_approval_is_decided_here_too(world):
     done = press(c, out["output"]["approval_url"], card, "reject")
     run = world["qa"].runs[out["output"]["run_id"]]
     assert done.status_code == 200 and run["state"] == "rejected" and "Rejected" in done.text, (done.status_code, run, done.text)
+
+
+def test_only_the_agent_that_created_a_record_is_named_as_its_requester(tmp_path):
+    from agentic_os.agent_gateway import product_capabilities as pc
+    from agentic_os.products.schemas import TOOL_CLASS
+    assert pc.CREATING_TOOLS <= {t for t, c in TOOL_CLASS.items() if c in ("stage", "bounded_write")}
+    assert "quality.qa_cancel_run" not in pc.CREATING_TOOLS
+    from agentic_os.projects.approval_center import Proposals
+    p = Proposals(tmp_path / "p.sqlite")
+    p.record("qa", "run-1", "agent:first", "acme")
+    p.record("qa", "run-1", "agent:second", "globex")                                        # the first proposer stands
+    assert p.get("qa", "run-1") == ("agent:first", "acme") and p.get("qa", "run-2") is None
 
 
 def test_products_are_shown_and_decided_only_for_tenants_granted_them(world):

@@ -71,9 +71,8 @@ def manifests() -> Tuple[CapabilityManifest, ...]:
     return tuple(out)
 
 
-def _tool_class(tool: str) -> str:
-    from agentic_os.products.schemas import TOOL_CLASS  # noqa: PLC0415
-    return TOOL_CLASS.get(tool, "")
+#: the tools that CREATE a record a person may be asked about: only these name its proposer (cancelling a run does not)
+CREATING_TOOLS = frozenset({"security.sentinel_propose_ban", "security.sentinel_propose_unban", "quality.qa_start_run"})
 
 
 def tenant_may_use(principal: GatewayPrincipal, product_id: str) -> bool:
@@ -118,7 +117,7 @@ def register(registry: CapabilityRegistry, tools: Any, *, proposals: Optional[An
             output = {"answer": result.answer, **data, "evidence": list(result.evidence or ())}
             record = str(data.get("request_id") or data.get("run_id") or "")
             if product is not None and record:
-                if proposals is not None and _tool_class(name) in ("stage", "bounded_write"):
+                if proposals is not None and name in CREATING_TOOLS:
                     proposals.record(product, record, req.principal.principal.id, req.principal.tenant)
                 if approval_url is not None and data.get("approval"):         # the card of something that awaits a person
                     output["approval_url"] = approval_url(product, record)

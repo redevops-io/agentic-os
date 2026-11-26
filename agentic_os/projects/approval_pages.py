@@ -145,9 +145,16 @@ class ApprovalPages:
     def _secure(self, request: Request) -> bool:
         return request.url.scheme == "https" or self.public_base.startswith("https://")
 
-    @staticmethod
-    def _local(request: Request) -> bool:
-        return (request.url.hostname or "") in ("127.0.0.1", "localhost", "::1", "testserver")
+    def may_receive_a_credential(self, request: Request) -> bool:
+        """HTTPS; this machine; or the deployment's own HTTPS address, where a proxy ends TLS and forwards plain HTTP.
+        Any other address reached over plain HTTP (a LAN IP, say) would carry the credential in the clear, even when the
+        public address is HTTPS."""
+        if request.url.scheme == "https" or (request.url.hostname or "") in ("127.0.0.1", "localhost", "::1", "testserver"):
+            return True
+        public = urlsplit(self.public_base)
+        if public.scheme == "https" and (request.url.hostname or "").lower() == (public.hostname or "").lower():
+            return True
+        return os.environ.get("AGENTIC_OS_APPROVER_SIGNIN_OVER_HTTP", "").strip() == "1"
 
     def _same_origin(self, request: Request) -> bool:
         origin = request.headers.get("origin", "")
@@ -187,8 +194,7 @@ class ApprovalPages:
             base = self._base(request)
             if not self._same_origin(request):
                 return _page("Refused", "<p>This sign-in came from another site.</p>", 403)
-            if not (self._secure(request) or self._local(request)
-                    or os.environ.get("AGENTIC_OS_APPROVER_SIGNIN_OVER_HTTP", "").strip() == "1"):
+            if not self.may_receive_a_credential(request):
                 return _page("Sign in needs HTTPS", "<p>A credential is not accepted over plain HTTP. Open this deployment over HTTPS, "
                                                     "or on this machine (for example through an SSH tunnel to localhost).</p>", 403)
             form = _form(await request.body())
