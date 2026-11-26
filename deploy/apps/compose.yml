@@ -223,7 +223,7 @@ services:
       # Twenty redirects the browser to this origin and bakes it into the page: it must be the address you OPEN it at.
       # localhost only works when the browser is on this machine; from another machine set TWENTY_SERVER_URL=http://<host>:<port>.
       - SERVER_URL=${TWENTY_SERVER_URL:-http://localhost:${TWENTY_PORT:-3010}}
-      - PG_DATABASE_URL=postgres://postgres:${TWENTY_DB_PASSWORD:-twenty}@twenty-db:5432/default
+      - PG_DATABASE_URL=postgres://postgres:${TWENTY_DB_PASSWORD:?run ./bootstrap-secrets.sh (README.md, existing installs)}@twenty-db:5432/default
       - REDIS_URL=redis://twenty-redis:6379
       - APP_SECRET=${TWENTY_APP_SECRET:?set TWENTY_APP_SECRET in .env (>=32 bytes)}
       - STORAGE_TYPE=local
@@ -236,7 +236,7 @@ services:
     networks: [apps]
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=${TWENTY_DB_PASSWORD:-twenty}
+      - POSTGRES_PASSWORD=${TWENTY_DB_PASSWORD:?run ./bootstrap-secrets.sh (README.md, existing installs)}
       - POSTGRES_DB=default
     volumes:
       - twenty_db:/var/lib/postgresql/data
@@ -257,7 +257,7 @@ services:
       - MB_DB_DBNAME=metabase
       - MB_DB_PORT=5432
       - MB_DB_USER=metabase
-      - MB_DB_PASS=${METABASE_DB_PASSWORD:-metabase}
+      - MB_DB_PASS=${METABASE_DB_PASSWORD:?run ./bootstrap-secrets.sh (README.md, existing installs)}
       - MB_DB_HOST=metabase-db
   metabase-db:
     image: postgres@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36   # was postgres:16-alpine
@@ -265,7 +265,7 @@ services:
     networks: [apps]
     environment:
       - POSTGRES_USER=metabase
-      - POSTGRES_PASSWORD=${METABASE_DB_PASSWORD:-metabase}
+      - POSTGRES_PASSWORD=${METABASE_DB_PASSWORD:?run ./bootstrap-secrets.sh (README.md, existing installs)}
       - POSTGRES_DB=metabase
     volumes:
       - metabase_db:/var/lib/postgresql/data
@@ -282,7 +282,7 @@ services:
       - FRONTEND_URL=${POSTIZ_MAIN_URL:-http://localhost:4200}
       - NEXT_PUBLIC_BACKEND_URL=${POSTIZ_MAIN_URL:-http://localhost:4200}/api
       - JWT_SECRET=${POSTIZ_JWT_SECRET:?set POSTIZ_JWT_SECRET in .env}
-      - DATABASE_URL=postgresql://postiz:${POSTIZ_DB_PASSWORD:-postiz}@postiz-db:5432/postiz
+      - DATABASE_URL=postgresql://postiz:${POSTIZ_DB_PASSWORD:?run ./bootstrap-secrets.sh (README.md, existing installs)}@postiz-db:5432/postiz
       - REDIS_URL=redis://postiz-redis:6379
       - BACKEND_INTERNAL_URL=http://localhost:3000
       - IS_GENERAL=true
@@ -296,7 +296,7 @@ services:
     networks: [apps]
     environment:
       - POSTGRES_USER=postiz
-      - POSTGRES_PASSWORD=${POSTIZ_DB_PASSWORD:-postiz}
+      - POSTGRES_PASSWORD=${POSTIZ_DB_PASSWORD:?run ./bootstrap-secrets.sh (README.md, existing installs)}
       - POSTGRES_DB=postiz
     volumes:
       - postiz_db:/var/lib/postgresql/data
