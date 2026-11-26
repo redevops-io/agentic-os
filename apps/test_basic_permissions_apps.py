@@ -32,7 +32,12 @@ ROUTES = {a: [r for r in v if r[4] != "route-or-auth"] for a, v in _ALL_ROUTES.i
 KNOWN_FLAG_DISAGREEMENTS = {("compliance", "compliance.scan"),
                             # FR-04: `terraform plan -out=redevops-approved.tfplan` overwrites the plan file infra.provision applies, with caller-supplied vars, and starts a
                             # provider-running process; infra.drift launches terraform / ansible with caller inputs: write by their actual effect (registered non-side-effecting)
-                            ("infra", "infra.plan"), ("infra", "infra.drift")}
+                            ("infra", "infra.plan"), ("infra", "infra.drift"),
+                            # radar.synthetic_study is registered non-side-effecting ("read-only synthetic study") but classified write, the stricter of the two:
+                            # it runs model calls when enabled. Found when these files were first run in CI.
+                            ("market-radar", "radar.synthetic_study"),
+                            # radar.approve_plan records a person's approval (approval_required=True) and is registered non-side-effecting; classified write, the stricter
+                            ("market-radar", "radar.approve_plan")}
 APPS = tuple(ROUTES)
 assert len(APPS) == 17
 
@@ -170,6 +175,13 @@ class TestEveryApp:
             assert (table[cap.name] != "read") == bool(cap.side_effecting), f"{cap.name}: table says {table[cap.name]}, registered side_effecting={cap.side_effecting}"
         for _, _, _, tool, _ in ROUTES[app]:
             assert tool in table, tool
+
+    def test_a_listed_disagreement_still_disagrees(self, monkeypatch, app):
+        """An exception that is no longer needed must be removed, so the list cannot hide a later change."""
+        _start(monkeypatch, app)
+        caps = {c.name: c for c in _operator(app).manifest.capabilities}
+        for _, name in [k for k in KNOWN_FLAG_DISAGREEMENTS if k[0] == app]:
+            assert name in caps and (TOOL_ACTIONS[app][name] != "read") != bool(caps[name].side_effecting), name
 
     def test_a_read_grant_runs_read_tools_and_still_denies_write_tools(self, monkeypatch, app, tmp_path, net):
         init_local_profile(str(tmp_path / "perm"))                                         # read grants only

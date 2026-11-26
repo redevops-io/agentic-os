@@ -22,6 +22,7 @@ ROUTE_POLICIES.update({
     "POST /api/v1/cases": P("edge-sentinel.v1_open_case", "operator_boundary", rationale=_B + "; this only STAGES a proposal that a person must still approve and execute"),
     "POST /api/v1/cases/{case_id}/actions/{request_id}/decision": P("edge-sentinel.v1_decide", "operator_boundary", rationale=_B + "; bound to the action digest"),
     "POST /api/v1/cases/{case_id}/actions/{request_id}/execute": P("edge-sentinel.v1_execute", "operator_boundary", rationale=_B + "; bound to the approved digest, then read back"),
+    "POST /api/v1/sync": P("edge-sentinel.v1_sync", "operator_boundary", rationale=_B + " (operator role), rate limited; it ingests detections into cases and executes nothing"),
     "POST /api/v1/users": P("edge-sentinel.v1_users", "operator_boundary", rationale=_B + " (admin)"),
     "PATCH /api/v1/users/{name}": P("edge-sentinel.v1_users", "operator_boundary", rationale=_B + " (admin)"),
     "POST /api/v1/users/{name}/password": P("edge-sentinel.v1_users", "operator_boundary", rationale=_B + " (admin)"),
