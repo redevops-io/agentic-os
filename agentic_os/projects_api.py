@@ -445,7 +445,16 @@ class SampleProjectionProvider:
             raise err
         return {**hit, "why": hit["reason"], "evidence": [], "action": None, "history": [], "receipt": None}
 
+    def _require_decider(self) -> None:
+        """A requester whose tenant has an approver is identified and keeps its access, but does not decide."""
+        from agentic_os.products.principal import SEPARATED, may_decide
+        actor = self._caller()[0]
+        if actor and not may_decide(actor):
+            from agentic_os.today import TodayError
+            raise TodayError(403, "separation_of_duties", SEPARATED)
+
     def today_approve(self, pid: str, item_id: str, session: str = "", **kw) -> dict:
+        self._require_decider()
         actor = self._caller()[0]
         if actor and kw.get("approver", "user:operator") == "user:operator":
             kw["approver"] = actor                # the decision record names who the server authenticated, never the built-in label
@@ -453,6 +462,8 @@ class SampleProjectionProvider:
 
     def today_reconcile(self, pid: str, item_id: str, session: str = "", manual: Optional[str] = None,
                         by: str = "user:operator") -> dict:
+        if manual is not None:
+            self._require_decider()                              # a person's own statement closes the question: a decision
         actor = self._caller()[0]
         if actor and by == "user:operator":
             by = actor

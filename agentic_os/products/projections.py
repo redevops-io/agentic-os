@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from . import approvals, qa as qamod, sentinel as sn
 from .client import ProductError
 from .hub import ProductHub
-from .principal import current_principal
+from .principal import SEPARATED, current_principal, may_decide
 from .registry import ProductSpec
 
 _TENANT = "demo"          # agentic_os.today.TodaySessions is built with this tenant in SampleProjectionProvider._today
@@ -461,6 +461,8 @@ class ProductProjectionsMixin:
         principal = current_principal(hub.registry.single_owner)
         if not principal:
             raise TodayError(401, "principal_required", "Sign in to Projects so the product can attribute your decision.")
+        if not may_decide(principal):
+            raise TodayError(403, "separation_of_duties", SEPARATED)
         expected = str(kw.get("expected_digest") or "")
         try:
             a = hub.with_mode(spec.id, hub.sentinel(spec.id).action(rid, actor=f"projects:{principal}"))

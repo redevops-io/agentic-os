@@ -18,7 +18,7 @@ from agentic_os.app_kit.route_authz import RoutePolicy as P
 from . import approvals, qa as qamod, remediation, sentinel as sn
 from .client import ProductError
 from .hub import ProductHub
-from .principal import current_principal
+from .principal import SEPARATED, current_principal, may_decide
 from .schemas import ACTION_ID, CASE_ID, RUN_ID
 
 _PID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
@@ -63,6 +63,8 @@ def _require_principal(hub: ProductHub) -> str:
     if not p:
         raise HTTPException(401, {"error": "principal_required",
                                   "detail": "Sign in to Projects so the product can attribute your decision to you."})
+    if not may_decide(p):                                        # every caller of this is a person's decision
+        raise HTTPException(403, {"error": "separation_of_duties", "detail": SEPARATED})
     return p
 
 

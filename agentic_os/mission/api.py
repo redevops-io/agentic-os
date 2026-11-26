@@ -9,7 +9,7 @@ import math
 from typing import Any
 
 from .api_gate import GATE, admin_only, caller_of, public
-from .control_auth import approver_tokens, tenant_limits
+from .control_auth import separation_applies, tenant_limits
 from .approval import strip_approval_keys
 from .runtime import MissionRuntime
 from .simulator import simulate
@@ -159,8 +159,8 @@ def build_router(runtime: MissionRuntime):
     def approve(mid: str, body: Approve, request: Request):
         _authorize_mission(mid, request)
         c = caller_of(request)
-        if c is not None and c.role == "requester" and approver_tokens():
-            # separation of duty: AGENTIC_OS_APPROVER_TOKENS is set, so the requester credential cannot approve
+        if c is not None and c.role == "requester" and separation_applies(c.tenant):
+            # separation of duty: this tenant has its own approver, so its requester credential cannot approve
             raise HTTPException(403, "approval requires an approver credential")
         if body.decision not in _DECISIONS:
             raise HTTPException(422, f"decision must be one of {sorted(_DECISIONS)}")
@@ -220,14 +220,14 @@ def build_router(runtime: MissionRuntime):
     def compensation(mid: str, action: str, body: CompensationAction, request: Request):
         """Operator path for COMPENSATION_FAILED (docs/COMPENSATION.md): retry | approve | acknowledge |
         verify_manually. Behind the router-level gate; tenant-scoped (404 cross-tenant); approve/acknowledge/
-        verify_manually need the approver credential when AGENTIC_OS_APPROVER_TOKENS is set; retry is not
+        verify_manually need the approver credential when the tenant has one (AGENTIC_OS_APPROVER_TOKENS); retry is not
         available to an approver-only credential. Who/when/why is recorded in the mission log."""
         _authorize_mission(mid, request)
         if action not in _COMP_ACTIONS:
             raise HTTPException(404, "unknown compensation action")
         c = caller_of(request)
         if action in _COMP_APPROVER_ACTIONS:
-            if c is not None and c.role == "requester" and approver_tokens():
+            if c is not None and c.role == "requester" and separation_applies(c.tenant):
                 raise HTTPException(403, "this compensation action requires an approver credential")
         else:
             _deny_approver(request)

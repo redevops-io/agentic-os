@@ -138,9 +138,9 @@ with `_node = {node}:undo` so a signed token is bound to the compensation, never
 * **`requires_approval: true`**: the evidence-bound marker alone is NOT enough, and the forward step's approval is
   not reused. The saga **parks** the compensation: `CompensationApprovalRequired` + a needs-you item "Approve
   compensation of <node>" showing the exact undo and inputs. A human approves through the authenticated route
-  (approver credential when `AGENTIC_OS_APPROVER_TOKENS` is set); `CompensationApproved` binds mission, node,
+  (approver credential when the tenant has one in `AGENTIC_OS_APPROVER_TOKENS`); `CompensationApproved` binds mission, node,
   UNDO capability, attempt and the SHA-256 of the exact inputs, with a 1-hour expiry.
-  **Separation of duty:** with `AGENTIC_OS_APPROVER_TOKENS` set, a requester credential cannot approve (403). The
+  **Separation of duty:** once a tenant has an approver in `AGENTIC_OS_APPROVER_TOKENS`, its requester credential cannot approve (403). The
   forward approver's identity is recorded on `ApprovalGranted.approver`; when MORE THAN ONE approver credential is
   configured, that same identity is refused (409) when approving the compensation (identity granularity is
   `role:tenant`, so this only separates distinct approver identities; `admin` is exempt). With approver tokens
@@ -191,7 +191,7 @@ which only `acknowledge` resolves the node.
   `verify_manually`, so the leftover effect and its needs-you item stay surfaced.
 * Routes (under the default-deny gate): `POST /missions/{mid}/compensation/{retry|approve|acknowledge|
   verify_manually}` with body `{node_id?, reason?}`. Unknown/other-tenant mission -> 404; `approve`,
-  `acknowledge`, `verify_manually` need the approver credential when `AGENTIC_OS_APPROVER_TOKENS` is set (a
+  `acknowledge`, `verify_manually` need the approver credential when the tenant has one in `AGENTIC_OS_APPROVER_TOKENS` (a
   requester token gets 403); `retry` is refused to an approver-only credential; wrong state / nothing to do ->
   409. Actor, reason and time are recorded in the log.
 * `explain()`: `compensation` (verified/unverified/failed fold), `not_reversible`, existing
