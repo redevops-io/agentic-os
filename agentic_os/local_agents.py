@@ -329,9 +329,29 @@ def bridge_path() -> Path:
     return Path(__file__).resolve().parent / "mcp_bridge" / "index.js"
 
 
+def installed_bridge(agents_dir: "str | Path") -> Path:
+    """The bridge as a file that stays where it was put. In the installed app the packaged copy lives in a temporary directory that is
+    deleted when the process exits (a frozen sidecar unpacks itself there), so a path to it handed to an MCP client is dead the moment
+    the command that printed it ends. The bridge is therefore copied into the agents directory (private, per user) and THAT path is
+    handed out; the copy is refreshed whenever it differs from the packaged one, so an upgraded app upgrades it."""
+    src = bridge_path()
+    dest = Path(agents_dir) / "bridge" / "index.js"
+    data = src.read_bytes()
+    try:
+        if dest.is_file() and dest.read_bytes() == data:
+            return dest
+    except OSError:
+        pass
+    _private_dir(dest.parent)
+    tmp = dest.with_suffix(".js.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+    return dest
+
+
 def mcp_server_config(token_file: str, agents_dir: str) -> Dict[str, Any]:
     """How an MCP client starts the bridge for one connected agent: two paths, no address and no secret."""
-    return {"command": "node", "args": [str(bridge_path())], "env": {"RAILS_AGENTS_DIR": str(agents_dir), "RAILS_TOKEN_FILE": str(token_file)}}
+    return {"command": "node", "args": [str(installed_bridge(agents_dir))], "env": {"RAILS_AGENTS_DIR": str(agents_dir), "RAILS_TOKEN_FILE": str(token_file)}}
 
 
 def write_client_settings(path: "str | Path", server: Dict[str, Any], *, name: str = "rails") -> None:

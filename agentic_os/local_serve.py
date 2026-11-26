@@ -188,6 +188,11 @@ def serve(env: Optional[Dict[str, str]] = None) -> None:
         from .local_agents import publish_gateway, unpublish_gateway
         try:
             publish_gateway(agents_dir, port=real_port, version=_app_version())
+            try:
+                from .local_agents import installed_bridge
+                installed_bridge(agents_dir)          # an upgraded app refreshes the bridge that connected agents already point at
+            except Exception:  # noqa: BLE001 — the bridge is refreshed again the next time an agent is connected
+                pass
         except OSError as e:
             _err(f"the local agent gateway could not be published ({e}); connected agents will not find this instance")
             publish = False
