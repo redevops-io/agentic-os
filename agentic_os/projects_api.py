@@ -1553,7 +1553,8 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             if svc is None:
                 return {"error": "the dashboards are not available in this build"}
             try:
-                return svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), svc.access("local-owner")).to_dict()
+                from agentic_os.agent_gateway.capabilities import bound_rows
+                return bound_rows(svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), svc.access("local-owner")).to_dict())
             except NotFound:
                 return {"error": "no such dashboard or project"}
             except Forbidden:
