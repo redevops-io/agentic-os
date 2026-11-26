@@ -32,18 +32,21 @@ With two settings an agent connects itself, and a person approves it. Nobody cop
 | `AGENTIC_OS_OAUTH_DB` | a private file (SQLite) where connections are kept; they survive restarts. Only hashes of codes and tokens are stored |
 | `AGENTIC_OS_OAUTH_ISSUER` | the https URL this deployment is reached by, including its base path, for example `https://apps.example.com/projects` (http only for localhost) |
 
+Optional: `AGENTIC_OS_OAUTH_ACCESS_TTL_S` (access token, default 900, 60 to 3600) and
+`AGENTIC_OS_OAUTH_CONNECTION_TTL_S` (when a person must approve again, default 90 days, 60 seconds to 365 days).
+
 Consent also needs `AGENTIC_OS_APPROVAL_SECRET` (it signs the consent ticket) and a way for a person to sign in.
 
 1. An agent that calls the gateway without a token gets `401` with
    `WWW-Authenticate: Bearer resource_metadata="<issuer>/.well-known/oauth-protected-resource"`.
 2. It registers itself (`POST /oauth/register`; public clients; redirect URIs must be https, or http to localhost) and
    sends the person to `/oauth/authorize` with PKCE (S256, required).
-3. The signed-in person sees what it asks for, ticks what it gets (`dashboards.read` starts **unticked**), and allows or
-   refuses. The agent's tenant is that person's tenant.
+3. The signed-in person sees what it asks for, ticks what it gets (`dashboards.read` starts **unticked**, and is not
+   offered where that person's tenant is granted no dashboard source), and allows or refuses. The agent's tenant is that person's tenant.
 4. Access tokens last 15 minutes; refresh tokens rotate. A refresh token used twice ends the whole connection. A
    connection ends after 90 days whatever happens.
 5. `GET /oauth/connections` lists connections; `POST /oauth/connections/{id}/revoke` (JSON) ends one at once. A tenant
-   approver sees and ends only their tenant's.
+   approver sees and ends only their tenant's. The operator is the deployment's owner and sees and ends every tenant's.
 
 Each connection is one agent identity (`agent:conn-…`) across refreshes and restarts, named in the audit, limited to 60
 calls a minute, scoped to its tenant (below) and, under the production profile, bounded by its own authority record
@@ -51,7 +54,17 @@ calls a minute, scoped to its tenant (below) and, under the production profile, 
 
 Only the five discovery, registration, token and revocation routes work without a sign-in. When the issuer has a path,
 a client that only looks for discovery documents at the host's root (`/.well-known/oauth-authorization-server/<path>`)
-needs that path routed to this app as well. **Not yet tested with a third-party MCP client.**
+needs that path routed to this app as well.
+
+**Tested with real clients** over a loopback deployment, with consent given in a real browser: the official MCP Python SDK
+2.3.0 (discovery, registration, consent, PKCE, typed tool calls, server restart, access-token and connection expiry,
+revocation of a live session, two tenants). One client behaviour to know about: that SDK does not store when its access
+token expires, so a NEW client process holding an expired one asks the person to approve again instead of refreshing
+(the server accepts the refresh token). A longer `AGENTIC_OS_OAUTH_ACCESS_TTL_S` makes that rarer. Not tested: Claude
+Code, Claude Desktop, MCP Inspector, a base-path issuer behind a proxy.
+
+A tenant approver whose only credential is a bearer token cannot answer the consent page from an ordinary browser: a
+browser sends the operator's Basic sign-in, not a bearer. A browser sign-in for approvers is not built.
 
 ## Tenants
 

@@ -149,7 +149,36 @@ def test_a_client_revokes_only_its_own_token_and_an_ended_connection_stays_ended
     assert c.get("/projects/oauth/connections", headers=OPERATOR).json()["connections"][0]["state"] == "revoked"
 
 
+@pytest.mark.parametrize("setting,value", [("AGENTIC_OS_OAUTH_ACCESS_TTL_S", "59"), ("AGENTIC_OS_OAUTH_ACCESS_TTL_S", "3601"),
+                                           ("AGENTIC_OS_OAUTH_CONNECTION_TTL_S", "forever"), ("AGENTIC_OS_OAUTH_CONNECTION_TTL_S", "31536001")])
+def test_a_lifetime_outside_its_bounds_stops_startup(deployment, setting, value):
+    deployment.monkeypatch.setenv(setting, value)
+    with pytest.raises(ValueError):
+        deployment()
+
+
+def test_the_lifetimes_chosen_are_the_ones_issued(deployment):
+    deployment.monkeypatch.setenv("AGENTIC_OS_OAUTH_ACCESS_TTL_S", "120")
+    _, tokens = connect(deployment())
+    assert 100 < tokens["expires_in"] <= 120
+
+
+def test_a_token_asked_for_another_server_is_not_issued(deployment):
+    c = deployment()
+    client_id = register(c).json()["client_id"]
+    r = c.get("/projects/oauth/authorize", headers=OPERATOR, params={
+        "response_type": "code", "client_id": client_id, "redirect_uri": REDIRECT, "code_challenge": pkce_challenge(VERIFIER),
+        "code_challenge_method": "S256", "resource": "https://another.example/api"})
+    assert r.status_code == 303 and "error=invalid_target" in r.headers["location"]
+    r = c.post("/projects/oauth/token", data={"grant_type": "refresh_token", "refresh_token": "x", "client_id": client_id,
+                                              "resource": ISSUER + ".evil.example/x"})
+    assert r.json()["error"] == "invalid_target"
+    page = consent_page(c, client_id)
+    assert page.headers["referrer-policy"] == "same-origin"      # no-referrer makes a real browser post "Origin: null"
+
+
 def test_dashboards_are_never_ticked_for_the_person(deployment):
+    deployment.monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"default": {"policy_refs": ["project:*", "dashboards:*"]}}))
     c = deployment()
     client_id = register(c).json()["client_id"]
     page = consent_page(c, client_id, scope="projects.read dashboards.read")
@@ -158,6 +187,18 @@ def test_dashboards_are_never_ticked_for_the_person(deployment):
     assert page.headers["x-frame-options"] == "DENY" and "frame-ancestors 'none'" in page.headers["content-security-policy"]
     default = consent_page(c, client_id, scope="")
     assert "dashboards.read" not in default.text
+
+
+def test_dashboards_are_not_offered_where_every_dashboard_call_would_be_refused(deployment):
+    c = deployment()                                                             # no tenant limits: no tenant is granted any source
+    client_id = register(c).json()["client_id"]
+    page = consent_page(c, client_id, scope="projects.read dashboards.read")
+    assert 'value="dashboards.read"' not in page.text and "cannot be granted" in page.text and "AGENTIC_OS_TENANT_LIMITS" in page.text
+    back = answer(c, ticket_of(page), ["projects.read", "dashboards.read"])      # ticking it by hand changes nothing
+    tokens = exchange(c, client_id, parse_qs(urlsplit(back.headers["location"]).query)["code"][0]).json()
+    assert tokens["scope"] == "projects.read"
+    only = consent_page(c, client_id, scope="dashboards.read")
+    assert only.status_code == 303 and "error=invalid_scope" in only.headers["location"]
 
 
 def test_consent_cannot_be_forged_replayed_or_widened(deployment):

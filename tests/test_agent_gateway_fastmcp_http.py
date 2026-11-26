@@ -110,6 +110,16 @@ class _World:
         reg.register(_cap("token.read"), lone_token)
         reg.register(_cap("ok.read"), lambda req, env: HandlerResult(ok=True, output={"v": 1}))
         reg.register(_cap("admin.read", perm="admin.read"), lambda req, env: HandlerResult(ok=True, output={"v": 2}))   # the token below is NOT granted this
+        reg.register(CapabilityManifest("typed.read", "echo one input", CapabilityKind.DIRECT, permissions=("data.read",),
+                                        input_schema={"type": "object", "properties": {"dashboard_id": {"type": "string"}}, "required": ["dashboard_id"]}),
+                     lambda req, env: HandlerResult(ok=True, output={"got": dict(req.arguments)}))
+        self.released = released = threading.Event()
+        reg.register(_cap("wait.read"), lambda req, env: HandlerResult(ok=True, output={"released": released.wait(8)}))
+
+        def release(req, env):
+            released.set()
+            return HandlerResult(ok=True, output={})
+        reg.register(_cap("release.read"), release)
         self.verifier = DevTokenVerifier()
         self.token = self.verifier.issue("alice", tenant="t1", grants=("data.read",))
         self.audit = _Audit()
@@ -169,7 +179,7 @@ def test_a_valid_token_lists_only_the_permitted_tools_over_http():
             async with w.client() as c:
                 return sorted(t.name for t in await c.list_tools())
         names = asyncio.run(main())
-        assert names == ["boom.read", "ok.read", "token.read"]                # admin.read is not granted, so it is not even listed
+        assert names == ["boom.read", "ok.read", "release.read", "token.read", "typed.read", "wait.read"]                # admin.read is not granted, so it is not even listed
         _evidence(w, "tools_list")
 
 
@@ -266,3 +276,34 @@ def test_an_exception_escaping_the_tool_function_is_masked_by_the_transport(monk
         assert SECRET not in res.content[0].text and "/srv/x" not in res.content[0].text, res.content[0].text
         _assert_clean(w)
         _evidence(w, "escaping_exception_masked")
+
+
+def test_a_tool_publishes_the_capabilitys_own_inputs_and_takes_them_flat_or_in_the_old_wrapper():
+    with _World() as w:
+        async def main():
+            async with w.client() as c:
+                listed = {t.name: t for t in await c.list_tools()}
+                flat = await c.call_tool("typed.read", {"dashboard_id": "finance"}, raise_on_error=False)
+                wrapped = await c.call_tool("typed.read", {"arguments": {"dashboard_id": "qa"}}, raise_on_error=False)
+                wrong = await c.call_tool("typed.read", {"arguments": "not-a-dict"}, raise_on_error=False)
+            return listed, flat, wrapped, wrong
+        listed, flat, wrapped, wrong = asyncio.run(main())
+        tool = listed["typed.read"]
+        schema = getattr(tool, "inputSchema", None) or getattr(tool, "input_schema", None)
+        assert schema == {"type": "object", "properties": {"dashboard_id": {"type": "string"}}, "required": ["dashboard_id"]}
+        hint = getattr(tool.annotations, "readOnlyHint", getattr(tool.annotations, "read_only_hint", None))
+        assert hint is True
+        assert _data(flat)["output"] == {"got": {"dashboard_id": "finance"}} and _data(wrapped)["output"] == {"got": {"dashboard_id": "qa"}}
+        assert wrong.is_error
+
+
+def test_a_slow_capability_does_not_stall_the_server():
+    """``wait.read`` returns only once ``release.read`` has run: if a call held the event loop, the second could not."""
+    with _World() as w:
+        async def main():
+            async with w.client() as slow, w.client() as quick:
+                waiting = asyncio.create_task(slow.call_tool("wait.read", {}, raise_on_error=False))
+                await asyncio.sleep(0.3)
+                await asyncio.wait_for(quick.call_tool("release.read", {}, raise_on_error=False), 6)
+                return await asyncio.wait_for(waiting, 10)
+        assert _data(asyncio.run(main()))["output"] == {"released": True}

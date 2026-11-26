@@ -47,6 +47,10 @@ from .oauth_store import SqliteOAuthStore
 
 ENV_DB = "AGENTIC_OS_OAUTH_DB"
 ENV_ISSUER = "AGENTIC_OS_OAUTH_ISSUER"
+#: how long an access token lasts before the client refreshes it, and how long a connection lasts before a person approves
+#: it again: (setting, default, shortest, longest) in seconds
+LIFETIMES = (("AGENTIC_OS_OAUTH_ACCESS_TTL_S", "access_ttl", 900, 60, 3600),
+             ("AGENTIC_OS_OAUTH_CONNECTION_TTL_S", "connection_ttl", 90 * 86400, 60, 365 * 86400))
 TICKET_TTL_S = 600
 CALLS_PER_MINUTE = 60
 PREFIX = "agent:conn-"
@@ -122,7 +126,13 @@ def from_env(environ=None, *, audit=None) -> Optional[OAuthGateway]:
     if not path:
         return None
     issuer = check_issuer(env.get(ENV_ISSUER, "").strip())
-    server = AuthorizationServer(store=SqliteOAuthStore(path), audit=audit)
+    lifetimes = {}
+    for setting, name, default, low, high in LIFETIMES:
+        raw = env.get(setting, "").strip() or str(default)
+        if not raw.isdigit() or not low <= int(raw) <= high:
+            raise ValueError(f"{setting} must be a whole number of seconds from {low} to {high}")
+        lifetimes[name] = int(raw)
+    server = AuthorizationServer(store=SqliteOAuthStore(path), audit=audit, **lifetimes)
     return OAuthGateway(server, issuer, authority_db=env.get("AGENTIC_OS_AUTHORITY_DB", "").strip())
 
 
@@ -179,22 +189,32 @@ def _one(form: Dict[str, List[str]], name: str) -> str:
     return values[0] if len(values) == 1 else ""                    # a repeated parameter is refused, not guessed at
 
 
+def _own_resource(values: Optional[List[str]], issuer: str) -> bool:
+    """True when no ``resource`` is named, or every one named is this deployment (RFC 8707): a token asked for another
+    server is not issued here."""
+    return all(v == issuer or v.startswith(issuer + "/") for v in values or [])
+
+
 def _back(redirect_uri: str, **params: str) -> str:
     p = urlsplit(redirect_uri)
     query = parse_qsl(p.query, keep_blank_values=True) + [(k, v) for k, v in params.items() if v]
     return urlunsplit((p.scheme, p.netloc, p.path, urlencode(query), ""))
 
 
-PAGE_HEADERS = {"cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "no-referrer",
+# same-origin, not no-referrer: under no-referrer a browser posts the consent form with "Origin: null" and every answer is
+# refused by the origin check below (found with a real browser). Nothing is sent to the client's callback either way.
+PAGE_HEADERS = {"cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "same-origin",
                 "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"}
 
 
 def consent_page(*, action: str, client_name: str, client_id: str, redirect_uri: str, person: str, tenant: str,
-                 scopes: List[str], ticket: str) -> str:
+                 scopes: List[str], ticket: str, unavailable: Optional[Dict[str, str]] = None) -> str:
     e = html.escape
     boxes = "".join(
         f'<label><input type="checkbox" name="grant" value="{e(s)}"{"" if s in NAMED_GRANTS else " checked"}> '
         f'<b>{e(s)}</b> &mdash; {e(GRANT_TEXT.get(s, s))}</label>' for s in scopes)
+    # asked for but impossible here: said, not offered, so nobody grants something that would then refuse every call
+    boxes += "".join(f'<p><b>{e(s)}</b> cannot be granted: {e(why)}</p>' for s, why in (unavailable or {}).items())
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Connect an agent</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{{font:16px/1.5 system-ui,sans-serif;max-width:38rem;margin:3rem auto;padding:0 16px}}label{{display:block;margin:.6rem 0}}
@@ -208,8 +228,10 @@ Its name is what it calls itself; check where it will be sent back to: <code>{e(
 </body></html>"""
 
 
-def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "") -> Dict[str, Any]:
-    """Add the routes to ``app`` and return their route policies."""
+def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "",
+          unavailable=lambda tenant: {}) -> Dict[str, Any]:
+    """Add the routes to ``app`` and return their route policies. ``unavailable(tenant)`` names the grants that could not
+    work for that tenant on this deployment, each with the reason."""
     from agentic_os.app_kit.route_authz import RoutePolicy  # noqa: PLC0415
     from agentic_os.mission.approval import default_replay_guard  # noqa: PLC0415
     server, issuer, guard = oauth.server, oauth.issuer, default_replay_guard()
@@ -267,17 +289,20 @@ def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "") -> Dict[str
         state = _one(q, "state")
         if _one(q, "response_type") != "code" or _one(q, "code_challenge_method") != "S256" or not _one(q, "code_challenge"):
             return RedirectResponse(_back(redirect_uri, error="invalid_request", state=state), 303)
+        if not _own_resource(q.get("resource"), issuer):
+            return RedirectResponse(_back(redirect_uri, error="invalid_target", state=state), 303)
         asked = _one(q, "scope").split() or sorted(ALLOWED_GRANTS - NAMED_GRANTS)
-        scopes = sorted(set(asked) & ALLOWED_GRANTS)
+        person, tenant = who
+        cannot = {s: why for s, why in unavailable(tenant).items() if s in asked}
+        scopes = sorted((set(asked) & ALLOWED_GRANTS) - set(cannot))
         if not scopes or set(asked) - ALLOWED_GRANTS:
             return RedirectResponse(_back(redirect_uri, error="invalid_scope", state=state), 303)
-        person, tenant = who
         ticket = mint_ticket(person, {"client_id": client_id, "redirect_uri": redirect_uri, "code_challenge": _one(q, "code_challenge"),
                                       "state": state, "scope": " ".join(scopes), "tenant": tenant})
         stored = server.store.get_client(client_id) or {}
         return HTMLResponse(consent_page(action=f"{urlsplit(issuer).path}/oauth/authorize", client_name=stored.get("name", ""),
                                          client_id=client_id, redirect_uri=redirect_uri, person=person, tenant=tenant,
-                                         scopes=scopes, ticket=ticket), headers=PAGE_HEADERS)
+                                         scopes=scopes, ticket=ticket, unavailable=cannot), headers=PAGE_HEADERS)
 
     @app.post("/oauth/authorize")
     async def authorize_answer(request: Request):
@@ -314,6 +339,8 @@ def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "") -> Dict[str
     @app.post("/oauth/token")
     async def token(request: Request):
         form = _form(await request.body())
+        if not _own_resource(form.get("resource"), issuer):
+            return error("invalid_target", "that resource is not this deployment")
         kind = _one(form, "grant_type")
         try:
             if kind == "authorization_code":
