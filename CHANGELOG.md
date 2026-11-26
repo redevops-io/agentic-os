@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.24; no version set)
 
+- Fixed: the v0.4.24 `dashboards-kernel.zip` could not run: `agentic_os/economics` had no `__init__.py`, which the archive needs. A test now builds the archive and runs every dashboard with nothing else of the kernel available.
+
 ## v0.4.24 (governed writes with approval pages; explicit authorization; economic events)
 
 - **Approval pages in Projects** (`/approvals`): sign-in for approvers and one list for governed writes, Edge Sentinel actions and quality runs, with cards showing the requesting agent, tenant, application, exact changes, affected records, expiry and outcome. A proposal returns `approval_url`, a deep link that carries no credential. Decisions go through the existing gates and require the same permissions as the APIs.
