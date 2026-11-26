@@ -5,7 +5,8 @@ mandatory gate, approved with ``MissionRuntime.approve`` (which records who, the
 and expires old requests), and performed only when the node carries the runtime's ``_approval`` marker.
 
 Beside the ledger sits one small private database: the inputs (the ledger records only their digest, so customer text can
-be erased; they are removed once a request is finished), the idempotency keys, and the outcome. A request is never
+be erased), the idempotency keys, and the outcome. The inputs are kept for ``retention_s`` after a request finishes, so a
+person can still see exactly what was approved, then erased (0 erases them at once). A request is never
 performed twice: the move from ``pending`` is atomic, and a write whose outcome is unknown is not sent again.
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from agentic_os import app_gate
 from agentic_os.governed_writes import authorization
-from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS, Outcome
+from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS, Outcome, reserved_marker
 from agentic_os.governed_writes.apps import NotApplied
 from agentic_os.mission.approval import canonical
 from agentic_os.mission.executor import Executor
@@ -50,12 +51,13 @@ class WriteError(Exception):
 
 class GovernedWrites:
     def __init__(self, state_dir: "str | Path", writers: Mapping[str, Any], *, ttl_s: float = 86400.0,
-                 clock: Callable[[], float] = time.time, authority: Any = None,
+                 clock: Callable[[], float] = time.time, authority: Any = None, retention_s: float = 7 * 86400.0,
                  single_owner: Optional[Callable[[], bool]] = None) -> None:
         root = Path(state_dir)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.writers, self.ttl_s, self.clock = dict(writers), float(ttl_s), clock
         self._single_owner = single_owner                        # a declared single owner can also approve
+        self.retention_s = max(0.0, float(retention_s))
         self._lock = threading.RLock()
         self._ran: Dict[str, "tuple[str, Any]"] = {}              # mission id -> what the handler really did
         db = root / "requests.sqlite"
@@ -68,7 +70,7 @@ class GovernedWrites:
             id TEXT PRIMARY KEY, tenant TEXT NOT NULL, requester TEXT NOT NULL, action TEXT NOT NULL, app TEXT NOT NULL,
             idem TEXT NOT NULL, digest TEXT NOT NULL, intent TEXT NOT NULL, inputs TEXT, preview TEXT NOT NULL,
             created REAL NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, approver TEXT, decided REAL,
-            record TEXT, read_back TEXT, note TEXT, executed INTEGER, verified INTEGER,
+            record TEXT, read_back TEXT, note TEXT, executed INTEGER, verified INTEGER, finished REAL,
             UNIQUE(tenant, requester, idem))""")
         if authority is None:
             from agentic_os.mission.authority import authority_from_env  # noqa: PLC0415
@@ -156,6 +158,9 @@ class GovernedWrites:
             validate(args, spec.input_schema)
         except SchemaError as e:
             raise WriteError("invalid", str(e)) from None
+        marker = reserved_marker(args)
+        if marker:
+            raise WriteError("invalid", f"the text {marker!r} is reserved for approval records and cannot be written through a proposal")
         if not self.configured(spec.app):
             raise WriteError("unavailable", f"{spec.app} is not connected on this deployment")
         allowed = self.authorization(action, requester=requester, tenant=tenant)
@@ -208,10 +213,15 @@ class GovernedWrites:
 
     def _finish(self, request_id: str, state: str, *, from_state: str = DECIDING, note: str = "", outcome: Optional[Outcome] = None) -> None:
         o = outcome or Outcome(False, False)
-        self._db.execute("UPDATE requests SET state=?, inputs=NULL, note=?, record=?, read_back=?, executed=?, verified=?"
-                         " WHERE id=? AND state=?",
-                         (state, note or o.note, o.record, o.read_back,
+        self._db.execute("UPDATE requests SET state=?, finished=?, inputs=CASE WHEN ? THEN inputs END, note=?, record=?, read_back=?,"
+                         " executed=?, verified=? WHERE id=? AND state=?",
+                         (state, self.clock(), int(self.retention_s > 0), note or o.note, o.record, o.read_back,
                           None if state == "outcome_unknown" else int(o.executed), int(o.verified), request_id, from_state))
+
+    def _erase_old(self) -> None:
+        """Remove the inputs of requests that finished longer ago than the retention."""
+        self._db.execute("UPDATE requests SET inputs=NULL WHERE inputs IS NOT NULL AND finished IS NOT NULL AND finished <= ?",
+                         (self.clock() - self.retention_s,))
 
     def _view(self, row: sqlite3.Row, *, for_approver: bool = False) -> Dict[str, Any]:
         out = {"request_id": row["id"], "action": row["action"], "app": row["app"], "state": row["state"], "summary": row["preview"],
@@ -221,17 +231,19 @@ class GovernedWrites:
                "verified": bool(row["verified"]), "record": row["record"] or "", "read_back": row["read_back"] or "", "note": row["note"] or ""}
         if row["state"] == PENDING:
             out["executed"] = False
-            if for_approver:
+        if for_approver:                                       # for a person: exactly what would be, or was, written
+            out["inputs"] = None if row["inputs"] is None else json.loads(row["inputs"])    # None: erased after the retention
+            if row["state"] == PENDING:                        # and the digest a decision names
                 allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"])
                 out["authorization"] = {"verdict": allowed.verdict.value, "reason": allowed.reason}
-            if for_approver:                                  # exactly what would be written, and the digest a decision names
-                out["inputs"], out["digest"] = json.loads(row["inputs"]), row["digest"]
+                out["digest"] = row["digest"]
         return out
 
     def get(self, request_id: str, *, tenant: Optional[str] = None, requester: Optional[str] = None,
             for_approver: bool = False) -> Dict[str, Any]:
         """``tenant`` None = a deployment operator (every tenant). A request outside the filters does not exist."""
         with self._lock:
+            self._erase_old()
             row = self._row(request_id)
             if row is None or (tenant is not None and row["tenant"] != tenant) or (requester is not None and row["requester"] != requester):
                 raise WriteError("not_found", "no such request")
@@ -245,6 +257,7 @@ class GovernedWrites:
                 sql += f" AND {column}=?"
                 args.append(value)
         with self._lock:
+            self._erase_old()
             rows = [self._fresh(r) for r in self._db.execute(sql + " ORDER BY created DESC LIMIT 500", args).fetchall()]
             return [self._view(r, for_approver=for_approver) for r in rows if not state or r["state"] == state][: max(1, min(limit, 200))]
 

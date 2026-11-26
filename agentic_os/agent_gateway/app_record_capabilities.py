@@ -179,8 +179,13 @@ _READERS: Dict[str, Callable[[Any, Mapping[str, Any]], Dict[str, Any]]] = {
     "support.get_conversation": _support_get, "crm.find_companies": _crm_companies, "crm.find_people": _crm_people}
 
 
-def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: Optional[Any] = None) -> CapabilityRegistry:
-    """``writers`` are the connected applications; ``writes`` is the ``GovernedWrites`` service, or None = reads only."""
+def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: Optional[Any] = None,
+             approval_url: Optional[Callable[[str], str]] = None) -> CapabilityRegistry:
+    """``writers`` are the connected applications; ``writes`` is the ``GovernedWrites`` service, or None = reads only.
+    ``approval_url(request_id)`` is the deep link a person opens to decide; it names the request and carries no credential."""
+    def linked(view: Dict[str, Any]) -> Dict[str, Any]:
+        return {**view, "approval_url": approval_url(view["request_id"])} if approval_url is not None else view
+
     from .capabilities import mask_emails  # noqa: PLC0415
 
     def refused(req, app: str, tool: str) -> Optional[HandlerResult]:
@@ -217,7 +222,7 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: O
                                       inputs=inputs, idempotency_key=str(key or ""))
             except WriteError as e:                      # the service asks the same authorization before it creates anything
                 return HandlerResult(ok=False, error=(e.detail if e.code == "denied" else f"{e.code}: {e.detail}")[:600])
-            return HandlerResult(ok=True, output=mask_emails(view), data_classes=(DataClass.INTERNAL,),
+            return HandlerResult(ok=True, output=linked(mask_emails(view)), data_classes=(DataClass.INTERNAL,),
                                  evidence_refs=(view["request_id"],))
         return run
 
@@ -234,9 +239,9 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], writes: O
                     one = writes.get(str(wanted), **mine)
                     if one["app"] != app:
                         return HandlerResult(ok=False, error="not_found: no such request")
-                    out: Any = one
+                    out: Any = linked(one)
                 else:
-                    out = {"requests": writes.list(app=app, limit=req.arguments.get("limit", 20), **mine)}
+                    out = {"requests": [linked(v) for v in writes.list(app=app, limit=req.arguments.get("limit", 20), **mine)]}
             except WriteError as e:
                 return HandlerResult(ok=False, error=f"{e.code}: {e.detail}"[:500])
             return HandlerResult(ok=True, output=mask_emails(out), data_classes=(DataClass.INTERNAL,))

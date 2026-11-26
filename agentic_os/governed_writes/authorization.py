@@ -71,17 +71,16 @@ def tenant_may_use_app(tenant: str, app: str) -> bool:
 
 def approver_exists(tenant: str, *, also: Optional[Callable[[], bool]] = None) -> bool:
     """Whether some configured person could decide a change of this tenant: the operator's sign-in, the admin credential,
-    the tenant's own approver (granted ``writes:decide`` where tenants are limited), or what the mount adds (a declared
-    single owner). Requesters never decide changes."""
+    the tenant's own approver with ``writes:decide`` among the tenant's policy_refs (what the decision route requires), or
+    what the mount adds (a declared single owner). Requesters never decide changes."""
     from agentic_os.app_kit.route_authz import operator_credential  # noqa: PLC0415
-    from agentic_os.mission.control_auth import ENV_TENANT_LIMITS, ConfigError, approver_tokens, configured_token, tenant_limits  # noqa: PLC0415
+    from agentic_os.mission.control_auth import ConfigError, approver_tokens, configured_token, tenant_limits  # noqa: PLC0415
     user, password = operator_credential()
     if (user and password) or configured_token():
         return True
     try:
-        if tenant in approver_tokens():
-            if not os.environ.get(ENV_TENANT_LIMITS, "").strip() or "writes:decide" in tenant_limits(tenant)[0]:
-                return True
+        if tenant in approver_tokens() and "writes:decide" in tenant_limits(tenant)[0]:
+            return True
     except ConfigError:
         return False
     return bool(also and also())

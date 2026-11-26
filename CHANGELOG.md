@@ -17,11 +17,17 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.23; no version set)
 
-## v0.4.23 (security and quality workflows for external agents; checked arguments)
-
+- **Approval pages in Projects** (`/approvals`): sign-in for approvers and one list for governed writes, Edge Sentinel actions and quality runs, with cards showing the requesting agent, tenant, application, exact changes, affected records, expiry and outcome. A proposal returns `approval_url`, a deep link that carries no credential. Decisions go through the existing gates and require the same permissions as the APIs.
+- Governed writes: every lookup and proposal is **permitted, approval-required or denied** (`not_authorized (<code>): ...`); an approval never overrides a denial, checked at proposal, approval and execution. Replaces the permission-seam exemption: with permissions on, the plane is gated as `governed-writes`. A change nobody could approve is refused. A proposal may not contain the reserved marker `aos-approval`.
+- **Changed:** a financial lookup without `egress:financial` returns a `missing_grant` error (it answered `pending_approval`, which nothing could approve).
+- **Changed:** separation of duties is **per tenant**, and adding an approver no longer leaves requesters unidentified (their reads lost their tenant, and a Today approval was recorded as `user:operator`). A requester stops deciding only when its own tenant has an approver.
+- A person's product decision is refused for a product their tenant is not granted (`products:<id>`).
 - Agent gateway: ERPNext, support and CRM for external agents behind named grants: record lookups, and **governed writes** an agent only proposes (comment, draft purchase order, private note, add-if-absent company or contact). Each waits in the Mission Runtime's approval gate for a person of its tenant (`/api/writes`, `writes:decide`), runs once and is read back; an unknown outcome is never re-sent. Off until configured (`AGENTIC_OS_WRITES_DIR`, `app:<name>` per tenant).
 - Fixed: egress redaction masked parts of some UUID record ids (its card-number pattern).
 - Fixed: the Twenty writer created a contact when its duplicate lookup failed (a failed lookup was read as "no such person").
+
+## v0.4.23 (security and quality workflows for external agents; checked arguments)
+
 - Fixed: the finance and procurement dashboards counted an invoice or order due **today** as overdue or late (a due date was read as its first instant). Overdue, aging, days overdue and late orders now count whole calendar days (UTC), as the applications do. Found by checking a deployment's figures against its own ERPNext.
 - Agent gateway: Edge Sentinel and redevops-qa tools for external agents behind named grants (`security.read`, `security.propose`, `quality.read`, `quality.run`), each product granted per tenant (`products:<id>`); writes need an `idempotency_key`. An agent can propose and start bounded work, never decide or execute. New `quality.qa_list_runs`.
 - Agent gateway, **stricter**: every call's arguments are checked against the capability's published schema (REST and MCP alike): required inputs and types always; unknown inputs where the schema says `additionalProperties: false`, as every capability the mounted gateway offers does. MCP marks a failed call `isError`. The validator is stdlib-only (`agentic_os.schema_check`).

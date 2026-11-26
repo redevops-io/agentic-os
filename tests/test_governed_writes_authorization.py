@@ -69,6 +69,8 @@ def test_a_change_nobody_can_approve_is_denied_and_creates_nothing(tmp_path, mon
     monkeypatch.setenv("AGENTIC_OS_APPROVER_TOKENS", "acme=" + "A" * 40)
     monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"acme": {"policy_refs": ["app:erpnext"]}}))
     assert verdict(w, "erp.request_comment").code == "no_approver"
+    monkeypatch.delenv("AGENTIC_OS_TENANT_LIMITS")                              # the decision route would refuse them too
+    assert verdict(w, "erp.request_comment").code == "no_approver"
     monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"acme": {"policy_refs": ["app:erpnext", "writes:decide"]}}))
     assert verdict(w, "erp.request_comment").verdict is Verdict.APPROVAL_REQUIRED
 

@@ -25,6 +25,10 @@ from agentic_os.tool_actions import PUBLIC_INTAKE_ROUTES, TOOL_ACTIONS  # noqa: 
 PUBLIC_INTAKE_TOOLS = {(app, tool) for app, routes in PUBLIC_INTAKE_ROUTES.items() for tool in routes.values()}
 
 CLASSIFICATION_BASIS = "classified by reading the code (AI-assisted review, 2026-10; not an external audit)"
+#: planes of the kernel itself that are classified here although no app directory registers them: where their tools are
+#: declared, and when they were classified
+KERNEL_PLANES = {"governed-writes": (("agentic_os/agent_gateway/app_record_capabilities.py", "agentic_os/governed_writes/actions.py"),
+                                     "classified by reading the code (AI-assisted review, 2026-11; not an external audit)")}
 CATEGORIES = ("read-only-state", "writes-local-or-persistent-artifacts", "launches external process or network", "dynamically selected behaviour", "public intake: unauthenticated by design")
 
 # launches an external process, or reads/writes another system over the network (a scan, a deploy, a CRM/e-mail/payment API, an editor service)
@@ -37,6 +41,9 @@ EXTERNAL = {
     "support.send_onboarding", "document.publish", "document.apply_patch", "document.set_label", "growth.reallocate_budget", "radar.add_watch", "add_watch", "privacy.intake",
     "privacy.access", "privacy.delete", "social.draft", "social.draft_visual", "radar.synthetic_study",
     "radar.site_audit", "radar.verify_change", "radar.reassess",          # read the audited site over the network (public pages only)
+    # governed writes: once a person approves, each changes ERPNext, the support desk or the CRM over the network. Its lookups
+    # only query those platform services (read)
+    "erp.request_comment", "erp.request_draft_purchase_order", "support.request_private_note", "crm.request_company", "crm.request_person",
 }
 # the behaviour is chosen by the caller's input (a mode flag, a playbook/target/vars argument, a free-form query): classified at the strictest action it can perform
 DYNAMIC = {"infra.plan", "infra.drift", "infra.configure", "infra.rollback_release", "infra.provision", "infra.destroy_delta", "compliance.scan", "scan_app", "scan_apps",
@@ -58,6 +65,13 @@ def category(tool: str, action: str, app: str = "") -> str:
 
 
 def evidence(app: str, tool: str) -> str:
+    if app in KERNEL_PLANES:
+        # status tools are named from their application's prefix at registration; their classification table row is the evidence
+        for rel in (*KERNEL_PLANES[app][0], "agentic_os/tool_actions.py"):
+            for i, line in enumerate((ROOT / rel).read_text(encoding="utf-8").splitlines(), 1):
+                if re.search(rf"""["']{re.escape(tool)}["']""", line):
+                    return f"{rel}:{i}"
+        return "UNFOUND"
     base = ROOT / "apps" / app
     for name in ("operator.py", "app.py", "assistant.py", "core.py") + tuple(sorted(p.name for p in base.glob("*.py") if p.name not in ("operator.py", "app.py", "assistant.py", "core.py"))):
         f = base / name
@@ -70,6 +84,8 @@ def evidence(app: str, tool: str) -> str:
 
 
 def approval(app: str, tool: str) -> str:
+    if app in KERNEL_PLANES:
+        return "yes (a person approves each change in the Mission Runtime gate)" if TOOL_ACTIONS[app][tool] != "read" else "no"
     f = ROOT / "apps" / app / "operator.py"
     if not f.is_file():
         return "no (console / route tool; consequential effects are staged by the core)" if TOOL_ACTIONS[app][tool] != "read" else "no"
@@ -97,7 +113,7 @@ def main() -> None:
     print("|---|---|---|---|---|---|---|")
     for app in sorted(TOOL_ACTIONS):
         for tool, action in sorted(TOOL_ACTIONS[app].items()):
-            print(f"| `{tool}` | {app} | {action} | {category(tool, action, app)} | {evidence(app, tool)} | {approval(app, tool)} | {CLASSIFICATION_BASIS} |")
+            print(f"| `{tool}` | {app} | {action} | {category(tool, action, app)} | {evidence(app, tool)} | {approval(app, tool)} | {KERNEL_PLANES.get(app, (None, CLASSIFICATION_BASIS))[1]} |")
 
 
 if __name__ == "__main__":

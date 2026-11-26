@@ -150,6 +150,10 @@ class AgentTokenStore:
         return GatewayPrincipal(Principal(f"agent:{found['id']}", "service", (), tenant), client_id=found["id"],
                                 workspace=tenant, scopes=tuple(sorted(found["grants"])))
 
+    def label_of(self, agent_id: str) -> str:
+        """What the operator labelled this agent's token (for an approval card); nothing else of the entry."""
+        return str(next((a.get("label", "") for a in self._load() if a.get("id") == agent_id), ""))
+
     def rate_of(self, principal: Principal) -> Optional[int]:
         """This agent's calls-per-minute limit, read from the entry as it is now; ``None`` = the entry sets none."""
         for a in self._load():

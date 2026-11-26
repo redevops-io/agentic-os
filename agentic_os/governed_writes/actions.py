@@ -6,6 +6,7 @@ has accepted a write: a failed read-back makes the result unverified, never "not
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping
 
@@ -32,6 +33,26 @@ class WriteAction:
     input_schema: Mapping[str, Any]
     preview: Callable[[Mapping[str, Any]], str]                    # one line, without the written text
     perform: Callable[[Any, Mapping[str, Any], str, str], Outcome]  # (writer, inputs, footer, request_id)
+
+
+#: text that other readers of these applications treat as a record of an approval. An agent writes the text of a proposal,
+#: so it may not write these: otherwise an approved "comment" could pose as somebody's approval of something else.
+RESERVED_MARKERS = ("aos-approval",)
+
+
+def _skeleton(text: str) -> str:
+    """The text as a lenient reader would see it: compatibility forms folded, invisible characters gone, any dash a dash."""
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    return "".join("-" if unicodedata.category(c) == "Pd" or c == "\u2212" else c for c in folded if unicodedata.category(c) != "Cf")
+
+
+def reserved_marker(inputs: Any) -> str:
+    """The reserved marker found anywhere in the proposed values, or ""."""
+    if isinstance(inputs, str):
+        seen = _skeleton(inputs)
+        return next((m for m in RESERVED_MARKERS if m in seen), "")
+    values = inputs.values() if isinstance(inputs, Mapping) else inputs if isinstance(inputs, (list, tuple)) else ()
+    return next((found for found in map(reserved_marker, values) if found), "")
 
 
 def _schema(required: List[str], **properties: Any) -> Dict[str, Any]:
@@ -183,4 +204,4 @@ ACTIONS: Dict[str, WriteAction] = {a.name: a for a in (
                 lambda i: "Create a CRM contact unless one with the same email is already recorded", _person),
 )}
 
-__all__ = ["APP_GRANTS", "Outcome", "WriteAction", "ACTIONS"]
+__all__ = ["APP_GRANTS", "Outcome", "WriteAction", "ACTIONS", "RESERVED_MARKERS", "reserved_marker"]
