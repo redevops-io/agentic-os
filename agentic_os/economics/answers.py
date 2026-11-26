@@ -66,8 +66,8 @@ def cancellation_cost(events: Sequence[EconomicEvent], *, since: str, until: str
 
 
 def discount_loss(events: Sequence[EconomicEvent], *, since: str = "", until: str = "") -> Dict[str, Any]:
-    """Q3. What discounts gave up (list price minus what was invoiced) and who approved each, as the approval reference on the document says.
-    A discount with no reference is reported as such: it may have been approved somewhere that left no reference."""
+    """Q3. What discounts gave up (list price minus what was invoiced) and who the document CLAIMS approved each. The claim is a comment anyone with
+    access to the application could write, so it is reported as an unverified claim, never as an approval. A discount with no claim is reported as such."""
     ev = [e for e in _window(events, since, until) if e.kind == Kind.DISCOUNT]
     total = -sum((e.amount for e in ev), ZERO)
     by: Dict[str, Decimal] = {}
@@ -77,10 +77,11 @@ def discount_loss(events: Sequence[EconomicEvent], *, since: str = "", until: st
             by[e.approval.approver] = by.get(e.approval.approver, ZERO) - e.amount
         else:
             none -= e.amount
-    return {"since": since, "until": until, "total_posted": _s(total), "with_approval_reference": _s(total - none), "without_approval_reference": _s(none),
-            "by_approver": {k: _s(v) for k, v in sorted(by.items())},
+    return {"since": since, "until": until, "total_posted": _s(total), "with_approval_claim": _s(total - none), "without_approval_claim": _s(none),
+            "approval_evidence": "unverified: read from a comment on the document, which is not proof that anyone approved",
+            "by_claimed_approver": {k: _s(v) for k, v in sorted(by.items())},
             "discounts": [{"invoice": e.subjects.get("invoice"), "customer": e.subjects.get("customer"), "amount": _s(-e.amount),
-                           "approval": (e.approval.id if e.approval else None), "approver": (e.approval.approver if e.approval else None),
+                           "claimed_approval": (e.approval.id if e.approval else None), "claimed_approver": (e.approval.approver if e.approval else None),
                            "sources": list(e.sources)} for e in sorted(ev, key=lambda x: x.amount)]}
 
 

@@ -60,7 +60,7 @@ def build(b: Build) -> None:
     bad_names = {c["customer"] for c in bad}
     drill_of("customers:unprofitable", "Events of the unprofitable customers", [e.id for e in events if e.subjects.get("customer") in bad_names])
     drill_of("discounts", "Discounts given in range", [e.id for e in events if e.kind == Kind.DISCOUNT])
-    drill_of("discounts:unreferenced", "Discounts with no approval reference", [e.id for e in events if e.kind == Kind.DISCOUNT and not e.approval])
+    drill_of("discounts:unclaimed", "Discounts with no approval claim", [e.id for e in events if e.kind == Kind.DISCOUNT and not e.approval])
     drill_of("cancellations", "Cancellations in range", [e.id for e in events if e.kind in (Kind.CANCELLATION, Kind.CANCELLATION_HANDLING)])
     drill_of("suppliers", "Supplier cost events", [e.id for e in events if e.subjects.get("supplier")])
     b.drill("payments:mismatch", "Payments the bank statement does not confirm", disc, columns=("posted", "bank", "difference", "customer", "invoices"))
@@ -70,9 +70,9 @@ def build(b: Build) -> None:
         b.metric("unprofitable", "Unprofitable customers", needs=S, value=len(bad), drill="customers:unprofitable", tone="bad" if bad else "ok", good="down",
                  note="profit after cost of goods, support, rework and cancellation handling; the last three are estimates"),
         b.metric("discounts", "Discounts given (posted)", needs=S, value=float(Decimal(dl["total_posted"])), unit=cur, drill="discounts"),
-        b.metric("discounts_unref", "Discounts with no approval reference", needs=S, value=float(Decimal(dl["without_approval_reference"])), unit=cur,
-                 drill="discounts:unreferenced", tone="warn" if Decimal(dl["without_approval_reference"]) else "ok", good="down",
-                 note="no reference on the document, which is not the same as not approved"),
+        b.metric("discounts_unref", "Discounts with no approval claim", needs=S, value=float(Decimal(dl["without_approval_claim"])), unit=cur,
+                 drill="discounts:unclaimed", tone="warn" if Decimal(dl["without_approval_claim"]) else "ok", good="down",
+                 note="no claim on the document; a claim, where there is one, is only a comment and is not proof of approval"),
         b.metric("cancel_cost", "Cancellation cost (estimated)", needs=S, value=float(Decimal(cc["total_estimated"])), unit=cur, drill="cancellations",
                  note="revenue forgone where nothing replaced the invoice, plus handling time; the posted effect is nil"),
         b.metric("mismatch", "Payments not matching the bank", needs=S, value=len(disc), drill="payments:mismatch" if disc else "", tone="bad" if disc else "ok", good="down")]))
@@ -83,10 +83,10 @@ def build(b: Build) -> None:
                           columns=[col("customer", "Customer"), col("net", "Net revenue", "right"), col("goods", "Goods", "right"), col("support", "Support (est.)", "right"),
                                    col("rework", "Rework (est.)", "right"), col("handling", "Cancel handling (est.)", "right"), col("profit", "Profit", "right"),
                                    col("margin", "Margin %", "right"), col("documents", "Documents")]))
-    d.panels.append(panel("discount_rows", "Discounts and who approved them", "table", sources=S, span=2, empty="" if dl["discounts"] else "No discount in this range.",
-                          rows=[row({"invoice": x["invoice"], "customer": x["customer"], "amount": x["amount"], "approval": x["approval"] or "no reference",
-                                     "approver": x["approver"] or "—"}, tone="" if x["approval"] else "warn", ref=(x["sources"] or [""])[0]) for x in dl["discounts"]],
-                          columns=[col("invoice", "Invoice"), col("customer", "Customer"), col("amount", "Discount", "right"), col("approval", "Approval"), col("approver", "Approver")]))
+    d.panels.append(panel("discount_rows", "Discounts and who the document claims approved them (unverified)", "table", sources=S, span=2, empty="" if dl["discounts"] else "No discount in this range.",
+                          rows=[row({"invoice": x["invoice"], "customer": x["customer"], "amount": x["amount"], "claim": x["claimed_approval"] or "no claim",
+                                     "claimed_by": x["claimed_approver"] or "—"}, tone="" if x["claimed_approval"] else "warn", ref=(x["sources"] or [""])[0]) for x in dl["discounts"]],
+                          columns=[col("invoice", "Invoice"), col("customer", "Customer"), col("amount", "Discount", "right"), col("claim", "Approval claim (unverified)"), col("claimed_by", "Claimed approver (unverified)")]))
     d.panels.append(panel("supplier_rows", "Supplier cost", "table", sources=S, empty="" if sup else "No supplier cost in this range.",
                           rows=[row({"supplier": x["supplier"], "purchases": x["net_purchases_posted"], "rework": x["rework_estimated"], "total": x["total"], "documents": _docs(x["sources"])})
                                 for x in sup],
@@ -99,15 +99,15 @@ def build(b: Build) -> None:
                                 [(x, _handling_for(cc, x["invoice"])) for x in cc["invoices"]]],
                           columns=[col("invoice", "Cancelled invoice"), col("customer", "Customer"), col("outcome", "Outcome"),
                                    col("forgone", "Revenue forgone (estimated)", "right"), col("handling", "Handling time (estimated)", "right")]))
-    d.panels.append(panel("approver_rows", "Discounts by approver", "table", sources=S, empty="" if dl["discounts"] else "No discount in this range.",
-                          rows=[row({"approver": k, "amount": v}) for k, v in dl["by_approver"].items()] +
-                               [row({"approver": "no approval reference", "amount": dl["without_approval_reference"]}, tone="warn")],
-                          columns=[col("approver", "Approver"), col("amount", "Discounts approved", "right")]))
+    d.panels.append(panel("approver_rows", "Discounts by claimed approver (unverified)", "table", sources=S, empty="" if dl["discounts"] else "No discount in this range.",
+                          rows=[row({"approver": k, "amount": v}) for k, v in dl["by_claimed_approver"].items()] +
+                               [row({"approver": "no approval claim", "amount": dl["without_approval_claim"]}, tone="warn")],
+                          columns=[col("approver", "Claimed approver (unverified)"), col("amount", "Discounts claimed as approved", "right")]))
     d.panels.append(panel("mismatch_rows", "Payments the bank does not confirm", "table", sources=S, empty="" if disc else "Every payment with a bank line matches it.",
                           rows=[row({"reference": r.id, "customer": r.get("customer"), "posted": r.get("posted"), "bank": r.get("bank"), "difference": r.get("difference"),
                                      "invoices": r.get("invoices")}, tone="bad", ref=r.ref) for r in disc],
                           columns=[col("reference", "Reference"), col("customer", "Customer"), col("posted", "Books", "right"), col("bank", "Bank", "right"),
                                    col("difference", "Difference", "right"), col("invoices", "Invoice")]))
     d.summary = (f"{len(bad)} unprofitable customer(s) of {len(cust)}; discounts {dl['total_posted']} {cur} "
-                 f"({dl['without_approval_reference']} with no approval reference); cancellations cost about {cc['total_estimated']} {cur} (estimated); "
+                 f"({dl['without_approval_claim']} with no approval claim; claims are unverified comments); cancellations cost about {cc['total_estimated']} {cur} (estimated); "
                  f"{len(disc)} payment(s) do not match the bank.")

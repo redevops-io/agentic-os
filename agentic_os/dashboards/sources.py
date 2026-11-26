@@ -727,7 +727,7 @@ def economics(ctx: Context) -> SourceResult:
                            status=e.basis.value, project=project, at=parse_ts(e.at),
                            fields={"kind": e.kind.value, "basis": e.basis.value, "amount": float(e.amount), "currency": e.currency,
                                    "customer": e.subjects.get("customer", ""), "supplier": e.subjects.get("supplier", ""), "invoice": e.subjects.get("invoice", ""),
-                                   "approval": e.approval.id if e.approval else "", "approver": e.approval.approver if e.approval else "", "note": e.note},
+                                   "approval": e.approval.id if e.approval else "", "approver": e.approval.approver if e.approval else "", "approval_verified": False, "note": e.note},
                            ref=e.sources[0] if e.sources else ""))
     rec = _rec.find(c)
     for d in rec.events:

@@ -86,10 +86,12 @@ def test_a_discounted_invoice_is_revenue_at_list_price_and_a_separate_discount_t
     assert not any(e.id == "S1:discount" for e in ex.events)                            # no discount, no event
 
 
-def test_a_discount_carries_the_approval_reference_written_on_the_document_and_one_without_says_nothing_about_approval():
+def test_a_discount_carries_the_approval_claim_written_in_a_comment_and_that_claim_is_never_verified():
     ex = ev()
     assert (by_id(ex, "S2:discount").approval.id, by_id(ex, "S2:discount").approval.approver) == ("APR-1", "usr-cfo")
     assert by_id(ex, "S3:discount").approval is None and by_id(ex, "S4:discount").approval is None
+    a = by_id(ex, "S2:discount").approval
+    assert a.verified is False and "unverified" in a.source and by_id(ex, "S2:discount").to_json()["approval"]["verified"] is False
 
 
 def test_a_document_discount_is_found_even_when_no_item_carries_one():
@@ -190,10 +192,10 @@ def test_cancellation_cost_is_estimated_and_its_posted_effect_is_nil():
     assert (out["invoices_cancelled"], out["replaced"]) == (2, 1)
 
 
-def test_discount_loss_names_the_approver_and_separates_the_discounts_with_no_reference():
+def test_discount_loss_names_the_claimed_approver_as_unverified_and_separates_the_discounts_with_no_claim():
     out = answers.discount_loss(ev().events, since="2026-07-01", until="2026-09-30")
-    assert (out["total_posted"], out["with_approval_reference"], out["without_approval_reference"]) == ("1110.00", "200.00", "910.00")
-    assert out["by_approver"] == {"usr-cfo": "200.00"}
+    assert (out["total_posted"], out["with_approval_claim"], out["without_approval_claim"]) == ("1110.00", "200.00", "910.00")
+    assert out["by_claimed_approver"] == {"usr-cfo": "200.00"} and "unverified" in out["approval_evidence"]
 
 
 def test_supplier_cost_adds_attributed_rework_to_purchases_and_that_can_change_the_ranking():

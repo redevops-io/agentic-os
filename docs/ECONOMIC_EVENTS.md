@@ -12,7 +12,7 @@
 | `subjects` | `customer`, `supplier`, `project`, `invoice`. A customer a resolver cannot place is kept as `unresolved:<name>`, never merged |
 | `sources` | the documents it comes from, e.g. `erpnext:Sales Invoice/ACC-SINV-2026-00001` |
 | `supersedes` | the document a credit note or debit note corrects |
-| `approval` | the approval id and approver, read from an `aos-approval id=… approver=… action=…` comment on the document (what a governed write leaves). Absent means no reference was found, not that none happened |
+| `approval` | an **unverified claim**: the approval id and approver named in an `aos-approval id=… approver=… action=…` comment on the document. Anyone who can comment in ERPNext can write that line, and an agent that writes a governed comment writes the words itself, so it is not evidence that anyone approved. `verified` is always `False` here; absent means no claim was found. Evidence of an approval would have to come from something only the trusted side writes (a governed request's decided_by, action and input digest, or ERPNext's own workflow or version history); nothing reads one yet |
 
 A correction is a later event that points at the one it supersedes. Nothing is edited or deleted. A cancelled invoice is an event too: its posting was reversed, so its posted effect is nil; what it cost is the revenue it forwent when no amended invoice replaced it (estimated) plus the time logged against it.
 
@@ -28,7 +28,7 @@ Two behaviours of ERPNext 16 found while building this, both silent: a read of a
 
 1. Profit per customer: revenue at list, discounts, net revenue, cost of goods, support, rework and cancellation handling, with the posted and estimated parts of profit shown separately.
 2. What cancellations cost in a period: forgone revenue and handling time, both estimates; posted effect nil.
-3. Discounts given, split by whether the document carries an approval reference, and by approver.
+3. Discounts given, split by whether the document carries an approval claim, and by claimed approver. Both are labelled unverified (see `approval` above).
 4. Supplier cost: net purchases (posted, after debit notes) plus rework the time logs attribute to the supplier (estimated).
 5. Discrepancies between a payment the books recorded and the bank line with the same reference, traced to payment, invoice and customer, with a **proposed** correction (`applied: false`). Making and approving the correction is a person's act through the application, or a governed write once those are enabled; this module then shows from the application's records that the discrepancy is gone.
 

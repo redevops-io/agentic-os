@@ -48,10 +48,15 @@ class Kind(str, Enum):
 
 @dataclass(frozen=True)
 class Approval:
-    """Who allowed the change, as the governed write recorded it on the document. Absent means no approval reference was found, not that none happened."""
+    """What a comment on the document CLAIMS about who allowed the change. It is not evidence of an approval: anyone who can comment in the application
+    can write that text, and an agent that writes a governed comment writes the words itself. ``verified`` stays False for everything read from a comment;
+    only a record the trusted side writes (a governed request's decided_by, action and input digest, or the application's own workflow or version
+    history) could set it, and nothing here reads one yet. Absent means no claim was found, not that no approval happened."""
     id: str
     approver: str
     action: str = ""
+    verified: bool = False
+    source: str = "comment on the document (unverified claim)"
 
 
 @dataclass(frozen=True)
@@ -71,7 +76,8 @@ class EconomicEvent:
     def to_json(self) -> Dict[str, Any]:
         return {"id": self.id, "kind": self.kind.value, "basis": self.basis.value, "amount": str(self.amount), "currency": self.currency,
                 "at": self.at, "subjects": dict(self.subjects), "sources": list(self.sources), "supersedes": self.supersedes,
-                "approval": ({"id": self.approval.id, "approver": self.approval.approver, "action": self.approval.action} if self.approval else None),
+                "approval": ({"id": self.approval.id, "approver": self.approval.approver, "action": self.approval.action, "verified": self.approval.verified,
+                              "source": self.approval.source} if self.approval else None),
                 "note": self.note}
 
 
