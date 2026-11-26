@@ -47,7 +47,7 @@ services:
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set your own in .env, see .env.example}
     volumes: ["./observability/grafana/provisioning:/etc/grafana/provisioning:ro"]
     depends_on: [prometheus, loki]
     restart: unless-stopped

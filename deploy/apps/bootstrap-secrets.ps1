@@ -33,6 +33,8 @@ if ($py) {
   $pyArgs = @('-m', 'agentic_os.cli', 'secrets', 'init', '--backend', $backend)
   if ($env:REDEVOPS_SECRETS_NO_SHELL_PROFILE -eq '1') { $pyArgs += '--no-shell-profile' }
   & $py @pyArgs
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  & (Join-Path $PSScriptRoot 'bundle-passwords.ps1')
   exit $LASTEXITCODE
 }
 
@@ -64,4 +66,6 @@ Set-IfMissing 'AGENTIC_OS_APPROVAL_SECRET' (New-Hex 32)
 Set-IfMissing 'TWENTY_APP_SECRET' (New-Hex 32)
 Set-IfMissing 'OUTREACH_BASIC_AUTH' ('operator:' + (New-UrlSafe 24))
 Write-Host "  secrets file: $file"
+& (Join-Path $PSScriptRoot 'bundle-passwords.ps1')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "  next: docker compose --env-file `"$file`" up -d   (open a new terminal to pick up user env vars)"
