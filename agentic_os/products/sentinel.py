@@ -54,7 +54,9 @@ class SentinelAdapter:
         return self.client.get(f"{self.p}/actions/{request_id}", actor=actor, source=source)
 
     def verification(self, request_id: str, actor: str = "", source: str = "projects") -> Dict[str, Any]:
-        return self.client.get(f"{self.p}/actions/{request_id}/verification", actor=actor, source=source)
+        """The persisted read-back, flat. Edge Sentinel answers ``{request_id, verification, receipt}``, either of them
+        null; reading ``state`` off the top level said "not run" for every action, executed and verified ones included."""
+        return read_back_of(self.client.get(f"{self.p}/actions/{request_id}/verification", actor=actor, source=source))
 
     def changes(self, after: int = 0, limit: int = 100, actor: str = "") -> Dict[str, Any]:
         return self.client.get(f"{self.p}/changes", params={"after": after, "limit": limit}, actor=actor)
@@ -94,6 +96,20 @@ class SentinelAdapter:
 
 
 # ── pure mapping ──────────────────────────────────────────────────────────────────────────────────
+def read_back_of(answer: Any) -> Dict[str, Any]:
+    """``{state, detail, at, receipt_id, receipt_status}`` from the verification route's answer. ``state`` is the
+    product's own (``verified``, ``unverified``, ``dry_run``…); ``not_run`` only when there is neither a read-back nor a
+    receipt, and ``no_read_back`` when the action ran (it has a receipt) and no read-back was recorded."""
+    doc = answer if isinstance(answer, Mapping) else {}
+    nested = "verification" in doc or "receipt" in doc
+    v = doc.get("verification") if nested else doc
+    v = v if isinstance(v, Mapping) else {}
+    receipt = doc.get("receipt") if nested and isinstance(doc.get("receipt"), Mapping) else {}
+    state = str(v.get("state") or ("no_read_back" if receipt else "not_run"))
+    return {"state": state, "detail": str(v.get("detail") or ""), "at": str(v.get("at") or receipt.get("at") or ""),
+            "receipt_id": str(v.get("receipt_id") or receipt.get("receipt_id") or ""), "receipt_status": str(receipt.get("status") or "")}
+
+
 def _params(a: Mapping[str, Any]) -> Mapping[str, Any]:
     p = a.get("params")
     return p if isinstance(p, Mapping) else {}

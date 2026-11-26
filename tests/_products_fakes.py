@@ -127,7 +127,8 @@ class FakeSentinel:
                     a = fake.actions.get(p.split("/")[-2])
                     if not a:
                         return self._send(404, {"error": "not_found", "detail": "no such action"})
-                    return self._send(200, a["verification"] or {"state": "not_run"})
+                    # the real route's shape (apps/edge-sentinel/api_v1.py): both records nested, either null
+                    return self._send(200, {"request_id": a["request_id"], "verification": a["verification"], "receipt": a["receipt"]})
                 if p.startswith("/api/v1/actions/"):
                     a = fake.actions.get(p.rsplit("/", 1)[1])
                     if not a:

@@ -109,7 +109,7 @@ def test_sentinel_investigate_propose_approve_execute_verify(world):
     assert r.status_code == 200 and sentinel.executions == 1, r.text
     # the agent verifies the resulting state itself
     verified = invoke(c, who, "security.sentinel_read_back", request_id=request_id)["output"]
-    assert verified["state"] == "verified" and verified["receipt_id"]
+    assert verified["state"] == "verified" and verified["receipt_id"] and verified["receipt_status"] == "SUCCEEDED"
     assert invoke(c, who, "security.sentinel_get_case", case_id=case_id)["output"]["case"]
 
 
@@ -172,3 +172,15 @@ def test_the_shared_bearer_never_sees_a_product_capability(world, monkeypatch):
     monkeypatch.setenv("AGENT_GATEWAY_TOKEN", "shared-bearer-value")
     c = TestClient(create_app(SampleProjectionProvider()), raise_server_exceptions=False)
     assert not [n for n in offered(c, {"Authorization": "Bearer shared-bearer-value"}) if n.split(".")[0] in ("security", "quality", "findings")]
+
+
+@pytest.mark.parametrize("answer,state,status", [
+    ({"request_id": ACT, "verification": None, "receipt": None}, "not_run", ""),
+    ({"request_id": ACT, "verification": {"state": "dry_run", "detail": "the edge was not touched"}, "receipt": {"receipt_id": "r1", "status": "DRY_RUN"}}, "dry_run", "DRY_RUN"),
+    ({"request_id": ACT, "verification": None, "receipt": {"receipt_id": "r2", "status": "SUCCEEDED"}}, "no_read_back", "SUCCEEDED"),
+    ({"request_id": ACT, "verification": {"state": "unverified"}, "receipt": {"receipt_id": "r3", "status": "SUCCEEDED"}}, "unverified", "SUCCEEDED"),
+    ({"state": "verified", "receipt_id": "r4"}, "verified", "")])
+def test_an_action_that_ran_never_reads_as_not_run(answer, state, status):
+    from agentic_os.products.sentinel import read_back_of
+    got = read_back_of(answer)
+    assert (got["state"], got["receipt_status"]) == (state, status)

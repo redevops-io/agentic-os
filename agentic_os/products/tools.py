@@ -289,12 +289,14 @@ class ProductTools:
         state = str(v.get("state") or "not_run")
         text = {"verified": "Verified: the product read the edge back and the decision is present.",
                 "unverified": "Unverified: the request was accepted but the read-back did not observe it.",
-                "dry_run": "Dry run: nothing was blocked, so there is nothing to verify at the edge.",
+                "dry_run": "Executed as a dry run: nothing was blocked, so there is nothing to verify at the edge.",
+                "no_read_back": "The action ran (it has a receipt) but no read-back is recorded, so its effect is not verified.",
                 "not_run": "No read-back has run yet (the action has not executed)."}.get(state, state)
         return CapabilityResult(capability_id="security.sentinel_read_back", answer=f"{inp['request_id']}: {text}"
                                 + (f" {v.get('detail')}" if v.get("detail") else ""), data={
             "product": spec.id, "request_id": inp["request_id"], "state": state, "detail": v.get("detail", ""),
-            "at": v.get("at", ""), "receipt_id": v.get("receipt_id", ""), "executed": False}, evidence=(inp["request_id"],),
+            "at": v.get("at", ""), "receipt_id": v.get("receipt_id", ""), "receipt_status": v.get("receipt_status", ""),
+            "executed": False}, evidence=(inp["request_id"],),                       # "executed" is about THIS call: it runs nothing
             artifacts=(_link(spec, "action", inp["request_id"], f"/ui/actions/{inp['request_id']}"),))
 
     # quality ----------------------------------------------------------------------------------
