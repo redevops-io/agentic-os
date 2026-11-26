@@ -17,6 +17,10 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.22; no version set)
 
+- Agent gateway: Edge Sentinel and redevops-qa tools for external agents behind named grants (`security.read`, `security.propose`, `quality.read`, `quality.run`), each product granted per tenant (`products:<id>`); writes need an `idempotency_key`. An agent can propose and start bounded work, never decide or execute. New `quality.qa_list_runs`.
+- Agent gateway, **stricter**: every call's arguments are checked against the capability's published schema (REST and MCP alike); unknown inputs are refused, and MCP marks a failed call `isError`.
+- Fixed: `security.sentinel_read_back` said "not run" about every action on a real Edge Sentinel (it read the verification route's nested answer as flat).
+
 ## v0.4.22 (external agents: tenant-scoped reads, dashboards, bound approvals, OAuth)
 
 - Agent gateway, found with real clients: the OAuth consent form could not be submitted from any browser (`Referrer-Policy: no-referrer` made it post `Origin: null`); MCP tools now publish each capability's own input schema (the old `{"arguments": …}` form still works) and run off the event loop; the Projects image includes the `mcp` extra; consent offers `dashboards.read` only where it can work; token and connection lifetimes are configurable within bounds.
