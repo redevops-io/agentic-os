@@ -169,8 +169,8 @@ def _body(data) -> dict:
 
 
 def _sync(force: bool = False) -> None:
-    if force or time.time() - _SYNC["ts"] > 4.0:
-        _SYNC["ts"] = time.time()
+    """Reads do not ingest. Only the background loop and an explicit, operator-authorised ``POST /sync`` do."""
+    if force:
         live.sync_cases()
 
 
@@ -294,9 +294,15 @@ def decisions(limit: int = 100, cursor: str = "", p: Principal = Depends(viewer)
 
 # ── cases and evidence ───────────────────────────────────────────────────────────────────────────────────────
 
+@router.post("/sync")
+def sync(p: Principal = Depends(operator), _rl=Depends(ratelimit.rate_limit)):
+    """Ingest the core's current alerts into cases NOW. The only request that does; every GET reads what is stored."""
+    ids = live.sync_cases()
+    return {"synced": len(ids), "case_ids": ids, "synced_at": live.last_sync_at()}
+
+
 @router.get("/cases")
 def cases(status: str = "", severity: str = "", q: str = "", limit: int = 50, cursor: str = "", p: Principal = Depends(viewer)):
-    _sync()
     try:
         return _hs().list_cases(status=status, severity=severity, q=q[:80], limit=limit, cursor=cursor or None)
     except ValueError:
@@ -305,7 +311,6 @@ def cases(status: str = "", severity: str = "", q: str = "", limit: int = 50, cu
 
 @router.get("/cases/{case_id}")
 def case(case_id: str, p: Principal = Depends(viewer)):
-    _sync()
     c = _hs().get_case(case_id)
     if c is None:
         raise _err(404, "not_found", f"unknown case '{case_id}'")
@@ -371,7 +376,6 @@ async def resolve_case(case_id: str, request: Request, _rl=Depends(ratelimit.rat
 
 @router.get("/actions")
 def actions(state: str = "", limit: int = 50, cursor: str = "", p: Principal = Depends(viewer)):
-    _sync()
     try:
         return _hs().list_actions(state=state, limit=limit, cursor=cursor or None)
     except ValueError:
@@ -469,7 +473,6 @@ async def execute(case_id: str, request_id: str, request: Request, _rl=Depends(r
 
 @router.get("/changes")
 def changes(after: int = 0, limit: int = 100, p: Principal = Depends(viewer)):
-    _sync()
     return _hs().changes(after, limit)
 
 

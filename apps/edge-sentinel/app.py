@@ -177,6 +177,17 @@ async def _security_headers(request: Request, call_next):
 
 
 @app.on_event("startup")
+def _start_case_sync():
+    """Cases are built from alerts on a timer (SENTINEL_SYNC_INTERVAL_S, default 15 s; 0 turns it off), not by whoever reads them."""
+    live.start_sync_loop()
+
+
+@app.on_event("shutdown")
+def _stop_case_sync():
+    live.stop_sync_loop()
+
+
+@app.on_event("startup")
 def _check_declared_bind():
     """A process started by someone else's `uvicorn --host` cannot be stopped from here, so the container
     image declares its bind host in the environment (SENTINEL_BIND_HOST) and this checks the declaration
@@ -1598,12 +1609,11 @@ def backups_ui() -> str:
 
 @app.get("/api/cases")
 def api_cases() -> JSONResponse:
-    """List live investigation cases, worst severity first. Syncs the latest CrowdSec alerts into cases first
-    (idempotent), so the list reflects real detections — never a canned scenario."""
+    """List the stored investigation cases, worst severity first. A read: it ingests nothing. The cases are the ones the background loop
+    (or ``POST /api/v1/sync``) built from CrowdSec's alerts, so the list reflects real detections — never a canned scenario."""
     if (_r := _deny_response(_GATE_APP, "threat_summary")):
         return _r
-    live.sync_cases()
-    return JSONResponse({"cases": live.case_summaries()})
+    return JSONResponse({"cases": live.case_summaries(), "synced_at": live.last_sync_at()})
 
 
 @app.get("/api/cases/{case_id}")
@@ -1735,7 +1745,6 @@ def _legacy_index() -> str:
                    f"<code>{html.escape(fixture_mode.DEMO_ENV)}</code> to operate against real "
                    "integrations.</div></section>")
     try:
-        live.sync_cases()
         blocks += ("<section class='shell' style='margin-top:var(--sp-4)'>"
                    + _cases_panel(live.case_summaries()) + "</section>")
     except Exception:  # noqa: BLE001 — the case workspace is additive; never break the dashboard

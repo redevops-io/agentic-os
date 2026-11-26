@@ -54,6 +54,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "unblock_ip", lambda inp: (bans.discard(inp["ip"]) or {"status": "done", "lifted": True}))
     monkeypatch.setattr(core, "triage", lambda: {"decisions": [{"value": b} for b in sorted(bans)] if state["verify_sees_ban"] else []})
     core._CACHE.update(ts=0.0, data=None)
+    live.sync_cases()            # one tick of the background loop: reads no longer ingest, so the alert is already a case when a test looks
     yield {"bans": bans, "state": state, "dir": tmp_path / "state"}
     history_store.reset()
     identity.reset()
@@ -400,8 +401,10 @@ def test_a_manual_case_is_rebuilt_after_a_restart_from_its_stored_request(env):
     assert r.status_code == 201 and r.json()["state"] == "AWAITING_APPROVAL"
     cid, rid = r.json()["case_id"], r.json()["request_id"]
     _restart(env)
+    live.sync_cases()                                  # the loop's first tick, which runs when the app starts: it rebuilds the manual case and re-applies the stored state
     s = session(ADMIN)
-    assert [c["case_id"] for c in s.get("/api/v1/cases").json()["items"]] == [cid]
+    ids = [c["case_id"] for c in s.get("/api/v1/cases").json()["items"]]
+    assert cid in ids and len(ids) == 2                 # the manual case, rebuilt from its stored request, and the alert's case the fixture's tick ingested
     act = s.get(f"/api/v1/actions/{rid}").json()
     assert act["params"]["ip"] == "8.8.4.4" and act["params"]["duration"] == "2h"
     assert s.post(f"/api/v1/cases/{cid}/actions/{rid}/decision", json={"approved": True, "digest": act["digest"]}).status_code == 200
@@ -585,7 +588,7 @@ def test_info_posture_events_decisions_and_pagination(env):
     assert s.get("/api/v1/posture").json()["source"] == "live"
     assert s.get("/api/v1/cases?limit=1&cursor=!!!").status_code == 400
     env["state"]["alerts"] = [{**ALERT, "created_at": f"2026-10-0{i}T10:00:00Z", "source": {"value": f"8.8.8.{i}", "scope": "Ip"}} for i in range(1, 6)]
-    api_v1._SYNC["ts"] = 0.0
+    assert s.post("/api/v1/sync").status_code == 200                       # reads ingest nothing: the new alerts become cases when something syncs
     page1 = s.get("/api/v1/cases?limit=2").json()
     assert len(page1["items"]) == 2 and page1["next_cursor"]
     page2 = s.get(f"/api/v1/cases?limit=10&cursor={page1['next_cursor']}").json()
@@ -759,3 +762,61 @@ def test_a_resolved_case_says_when_it_was_closed_in_the_list_and_the_detail_and_
     s2 = session(ADMIN)
     assert next(c for c in s2.get("/api/v1/cases").json()["items"] if c["case_id"] == cid)["resolved_at"] == at
     assert s2.get(f"/api/v1/cases/{cid}").json()["summary"]["resolved_at"] == at
+
+
+# ── reads do not write ───────────────────────────────────────────────────────────────────────────────────────
+
+def _rows(env):
+    """Everything the history store holds that a read could have added: cases, evidence and actions."""
+    hs = history_store.get()
+    return {t: len(hs.rows(f"SELECT 1 FROM {t}")) for t in ("cases", "evidence", "actions")}
+
+
+def test_reading_never_ingests_and_only_an_explicit_sync_or_the_loop_does(env):
+    s = session(ADMIN)
+    before = _rows(env)
+    assert before["cases"] == 1
+    env["state"]["alerts"] = [{**ALERT, "created_at": f"2026-10-0{i}T10:00:00Z", "source": {"value": f"8.8.8.{i}", "scope": "Ip"}} for i in range(1, 4)]
+    for path in ("/api/v1/cases", "/api/v1/events", "/api/v1/decisions", "/api/v1/actions", "/api/v1/changes", "/api/v1/info", "/api/v1/posture"):
+        assert s.get(path).status_code == 200, path
+    assert s.get("/api/v1/cases").json()["items"].__len__() == 1
+    assert s.get("/api/cases").json()["cases"].__len__() == 1
+    assert _rows(env) == before, "a GET changed what the store holds"
+    first = s.post("/api/v1/sync").json()
+    assert first["synced"] == 3 and _rows(env)["cases"] == 4
+    again = _rows(env)
+    assert s.post("/api/v1/sync").json()["synced"] == 3 and _rows(env) == again, "ingesting the same alerts twice must not add anything"
+    assert len(s.get("/api/v1/cases").json()["items"]) == 4
+
+
+def test_syncing_needs_the_operator_role_and_a_viewer_cannot_cause_a_write(env):
+    adm = session(ADMIN)
+    make_user(adm, "vera", "viewer")
+    v = session(("vera", "long-enough-password-1"))
+    assert v.post("/api/v1/sync").status_code in (401, 403)
+    assert v.get("/api/v1/cases").status_code == 200
+
+
+def test_the_background_loop_ingests_on_its_own_and_stops(env):
+    import time as _t
+    env["state"]["alerts"] = [{**ALERT, "created_at": "2026-10-09T10:00:00Z", "source": {"value": "8.8.8.9", "scope": "Ip"}}]
+    assert live.start_sync_loop(0.05) is True and live.start_sync_loop(0.05) is False        # one loop; a second start does nothing
+    try:
+        end = _t.time() + 5
+        while _t.time() < end and _rows(env)["cases"] < 2:
+            _t.sleep(0.05)
+        assert _rows(env)["cases"] == 2 and live.last_sync_at() > 0
+    finally:
+        live.stop_sync_loop()
+    assert live.start_sync_loop(0) is False                                                      # an interval of 0 turns it off
+
+
+def test_the_demo_fixture_is_the_same_bytes_every_time_it_is_read_and_can_be_pinned_across_restarts(monkeypatch):
+    import json as _j
+    from importlib import import_module
+    fm = import_module("edge-sentinel.fixture_mode")
+    a, b = _j.dumps(fm.fixture_alerts(), sort_keys=True), _j.dumps(fm.fixture_alerts(), sort_keys=True)
+    assert a == b
+    monkeypatch.setenv(fm.NOW_ENV, "2026-11-26T12:00:00Z")
+    pinned = fm.fixture_alerts()
+    assert pinned[0]["created_at"] == "2026-11-26T11:53:00Z" and _j.dumps(fm.fixture_alerts(), sort_keys=True) == _j.dumps(pinned, sort_keys=True)

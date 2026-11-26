@@ -74,8 +74,57 @@ def reset_store() -> CaseStore:
     return _STORE
 
 
+SYNC_INTERVAL_ENV = "SENTINEL_SYNC_INTERVAL_S"
+DEFAULT_SYNC_INTERVAL_S = 15.0
+_LAST_SYNC = {"at": 0.0}
+_LOOP: dict = {"thread": None, "stop": None}
+
+
+def last_sync_at() -> float:
+    """Unix time of the last completed ingestion (0.0: none yet). Reads report it; they never cause one."""
+    return _LAST_SYNC["at"]
+
+
+def sync_interval() -> float:
+    try:
+        return max(0.0, float(os.environ.get(SYNC_INTERVAL_ENV, DEFAULT_SYNC_INTERVAL_S)))
+    except ValueError:
+        return DEFAULT_SYNC_INTERVAL_S
+
+
+def start_sync_loop(interval: float | None = None) -> bool:
+    """Ingest the core's alerts on a timer, so that READING cases never has to. Returns False when the loop is off (interval 0) or running."""
+    every = sync_interval() if interval is None else float(interval)
+    if every <= 0 or (_LOOP["thread"] is not None and _LOOP["thread"].is_alive()):
+        return False
+    stop = threading.Event()
+
+    def run() -> None:
+        while not stop.is_set():
+            try:
+                sync_cases()
+            except Exception:  # noqa: BLE001 — a failed tick is retried on the next one
+                pass
+            stop.wait(every)
+
+    t = threading.Thread(target=run, name="sentinel-case-sync", daemon=True)
+    _LOOP["thread"], _LOOP["stop"] = t, stop
+    t.start()
+    return True
+
+
+def stop_sync_loop() -> None:
+    if _LOOP["stop"] is not None:
+        _LOOP["stop"].set()
+    t = _LOOP["thread"]
+    if t is not None:
+        t.join(timeout=5)
+    _LOOP["thread"] = _LOOP["stop"] = None
+
+
 def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict]] | None = None) -> list[str]:
-    """Ingest the current live CrowdSec alerts into cases. Idempotent: returns the case ids touched.
+    """Ingest the current live CrowdSec alerts into cases. Idempotent: returns the case ids touched. This WRITES (cases, evidence, the read
+    model): it is called by the background loop, by the explicit sync route and by the paths that decide or execute, never by a read.
     Degrades to [] (never raises, never fabricates) when the core is unreachable."""
     st = st or store()
     _rehydrate_manual(st)
@@ -99,6 +148,7 @@ def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict
         history_store.get().sync_store(st, attempts=_ATTEMPTS)
     except history_store.StoreUnavailable:
         pass                    # the read model is behind; decisions and executions re-check the store and refuse
+    _LAST_SYNC["at"] = time.time()
     return ids
 
 
