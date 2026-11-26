@@ -91,6 +91,23 @@ CRM_LOOKUP = CapabilityManifest(
     data_classes=(DataClass.CUSTOMER_CONTENT, DataClass.PII))
 
 
+#: The dashboards capability returns the figures, not the records behind them (the app's drill-down is where those are). A table panel is
+#: therefore cut to this many rows for an agent, and says how many there are: a busy dashboard was 17,000 to 25,000 characters, which an
+#: agent with a small context cannot take whole, and an agent that cannot see the end of what it was given asks again and may never answer.
+AGENT_MAX_ROWS = 10
+
+
+def bound_rows(dash: dict, max_rows: int = AGENT_MAX_ROWS) -> dict:
+    for panel in dash.get("panels") or []:
+        rows = panel.get("rows")
+        if isinstance(rows, list) and len(rows) > max_rows:
+            panel["rows_total"], panel["rows_shown"] = len(rows), max_rows
+            panel["rows_note"] = (f"{len(rows) - max_rows} more row(s) are not returned to an agent; counts elsewhere in this dashboard are of all "
+                                  f"{len(rows)}. The records are in the app.")
+            panel["rows"] = rows[:max_rows]
+    return dash
+
+
 def _ok(output: Any, classes) -> HandlerResult:
     return HandlerResult(ok=True, output=output, data_classes=classes)
 

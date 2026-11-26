@@ -282,6 +282,16 @@ def test_dashboards_are_readable_only_by_an_agent_that_was_granted_them_by_name(
     assert call(app["url"] + "/api/dashboards", token=token)[0] in (401, 403)
 
 
+def test_a_table_is_cut_for_an_agent_and_says_how_many_rows_there_are():
+    from agentic_os.agent_gateway.capabilities import AGENT_MAX_ROWS, bound_rows
+    dash = {"panels": [{"id": "open", "rows": [{"n": i} for i in range(25)]}, {"id": "small", "rows": [{"n": 1}]}, {"id": "stats", "metrics": [{"id": "x", "value": 25}]}]}
+    out = bound_rows(dash)
+    big = out["panels"][0]
+    assert len(big["rows"]) == AGENT_MAX_ROWS and big["rows_total"] == 25 and big["rows_shown"] == AGENT_MAX_ROWS and "15 more" in big["rows_note"]
+    assert big["rows"][0] == {"n": 0}                                                  # the first rows, in the app's own order
+    assert "rows_total" not in out["panels"][1] and out["panels"][2]["metrics"][0]["value"] == 25      # a short table and the figures are untouched
+
+
 # last on purpose: it stops the app the tests above share
 def test_the_gateway_file_is_removed_when_the_app_stops(app):
     assert (app["dir"] / "gateway.json").exists()
