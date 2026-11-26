@@ -168,3 +168,37 @@ def test_a_long_table_is_cut_and_says_so_and_addresses_are_masked_but_digests_ar
     big = out["panels"][0]
     assert len(big["rows"]) == AGENT_MAX_ROWS and big["rows_total"] == 25 and "15 more" in big["rows_note"]
     assert "@example.com" not in json.dumps(out) and big["rows"][0]["cells"]["commit"] == sha and out["panels"][1]["metrics"][0]["value"] == 25
+
+
+# ── the same under the production profile, where every call also needs a stored authority record ───────────────────────
+def test_in_production_the_authority_record_covers_the_dashboard_reads_that_were_named(deployment, monkeypatch, tmp_path):
+    db, agents = str(tmp_path / "authority.sqlite"), str(tmp_path / "agents.json")
+    for k, v in {"AGENTIC_OS_PROFILE": "production", "AGENTIC_OS_AUTHORITY_DB": db, "AGENTIC_OS_APPROVAL_SECRET": "s" * 48,
+                 "AGENTIC_OS_REPLAY_DB": str(tmp_path / "replay.sqlite"), "AGENT_GATEWAY_AGENTS_FILE": agents}.items():
+        monkeypatch.setenv(k, v)
+    # _app clears the profile before it builds the app, so it is put back as the app is created
+    import agentic_os.projects_api as api
+    real = api.create_app
+
+    def create(provider):
+        monkeypatch.setenv("AGENTIC_OS_PROFILE", "production")
+        monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps(LIMITS))
+        return real(provider)
+
+    monkeypatch.setattr("tests.test_dashboards.create_app", create)
+    client, svc, _ = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr("tests.test_dashboards.create_app", real)
+    svc.config.sources.update({"erpnext": {"project": "billing"}})
+    svc.ctx.clients.update({"erpnext": _Erp()})
+    svc.cache.invalidate()
+
+    def issue(ident, grants, tenant, **kw):
+        return {"Authorization": "Bearer " + AT.issue(agents, ident, grants, minutes=5, tenant=tenant, **kw)}
+
+    named = issue("named", ["dashboards.read", "projects.read"], "erp-only", authority_db=db)
+    assert figure(invoke(client, named, "dashboards.get", dashboard_id="finance"), "receivables") == 1500.0
+    assert invoke(client, named, "dashboards.list")["status"] == "ok" and invoke(client, named, "projects.list")["status"] == "ok"
+    plain = issue("plain", ["projects.read"], "erp-only", authority_db=db)
+    assert invoke(client, plain, "dashboards.get", dashboard_id="finance")["status"] == "denied"
+    no_record = issue("unrecorded", ["dashboards.read"], "erp-only")
+    assert invoke(client, no_record, "dashboards.get", dashboard_id="finance")["status"] == "denied"
