@@ -3,9 +3,37 @@
  "about": "Which versions belong together. Four things are versioned separately: the desktop app (its own version, published under a release tag with a different number), the kernel (the agentic-os Python package), the self-hosted bundle, and the Projects UI. Read `desktop[].app_version` for what the installed app reports and `desktop[].release_tag` for where its files are published. Checked by scripts/release/compat_check.py.",
  "desktop": [
   {
+   "app_version": "0.1.6",
+   "release_tag": "r0prime-v0.1.7",
+   "status": "current",
+   "product_name": "Agentic Apps R0-prime",
+   "product_line": "0.6.0",
+   "source_branch": "release/0.6.0",
+   "build_commit": "84f0c9cec7206c882454e13aa108978674849a6c",
+   "release_url": "https://github.com/redevops-io/agentic-os/releases/tag/r0prime-v0.1.7",
+   "manifest_url": "https://github.com/redevops-io/agentic-os/releases/download/r0prime-v0.1.7/release-manifest.json",
+   "manifest_sha256": "79fa6d14be6c5868c1500ba9da18608e355af3a1629072973fdeb09db67a3e36",
+   "kernel": {
+    "package_version": "0.4.1",
+    "line": "release/0.6.0",
+    "note": "The desktop line carries its own kernel branch; its dashboards were ported from kernel v0.4.9, and the unavailable-dashboard explanation matches kernel v0.4.16. It is not kernel v0.4.x from main."
+   },
+   "projects_ui": {
+    "version": "v0.3.9",
+    "commit": "5ad1ebbca673fa25f5fcec5a56a125ff20d517be",
+    "artifact_sha256": "9e0fd6bd630401228f8278008d37f8a27adaef57e488a157af1d7c35b21ae437"
+   },
+   "platforms": [
+    "macos-arm64",
+    "windows-x64",
+    "linux-amd64",
+    "linux-arm64"
+   ]
+  },
+  {
    "app_version": "0.1.5",
    "release_tag": "r0prime-v0.1.6",
-   "status": "current",
+   "status": "superseded",
    "product_name": "Agentic Apps R0-prime",
    "product_line": "0.6.0",
    "source_branch": "release/0.6.0",
