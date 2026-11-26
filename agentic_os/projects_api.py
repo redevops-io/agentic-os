@@ -1658,7 +1658,16 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             policies[f"{method} /api/agent-gateway/mcp-server/{{rest:path}}"] = query
     if oauth is not None:
         hub = getattr(prov, "products_hub", None)
-        policies.update(oauth_http.mount(app, oauth, single_owner=lambda: hub.registry.single_owner if hub is not None else ""))
+        def _cannot_grant(tenant: str) -> Dict[str, str]:
+            from agentic_os.agent_gateway.scope import tenant_is_current
+            svc = getattr(prov, "dashboards_service", None)
+            acc = svc.access(f"requester:{tenant}") if svc is not None and tenant_is_current(tenant) else None
+            if acc is not None and acc.basis != "deployment" and (acc.grant.sources is None or acc.grant.sources):
+                return {}
+            return {"dashboards.read": f"the tenant {tenant} is not granted any dashboard source here (AGENTIC_OS_TENANT_LIMITS)"}
+
+        policies.update(oauth_http.mount(app, oauth, single_owner=lambda: hub.registry.single_owner if hub is not None else "",
+                                         unavailable=_cannot_grant))
         app.state.agent_gateway_open_routes = oauth_http.OPEN_ROUTES
         app.state.agent_gateway_challenge = challenge
         app.state.oauth_gateway = oauth

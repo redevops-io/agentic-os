@@ -32,14 +32,17 @@ With two settings an agent connects itself, and a person approves it. Nobody cop
 | `AGENTIC_OS_OAUTH_DB` | a private file (SQLite) where connections are kept; they survive restarts. Only hashes of codes and tokens are stored |
 | `AGENTIC_OS_OAUTH_ISSUER` | the https URL this deployment is reached by, including its base path, for example `https://apps.example.com/projects` (http only for localhost) |
 
+Optional: `AGENTIC_OS_OAUTH_ACCESS_TTL_S` (access token, default 900, 60 to 3600) and
+`AGENTIC_OS_OAUTH_CONNECTION_TTL_S` (when a person must approve again, default 90 days, 60 seconds to 365 days).
+
 Consent also needs `AGENTIC_OS_APPROVAL_SECRET` (it signs the consent ticket) and a way for a person to sign in.
 
 1. An agent that calls the gateway without a token gets `401` with
    `WWW-Authenticate: Bearer resource_metadata="<issuer>/.well-known/oauth-protected-resource"`.
 2. It registers itself (`POST /oauth/register`; public clients; redirect URIs must be https, or http to localhost) and
    sends the person to `/oauth/authorize` with PKCE (S256, required).
-3. The signed-in person sees what it asks for, ticks what it gets (`dashboards.read` starts **unticked**), and allows or
-   refuses. The agent's tenant is that person's tenant.
+3. The signed-in person sees what it asks for, ticks what it gets (`dashboards.read` starts **unticked**, and is not
+   offered where that person's tenant is granted no dashboard source), and allows or refuses. The agent's tenant is that person's tenant.
 4. Access tokens last 15 minutes; refresh tokens rotate. A refresh token used twice ends the whole connection. A
    connection ends after 90 days whatever happens.
 5. `GET /oauth/connections` lists connections; `POST /oauth/connections/{id}/revoke` (JSON) ends one at once. A tenant

@@ -10,7 +10,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 COPY . /app
-RUN pip install --no-cache-dir '.[projects]'
+# the mcp extra: the agent gateway serves a real MCP server (AGENT_GATEWAY_MCP=1), which stops startup without it
+RUN pip install --no-cache-dir '.[projects,mcp]'
 # A shipped image is a packaged deployment: it refuses to start until AGENTIC_OS_PROFILE is set explicitly (agentic_os/mission/profile.py).
 ENV AGENTIC_OS_PACKAGED=1
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
