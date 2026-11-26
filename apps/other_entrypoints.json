@@ -56,6 +56,30 @@
       "name": "threading.Thread",
       "classification": "reviewed",
       "rationale": "Detached job started by the public /api/chat route to run an in-app content-generation action chosen by the chat model. It passes no approval marker, so the core stages any consequential action (push_assets); the result lands in an in-memory job table."
+    },
+    {
+      "app": "edge-sentinel",
+      "file": "app.py",
+      "kind": "lifecycle_hook",
+      "name": "_start_case_sync",
+      "classification": "reviewed",
+      "rationale": "Starts the case-sync loop at startup. The loop only calls live.sync_cases(), the same idempotent ingestion that used to run inside a GET; it takes no request, decides nothing, executes nothing and every action it creates stays AWAITING_APPROVAL. SENTINEL_SYNC_INTERVAL_S=0 turns it off."
+    },
+    {
+      "app": "edge-sentinel",
+      "file": "app.py",
+      "kind": "lifecycle_hook",
+      "name": "_stop_case_sync",
+      "classification": "reviewed",
+      "rationale": "Stops the case-sync loop at shutdown; it has no other effect."
+    },
+    {
+      "app": "edge-sentinel",
+      "file": "live.py",
+      "kind": "background_thread_or_task",
+      "name": "threading.Thread",
+      "classification": "reviewed",
+      "rationale": "The case-sync loop thread (daemon). It ingests CrowdSec alerts into cases on a timer so that no read has to. It proposes at most the approval-gated block_ip action a case already carries; it never approves or executes, and a failed tick is retried on the next one."
     }
   ]
 }
