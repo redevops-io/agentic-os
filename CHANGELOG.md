@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.20; no version set)
 
+- Fixed: with an agents file (or the shared bearer) set, Projects could not start under `AGENTIC_OS_PROFILE=production`: the mounted agent gateway was built without an authority store. It now uses the deployment's durable store. Each per-agent token needs its own record (`agent_tokens issue --authority-db`, default `AGENTIC_OS_AUTHORITY_DB`; read capabilities only, the token's tenant and end time, 5,000 calls); `revoke` ends both. The shared bearer has no record, so in production every call it makes is denied.
+
 ## v0.4.20 (Edge Sentinel reads no longer write; CI runs the cross-app checks; images verify against their tag)
 
 - **Behaviour change (Edge Sentinel, #851):** no GET ingests detections any more. Cases are ingested by a background loop (`SENTINEL_SYNC_INTERVAL_S`, default 15 s, 0 turns it off) and by the operator-only `POST /api/v1/sync`, so a case list read right after start can be empty until the first tick. The demo fixture's clock is fixed at start (`EDGE_SENTINEL_DEMO_NOW` pins it).
