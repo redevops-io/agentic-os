@@ -162,7 +162,7 @@ const s1 = fresh('main'); let a;
     const mcpText = mcp.value?.content?.[0]?.text || ''; let mcpJson = null; try { mcpJson = JSON.parse(mcpText); } catch {}
     const restOk = rest.status === 200 && rest.json?.status === 'error' && String(rest.json?.error || '').startsWith('invalid_arguments');
     const mcpOk = mcp.value?.isError === true && mcpJson?.status === 'error' && String(mcpJson?.error || '').startsWith('invalid_arguments');
-    const echoed = JSON.stringify(args && Object.values(args).filter((v) => typeof v === 'string' && v.length > 0)).includes(String(rest.json?.error || '#none#')) && Object.values(args).some((v) => typeof v === 'string' && String(rest.json?.error || '').includes(v));
+    const echoed = Object.values(args).some((v) => typeof v === 'string' && v.length > 1 && String(rest.json?.error || '').includes(v));
     const same = restOk && mcpOk && (rest.json.error === mcpJson.error);
     check(`8.2 ${name} with ${why} is rejected with the same invalid_arguments error on REST and on MCP, and the value is not echoed`, same && !echoed, `REST ${rest.status} ${JSON.stringify(rest.json)?.slice(0, 90)}; MCP isError=${mcp.value?.isError} ${mcpText.slice(0, 90)}`, { xfail: true });   // KNOWN DEFECT until the validation PR lands
   }
