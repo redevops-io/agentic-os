@@ -46,7 +46,7 @@ Consent also needs `AGENTIC_OS_APPROVAL_SECRET` (it signs the consent ticket) an
 4. Access tokens last 15 minutes; refresh tokens rotate. A refresh token used twice ends the whole connection. A
    connection ends after 90 days whatever happens.
 5. `GET /oauth/connections` lists connections; `POST /oauth/connections/{id}/revoke` (JSON) ends one at once. A tenant
-   approver sees and ends only their tenant's.
+   approver sees and ends only their tenant's. The operator is the deployment's owner and sees and ends every tenant's.
 
 Each connection is one agent identity (`agent:conn-…`) across refreshes and restarts, named in the audit, limited to 60
 calls a minute, scoped to its tenant (below) and, under the production profile, bounded by its own authority record
@@ -54,7 +54,17 @@ calls a minute, scoped to its tenant (below) and, under the production profile, 
 
 Only the five discovery, registration, token and revocation routes work without a sign-in. When the issuer has a path,
 a client that only looks for discovery documents at the host's root (`/.well-known/oauth-authorization-server/<path>`)
-needs that path routed to this app as well. **Not yet tested with a third-party MCP client.**
+needs that path routed to this app as well.
+
+**Tested with real clients** over a loopback deployment, with consent given in a real browser: the official MCP Python SDK
+2.3.0 (discovery, registration, consent, PKCE, typed tool calls, server restart, access-token and connection expiry,
+revocation of a live session, two tenants). One client behaviour to know about: that SDK does not store when its access
+token expires, so a NEW client process holding an expired one asks the person to approve again instead of refreshing
+(the server accepts the refresh token). A longer `AGENTIC_OS_OAUTH_ACCESS_TTL_S` makes that rarer. Not tested: Claude
+Code, Claude Desktop, MCP Inspector, a base-path issuer behind a proxy.
+
+A tenant approver whose only credential is a bearer token cannot answer the consent page from an ordinary browser: a
+browser sends the operator's Basic sign-in, not a bearer. A browser sign-in for approvers is not built.
 
 ## Tenants
 
