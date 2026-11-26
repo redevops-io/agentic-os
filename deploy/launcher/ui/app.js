@@ -152,6 +152,78 @@
   $("open-apps").onclick = showApps;
   $("apps-back").onclick = hideApps;
 
+  // ── AI agents: connect, list, disconnect ───────────────────────────────────────────────
+  // The sidecar's own `agent` command owns every rule (scoped, read-only by default, expiring, token only in a private file).
+  // This page sends a name and a client type and shows what comes back; it never receives, shows or stores a token.
+  const agentsSetStatus = (t) => { $("agents-status").textContent = t; };
+  const agentsShowError = (message) => {
+    const box = $("agents-error");
+    box.textContent = message;
+    box.hidden = false;
+    agentsSetStatus("");
+  };
+  const grantsText = (grants) => (grants || []).join(", ") || "no access";
+  const when = (sec) => (sec ? new Date(sec * 1000).toLocaleString() : "never");
+  const loadAgents = async () => {
+    $("agents-error").hidden = true;
+    $("agents-list").replaceChildren();
+    agentsSetStatus("Loading…");
+    let res;
+    try { res = JSON.parse(await invoke("agents_list")); }
+    catch (e) { agentsShowError("Could not load the connected agents: " + e); return; }
+    const active = (res.agents || []).filter((a) => a.active);
+    if (!active.length) $("agents-list").append(el("p", { class: "note", text: "No agent is connected." }));
+    for (const a of active) {
+      const btn = el("button", { type: "button", "data-agent": a.id, text: "Disconnect" });
+      btn.setAttribute("aria-label", "Disconnect " + a.name);
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try { await invoke("agents_disconnect", { id: a.id }); await loadAgents(); agentsSetStatus("Disconnected " + a.name + "."); }
+        catch (e) { agentsShowError("Could not disconnect: " + e); btn.disabled = false; }
+      };
+      $("agents-list").append(el("div", { class: "agent-row" },
+        el("span", { class: "agent-name", text: a.name + (a.client ? " (" + a.client + ")" : "") }),
+        btn,
+        el("span", { class: "note", text: "May read: " + grantsText(a.grants) + ". Connected " + when(a.created_at) + ", last used " + when(a.last_used_at) + "." })));
+    }
+    agentsSetStatus("");
+  };
+  $("agent-connect").onclick = async () => {
+    const name = $("agent-name").value.trim();
+    $("agents-error").hidden = true;
+    $("agent-result").hidden = true;
+    if (!name) { agentsShowError("Give the agent a name you will recognise."); $("agent-name").focus(); return; }
+    agentsSetStatus("Connecting…");
+    $("agent-connect").disabled = true;
+    try {
+      const res = JSON.parse(await invoke("agents_connect", { name, client: $("agent-client").value }));
+      $("agent-result-title").textContent = "Connected: " + res.agent.name;
+      $("agent-result-note").textContent = "It may read: " + grantsText(res.agent.grants) + ". It stops working in " + res.expires_in_days + " days. Add this entry to the client's MCP settings (the credential is read from a private file on this device, not shown here).";
+      $("agent-result-config").textContent = JSON.stringify(res.mcp_server, null, 2);
+      $("agent-result").hidden = false;
+      $("agent-name").value = "";
+      await loadAgents();
+      agentsSetStatus("Connected " + name + ".");
+    } catch (e) { agentsShowError("Could not connect: " + e); }
+    finally { $("agent-connect").disabled = false; }
+  };
+  const showAgents = () => {
+    disarmPurge(false);
+    $("view-main").hidden = true;
+    $("view-agents").hidden = false;
+    $("agents-title").focus();
+    loadAgents();
+  };
+  const hideAgents = () => {
+    $("view-agents").hidden = true;
+    $("agent-result").hidden = true;
+    $("agent-result-config").textContent = "";
+    $("view-main").hidden = false;
+    $("open-agents").focus();
+  };
+  $("open-agents").onclick = showAgents;
+  $("agents-back").onclick = hideAgents;
+
   // ── About / Legal ──────────────────────────────────────────────────────────────────────
   // Data comes from two launcher commands that read fixed files of the app's own Licenses folder
   // (about_info: the build record redevops.about/1; about_text: one of six fixed text files). Nothing
@@ -479,5 +551,6 @@
     if (!$("viewer").hidden) closeViewer();
     else if (!$("view-about").hidden) hideAbout();
     else if (!$("view-apps").hidden) hideApps();
+    else if (!$("view-agents").hidden) hideAgents();
   });
 })();

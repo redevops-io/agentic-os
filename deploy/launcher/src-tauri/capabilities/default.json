@@ -17,6 +17,9 @@
     "allow-list-installable-apps",
     "allow-apps-status",
     "allow-apply-selected-apps",
+    "allow-agents-list",
+    "allow-agents-connect",
+    "allow-agents-disconnect",
     "allow-about-info",
     "allow-about-text"
   ]
