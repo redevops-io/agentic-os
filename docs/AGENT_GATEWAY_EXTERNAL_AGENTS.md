@@ -23,6 +23,36 @@ unambiguous. Start the Projects API with:
 
 A file that cannot be read or does not validate authenticates **nobody**; one invalid entry is ignored and logged.
 
+## Or let the agent ask: OAuth 2.1
+
+With two settings an agent connects itself, and a person approves it. Nobody copies a token around.
+
+| Setting | Meaning |
+|---|---|
+| `AGENTIC_OS_OAUTH_DB` | a private file (SQLite) where connections are kept; they survive restarts. Only hashes of codes and tokens are stored |
+| `AGENTIC_OS_OAUTH_ISSUER` | the https URL this deployment is reached by, including its base path, for example `https://apps.example.com/projects` (http only for localhost) |
+
+Consent also needs `AGENTIC_OS_APPROVAL_SECRET` (it signs the consent ticket) and a way for a person to sign in.
+
+1. An agent that calls the gateway without a token gets `401` with
+   `WWW-Authenticate: Bearer resource_metadata="<issuer>/.well-known/oauth-protected-resource"`.
+2. It registers itself (`POST /oauth/register`; public clients; redirect URIs must be https, or http to localhost) and
+   sends the person to `/oauth/authorize` with PKCE (S256, required).
+3. The signed-in person sees what it asks for, ticks what it gets (`dashboards.read` starts **unticked**), and allows or
+   refuses. The agent's tenant is that person's tenant.
+4. Access tokens last 15 minutes; refresh tokens rotate. A refresh token used twice ends the whole connection. A
+   connection ends after 90 days whatever happens.
+5. `GET /oauth/connections` lists connections; `POST /oauth/connections/{id}/revoke` (JSON) ends one at once. A tenant
+   approver sees and ends only their tenant's.
+
+Each connection is one agent identity (`agent:conn-…`) across refreshes and restarts, named in the audit, limited to 60
+calls a minute, scoped to its tenant (below) and, under the production profile, bounded by its own authority record
+(`AGENTIC_OS_AUTHORITY_DB`). Reads only, like every agent here.
+
+Only the five discovery, registration, token and revocation routes work without a sign-in. When the issuer has a path,
+a client that only looks for discovery documents at the host's root (`/.well-known/oauth-authorization-server/<path>`)
+needs that path routed to this app as well. **Not yet tested with a third-party MCP client.**
+
 ## Tenants
 
 A deployment that declares tenants (`AGENTIC_OS_TENANT_LIMITS`) limits **every** read to what the token's `--tenant` is
@@ -65,5 +95,5 @@ gate: it names no one.
 ## Not in the shipped image yet
 
 The published Projects image does not install the `mcp` extra, so `AGENT_GATEWAY_MCP=1` needs an image or environment
-that does. REST and per-agent tokens need nothing extra. OAuth 2.1 + PKCE, governed writes, approval cards for an external
-agent's request and a launcher-issued local token are not built.
+that does. REST, per-agent tokens and OAuth need nothing extra. Governed writes, approval cards for an external agent's request,
+a page for managing connections, and a launcher-issued local token are not built.

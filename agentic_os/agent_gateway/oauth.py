@@ -241,15 +241,21 @@ class AuthorizationServer:
         return tokens
 
     # ── revocation (RFC 7009-style) ───────────────────────────────────────────────
-    def revoke(self, token: str) -> None:
+    def revoke(self, token: str, *, client_id: Optional[str] = None) -> Optional[str]:
+        """Revoke a token. With ``client_id`` (RFC 7009), only a token issued to that client: another's is left alone.
+        Returns the id of the connection that ended (a refresh token ends it), else ``None``."""
         digest = _hash_secret(token or "")
-        if self.store.get_access(digest) is not None:
-            self.store.drop_access(digest)
-        else:
-            rec = self.store.get_refresh(digest)
-            if rec is not None:                                # revoking the refresh token ends the connection
-                self.revoke_connection(rec["connection_id"], by="client")
-        self._emit("token_revoked", token_prefix=(token or "")[:3])
+        ended = None
+        access = self.store.get_access(digest)
+        rec = access if access is not None else self.store.get_refresh(digest)
+        if rec is not None and (client_id is None or rec["client_id"] == client_id):
+            if access is not None:
+                self.store.drop_access(digest)
+            else:                                              # revoking the refresh token ends the connection
+                ended = rec["connection_id"]
+                self.revoke_connection(ended, by="client")
+            self._emit("token_revoked", token_prefix=(token or "")[:3], connection_id=rec["connection_id"])
+        return ended
 
     # ── TokenVerifier: opaque access token → GatewayPrincipal (fail-closed) ───────
     def verify(self, token: str, *, audience: Optional[str] = None) -> Optional[GatewayPrincipal]:

@@ -1480,10 +1480,14 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     Writes, mission delegation and the sandbox are intentionally NOT exposed on this surface.
     """
     import hmac
+    import json
+    import logging
     import os
     token = os.environ.get("AGENT_GATEWAY_TOKEN", "").strip()
     agents_file = os.environ.get("AGENT_GATEWAY_AGENTS_FILE", "").strip()
-    if not token and not agents_file:
+    from agentic_os.agent_gateway import oauth_http
+    oauth = oauth_http.from_env(audit=lambda event: logging.getLogger("agentic_os.agent_gateway.oauth").info("%s", json.dumps(event, default=str)))
+    if not token and not agents_file and oauth is None:
         return False
     token_bytes = token.encode("utf-8")
     from agentic_os.agent_gateway.agent_tokens import AgentTokenStore
@@ -1518,6 +1522,10 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                 own = agents.verify(t)
                 if own is not None:
                     return own
+            if oauth is not None:
+                connected = oauth.verify(t)
+                if connected is not None:
+                    return connected
             if token and t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
                 return GatewayPrincipal(Principal("external-agent", "service", (), "demo"),
                                         client_id="external-agent", workspace="demo",
@@ -1563,21 +1571,35 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
 
     from agentic_os.agent_gateway.scope import tenant_project_scope
     registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources(),
-                                   dashboards=_Dashboards() if agents is not None else None, scope=tenant_project_scope)
+                                   dashboards=_Dashboards() if (agents is not None or oauth is not None) else None, scope=tenant_project_scope)
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink
         audit = EventStoreAuditSink.from_path(audit_path)
     else:
         audit = InMemoryAuditSink()
+    def _is_connection(p) -> bool:
+        return (oauth is not None and p.id.startswith(oauth_http.PREFIX)
+                and oauth.server.store.get_connection(p.id[len("agent:"):]) is not None)
+
     def _authorize(p, perm):
         if p.id.startswith("agent:"):                      # a per-agent principal has exactly its own grants
+            if _is_connection(p):
+                return oauth.authorize(p, perm)
             return agents is not None and agents.authorize(p, perm)
         return perm in _GRANTS
+
+    class _Rates:
+        """Calls a minute: a connected (OAuth) agent has the default; a file token has what its entry sets."""
+        @staticmethod
+        def rate_of(p):
+            if _is_connection(p):
+                return oauth.rate_of(p)
+            return agents.rate_of(p) if agents is not None else None
     limits = {}
-    if agents is not None:
+    if agents is not None or oauth is not None:
         from agentic_os.agent_gateway.agent_tokens import AgentRateLimit
-        limits["budget"] = AgentRateLimit(agents)          # an agent whose entry sets rate_per_minute is held to it
+        limits["budget"] = AgentRateLimit(_Rates())
     from agentic_os.mission.profile import is_production
     if is_production():
         # The production profile refuses a gateway without durable authority (and with none configured it still does).
@@ -1591,12 +1613,18 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     rest = RestGatewayAdapter(gateway, verifier)
     endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))
 
+    # an MCP client learns where to get a token from this challenge (RFC 9728)
+    challenge = f'Bearer resource_metadata="{oauth.issuer}/.well-known/oauth-protected-resource"' if oauth is not None else ""
+
+    def _unauthorized() -> HTTPException:
+        return HTTPException(status_code=401, detail="unauthorized", headers={"WWW-Authenticate": challenge} if challenge else None)
+
     @app.get("/api/agent-gateway/capabilities")
     def _agw_caps(authorization: str = Header(default="")):
         try:
             return rest.list_capabilities(authorization)
         except GatewayAuthError:
-            raise HTTPException(status_code=401, detail="unauthorized")
+            raise _unauthorized()
 
     @app.post("/api/agent-gateway/capabilities/{name}/invoke")
     def _agw_invoke(name: str, body: Dict[str, Any] = Body(default={}),
@@ -1604,7 +1632,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         try:
             return rest.invoke(authorization, name, body or {})
         except GatewayAuthError:
-            raise HTTPException(status_code=401, detail="unauthorized")
+            raise _unauthorized()
 
     @app.post("/api/agent-gateway/mcp")
     def _agw_mcp(body: Dict[str, Any] = Body(default={}), authorization: str = Header(default="")):
@@ -1612,7 +1640,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             return endpoint.handle(authorization, str((body or {}).get("method", "")),
                                    (body or {}).get("params") or {})
         except GatewayAuthError:
-            raise HTTPException(status_code=401, detail="unauthorized")
+            raise _unauthorized()
 
     if os.environ.get("AGENT_GATEWAY_MCP", "").strip().lower() in ("1", "true", "yes", "on"):
         _mount_mcp_server(app, gateway, verifier)
@@ -1628,11 +1656,19 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     if getattr(app.state, "agent_gateway_mcp_server", False):
         for method in ("POST", "DELETE"):                  # DELETE ends the client's own MCP session
             policies[f"{method} /api/agent-gateway/mcp-server/{{rest:path}}"] = query
+    if oauth is not None:
+        hub = getattr(prov, "products_hub", None)
+        policies.update(oauth_http.mount(app, oauth, single_owner=lambda: hub.registry.single_owner if hub is not None else ""))
+        app.state.agent_gateway_open_routes = oauth_http.OPEN_ROUTES
+        app.state.agent_gateway_challenge = challenge
+        app.state.oauth_gateway = oauth
     app.state.agent_gateway_policies = policies
     app.state.agent_gateway_registry = registry
 
     # what the sign-in gate may let through to this surface: a PER-AGENT credential only, never the shared bearer
-    app.state.agent_gateway_gate_check = (lambda t: agents.verify(t) is not None) if agents is not None else None
+    app.state.agent_gateway_gate_check = ((lambda t: (agents is not None and agents.verify(t) is not None)
+                                           or (oauth is not None and oauth.verify(t) is not None))
+                                          if (agents is not None or oauth is not None) else None)
     return True
 
 
@@ -2335,7 +2371,9 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # refused request reaches no route, no static file and no other middleware. See agentic_os/projects/operator_gate.py.
     from agentic_os.projects.operator_gate import OperatorGateMiddleware as _OperatorGate, gate_enabled as _gate_enabled
     if _gate_enabled():
-        app.add_middleware(_OperatorGate, agent_check=getattr(app.state, "agent_gateway_gate_check", None))
+        app.add_middleware(_OperatorGate, agent_check=getattr(app.state, "agent_gateway_gate_check", None),
+                           open_routes=getattr(app.state, "agent_gateway_open_routes", frozenset()),
+                           agent_challenge=getattr(app.state, "agent_gateway_challenge", ""))
 
     return app
 
