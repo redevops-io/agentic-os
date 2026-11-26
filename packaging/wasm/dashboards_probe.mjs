@@ -50,7 +50,8 @@ if (out.heavy.length) fail.push(`a server-side dependency was imported: ${out.he
 if (out.qa.planned !== 2 * out.results) fail.push(`planned should be every reported test on both declared platforms (${2 * out.results}), got ${out.qa.planned}`);
 if (out.qa.unexecuted !== out.results || out.drill_unexecuted !== out.results) fail.push("the platform nobody ran must read as not executed, and its drill-down must list exactly those tests");
 if (!out.offered.includes("qa") || !out.offered.includes("portfolio")) fail.push(`QA and portfolio must be offered, got ${out.offered}`);
-if (out.unavailable !== 9) fail.push(`nine dashboards need a connected application, got ${out.unavailable}`);
+const NEEDS_AN_APPLICATION = 10;   // held to the kernel by tests/test_wasm_probe_expectations.py
+if (out.unavailable !== NEEDS_AN_APPLICATION) fail.push(`${NEEDS_AN_APPLICATION} dashboards need a connected application, got ${out.unavailable}`);
 if (!out.survives_reopen) fail.push("the results must still be there when the store is opened again");
 console.log(JSON.stringify(out, null, 1));
 if (fail.length) { console.error("FAIL\n- " + fail.join("\n- ")); process.exit(1); }

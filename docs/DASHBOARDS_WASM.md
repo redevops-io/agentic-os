@@ -56,7 +56,7 @@ credentials — which is arrangement A.
 
 * `agentic_os/dashboards/portable.py`: the dashboards' routes as one function (`PortableDashboards.handle(method, path, query,
   body)`), for a host with no web framework. `GET /api/dashboards/_portable` lists what is available and, for each of the
-  nine application dashboards, what it needs and why it is not available in a page.
+  ten application dashboards, what it needs and why it is not available in a page.
 * `packaging/wasm/build_kernel_zip.py`: the reproducible kernel archive (about 90 KB, 20 modules) a page loads into Pyodide.
   It is a release asset (`dashboards-kernel.zip`) from v0.4.15.
 * `packaging/wasm/dashboards_probe.mjs`: runs that archive in Pyodide and checks the rules.
