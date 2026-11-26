@@ -246,7 +246,7 @@ def test_an_mcp_client_reaches_the_running_app_through_the_shipped_bridge_with_t
             {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "projects_list", "arguments": {}}},
             {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "sources_search", "arguments": {"query": "x"}}}]
     r = subprocess.run([NODE, *cfg["args"]], input="".join(json.dumps(m) + "\n" for m in msgs), capture_output=True, text=True, timeout=60,
-                       env={"PATH": os.environ.get("PATH", ""), **cfg["env"]})
+                       env={"PATH": os.environ.get("PATH", ""), **{k: os.environ[k] for k in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP") if k in os.environ}, **cfg["env"]})
     replies = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
     assert "result" in replies[1], (replies, r.stderr[-400:])                           # on failure, the bridge's own words
     names = sorted(t["name"] for t in replies[1]["result"]["tools"])
