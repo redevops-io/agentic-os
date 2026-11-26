@@ -1471,7 +1471,11 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     ``AGENT_GATEWAY_MCP=1`` and the ``mcp`` extra installed, a real MCP Streamable-HTTP server over the SAME gateway is
     served at ``/api/agent-gateway/mcp-server/`` for standard MCP clients.
 
-    Only READ capabilities are wired (projects/missions/sources), each running the one governed path
+    On a deployment with tenants (``AGENTIC_OS_TENANT_LIMITS``) every read is limited to what the caller's tenant is
+    granted (``agent_gateway/scope.py``). ``dashboards.read`` belongs to per-agent tokens that name it; the shared bearer
+    never has it.
+
+    Only READ capabilities are wired (projects/missions/sources/dashboards), each running the one governed path
     with PolicyEgressEngine on the way out, so PII/secrets are redacted/denied and every call audits.
     Writes, mission delegation and the sandbox are intentionally NOT exposed on this surface.
     """
@@ -1520,7 +1524,46 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                                         scopes=tuple(_GRANTS))
             return None
 
-    registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources())
+    class _Dashboards:
+        """The dashboards the app builds, read for an agent that was granted ``dashboards.read`` by name: the figures and their
+        sources, never the records behind a number. They are built with the access of the AGENT'S TENANT, exactly as for that
+        tenant's own sign-in, so one tenant's agent cannot count another's records."""
+        @staticmethod
+        def _access(svc, principal):
+            from agentic_os.agent_gateway.scope import tenant_is_current
+            if not (principal.principal.id.startswith("agent:") and tenant_is_current(principal.tenant)):
+                return None
+            acc = svc.access(f"requester:{principal.tenant}")
+            return None if acc.basis == "deployment" else acc          # never the unscoped fallback
+
+        def catalog(self, principal):
+            svc = getattr(prov, "dashboards_service", None)
+            acc = self._access(svc, principal) if svc is not None else None
+            if acc is None:
+                return {"dashboards": [], "not_connected": [], "projects": []}
+            c = svc.catalog(acc)
+            return {"dashboards": c["dashboards"], "projects": c.get("projects", []),
+                    "not_connected": [{k: d.get(k) for k in ("id", "title", "why")} for d in c["not_connected"]]}
+
+        def get(self, principal, dashboard_id, days=30, project=""):
+            from agentic_os.dashboards.contracts import Filters
+            from agentic_os.dashboards.service import Forbidden, NotFound
+            svc = getattr(prov, "dashboards_service", None)
+            if svc is None:
+                return {"error": "the dashboards are not available in this build"}
+            acc = self._access(svc, principal)
+            if acc is None or (acc.grant.sources is not None and not acc.grant.sources):
+                return {"error": "not permitted"}
+            try:
+                return svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), acc).to_dict()
+            except NotFound:
+                return {"error": "no such dashboard or project"}
+            except Forbidden:
+                return {"error": "not permitted"}
+
+    from agentic_os.agent_gateway.scope import tenant_project_scope
+    registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources(),
+                                   dashboards=_Dashboards() if agents is not None else None, scope=tenant_project_scope)
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink

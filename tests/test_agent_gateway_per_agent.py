@@ -215,7 +215,7 @@ def test_the_mounted_surface_registers_reads_only(env, tmp_path):
     app = create_app(SampleProjectionProvider())
     caps = list(app.state.agent_gateway_registry.all())
     assert caps and all(not getattr(m, "side_effecting", False) for m in caps)
-    assert all(all(p in AT.READ_GRANTS for p in m.permissions) and m.permissions for m in caps), [(m.name, m.permissions) for m in caps]
+    assert all(all(p in AT.ALLOWED_GRANTS for p in m.permissions) and m.permissions for m in caps), [(m.name, m.permissions) for m in caps]
     assert {k for k in app.state.route_policies if "agent-gateway" in k} == {"POST /api/agent-gateway/capabilities/{name}/invoke", "POST /api/agent-gateway/mcp"}
 
 
