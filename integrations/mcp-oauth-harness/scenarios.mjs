@@ -1,7 +1,7 @@
 // Scenarios for OAuth over the real MCP Streamable-HTTP server, driven by the official TypeScript SDK. Needs WORK (the gateway's work dir) and WT (its worktree).
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { FileProvider, connectClient, connectViaBrowser, consent, person, check, attempt, http, results, ISSUER, MCP_URL } from './lib.mjs';
@@ -17,8 +17,13 @@ const toolNames = async (c) => (await c.listTools()).tools.map((t) => t.name);
 const callList = async (c) => { const r = await c.callTool({ name: 'projects.list', arguments: { arguments: {} } }); return r; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function restartGateway() {
+  const t0 = Date.now(); const say = (m) => console.log(`   [restart +${Math.round((Date.now() - t0) / 1000)}s] ${m}`);
+  say('stopping');
   execFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'stop_gateway.sh'), [PORT, W]);
-  execFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'start_gateway.sh'), [WT, W, PORT]);
+  say('stopped; starting');
+  const r = spawnSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'start_gateway.sh'), [WT, W, PORT], { stdio: ['ignore', 'inherit', 'inherit'], timeout: 240000 });   // no pipes of ours for a daemon to inherit
+  if (r.status !== 0) throw new Error(`start_gateway.sh exited ${r.status} ${r.signal || ''}`);
+  say('started; waiting for discovery');
   for (let i = 0; i < 60; i++) { const r = await attempt(() => fetch(ISSUER + '/.well-known/oauth-authorization-server')); if (r.value?.status === 200) return; await sleep(1000); }
   throw new Error('gateway did not come back');
 }
@@ -53,7 +58,8 @@ const s1 = fresh('main'); let a;
 
 // 3. restart persistence (server and client)
 {
-  await a.client.close();
+  console.log('   [3] closing the first client');
+  await Promise.race([a.client.close(), sleep(15000)]);
   await restartGateway();
   const again = new FileProvider(W + '/client-main.json');          // a new process's view of the same client state
   const r = await connectClient(again, operator);
@@ -146,6 +152,7 @@ const s1 = fresh('main'); let a;
   if (r.value?.client) await r.value.client.close();
 }
 
+const hasValidation = fs.readdirSync(`${WT}/agentic_os/agent_gateway`).some((f) => f.endsWith('.py') && fs.readFileSync(`${WT}/agentic_os/agent_gateway/${f}`, 'utf8').includes('invalid_arguments'));   // the known defect only applies to checkouts without argument validation
 // 8. input schemas are the capability's own, and malformed arguments are rejected the same way on every interface
 {
   const p = fresh('schemas'); const r = await connectClient(p, operator); const tok = p.tokens().access_token; const H = { Authorization: 'Bearer ' + tok };
@@ -164,13 +171,40 @@ const s1 = fresh('main'); let a;
     const mcpOk = mcp.value?.isError === true && mcpJson?.status === 'error' && String(mcpJson?.error || '').startsWith('invalid_arguments');
     const echoed = Object.values(args).some((v) => typeof v === 'string' && v.length > 1 && String(rest.json?.error || '').includes(v));
     const same = restOk && mcpOk && (rest.json.error === mcpJson.error);
-    check(`8.2 ${name} with ${why} is rejected with the same invalid_arguments error on REST and on MCP, and the value is not echoed`, same && !echoed, `REST ${rest.status} ${JSON.stringify(rest.json)?.slice(0, 90)}; MCP isError=${mcp.value?.isError} ${mcpText.slice(0, 90)}`, { xfail: true });   // KNOWN DEFECT until the validation PR lands
+    check(`8.2 ${name} with ${why} is rejected with the same invalid_arguments error on REST and on MCP, and the value is not echoed`, same && !echoed, `REST ${rest.status} ${JSON.stringify(rest.json)?.slice(0, 90)}; MCP isError=${mcp.value?.isError} ${mcpText.slice(0, 90)}`, { xfail: !hasValidation });   // KNOWN DEFECT only on checkouts without argument validation
   }
   const idem = await http('POST', `${ISSUER}/api/agent-gateway/capabilities/projects.list/invoke`, { headers: H, body: { idempotency_key: 'k-1' } });
   check('8.3 idempotency_key is accepted on every capability although no schema declares it', idem.status === 200 && idem.json?.status === 'ok', JSON.stringify(idem.json)?.slice(0, 100));
   const before = (await http('GET', ISSUER + '/api/agent-gateway/capabilities', { headers: H })).status;
   check('8.4 a caller still sees the capability list after invalid calls (they spent no budget or session)', before === 200, before);
   await r.client.close();
+}
+
+
+// 9. product tools over OAuth with tenants: consent grants security.* only where the tenant is granted the product (needs a checkout with product capabilities)
+if (fs.existsSync(`${WT}/agentic_os/agent_gateway/product_capabilities.py`) && fs.existsSync(W + '/products.yaml')) {
+  const ask = (n, scope) => new FileProvider(`${W}/client-${n}.json`, { name: `harness ${n}`, scope });
+  const grantsOf = (c) => c.consent?.offered || [];
+  const withScope = async (n, who, scope, grants) => { fs.rmSync(`${W}/client-${n}.json`, { force: true }); return connectClient(ask(n, scope), who, { grants }); };
+  const acmeR = await withScope('acme-sec', acme, 'projects.read security.read', ['projects.read', 'security.read']);
+  check('9.1 the consent page offers the named product grants (unchecked by default) and tenant acme grants security.read', acmeR.client && (acmeR.consent.offered || []).includes('security.read'), JSON.stringify(acmeR.consent?.offered));
+  const acmeTools = acmeR.client ? await toolNames(acmeR.client) : [];
+  check('9.2 acme\'s connection lists the read product tools and no propose tool (security.propose was not granted)', acmeTools.some((n) => n === 'security.sentinel_posture') && !acmeTools.some((n) => /propose/.test(n)), acmeTools.filter((n) => n.startsWith('security')).join(','));
+  const post = acmeR.client && await attempt(() => acmeR.client.callTool({ name: 'security.sentinel_posture', arguments: {} }));
+  check('9.3 acme can read Sentinel\'s posture through OAuth', post?.value && !post.value.isError, post?.error?.message || JSON.stringify(post?.value?.content)?.slice(0, 140));
+  const gx = await withScope('globex-sec', globex, 'projects.read security.read', ['projects.read', 'security.read']);
+  const gxTools = gx.client ? await toolNames(gx.client) : [];
+  const gxCall = gx.client && await attempt(() => gx.client.callTool({ name: 'security.sentinel_posture', arguments: {} }));
+  const gxText = gxCall?.value?.content?.[0]?.text || gxCall?.error?.message || '';
+  check('9.4 globex consents the same grant but its tenant is not granted the product: the product tools are not offered to it and a call is refused (denied or not permitted), never answered', gx.client && gxTools.filter((n) => n.startsWith('security.')).length === 0 && (gxCall?.error || gxCall?.value?.isError === true) && /denied|not permitted/.test(gxText), `tools=${gxTools.filter((n) => n.startsWith('security')).length} ${gxText.slice(0, 140)}`);
+  const noGrant = await withScope('acme-nogrant', acme, 'projects.read', ['projects.read']);
+  const ngTools = noGrant.client ? await toolNames(noGrant.client) : [];
+  check('9.5 a connection consented WITHOUT security.read has no security tools at all', noGrant.client && !ngTools.some((n) => n.startsWith('security.')), ngTools.join(','));
+  const ngCall = noGrant.client && await attempt(() => noGrant.client.callTool({ name: 'security.sentinel_posture', arguments: {} }));
+  check('9.6 and cannot call one by name', ngCall && (ngCall.error || ngCall.value?.isError), ngCall?.error?.message || JSON.stringify(ngCall?.value?.content)?.slice(0, 120));
+  for (const c of [acmeR, gx, noGrant]) if (c.client) await c.client.close();
+} else {
+  check('9.0 (skipped) this checkout has no product capabilities, so the tenant product-grant scenarios were not run', true, 'skipped');
 }
 
 // 7. protocol negatives over raw HTTP

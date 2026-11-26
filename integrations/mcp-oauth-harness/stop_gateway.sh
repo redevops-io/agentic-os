@@ -4,6 +4,12 @@
 # usage: stop_gateway.sh PORT [WORKDIR]
 set -eu
 PORT="$1"; W="${2:-}"
+# the Sentinel this harness started beside the gateway (port + 1): stopped only if the pid it recorded still holds that port
+if [ -n "$W" ] && [ -f "$W/sentinel.pid" ]; then
+  sp="$(cat "$W/sentinel.pid")"
+  [ "$(lsof -ti "tcp:$((PORT + 1))" -sTCP:LISTEN 2>/dev/null | head -1 || true)" = "$sp" ] && kill "$sp" 2>/dev/null || true
+  rm -f "$W/sentinel.pid"
+fi
 pid="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
 [ -z "$pid" ] && exit 0                                                     # nothing listens there: nothing to stop
 if [ -n "$W" ]; then
