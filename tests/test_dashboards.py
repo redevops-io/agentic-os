@@ -63,10 +63,10 @@ def _env(monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", f"acme={ACME},globex={GLOBEX}")
 
 
-def _app(monkeypatch, tmp_path, *, access="", sentinel=None, now=T0):
+def _app(monkeypatch, tmp_path, *, access="", sentinel=None, now=T0, config=None):
     _env(monkeypatch)
     cfg = tmp_path / "dashboards.yaml"
-    cfg.write_text(CONFIG.format(data=tmp_path / "data", access=access))
+    cfg.write_text((config or CONFIG).format(data=tmp_path / "data", access=access))
     monkeypatch.setenv("AGENTIC_OS_DASHBOARDS", str(cfg))
     if sentinel is not None:
         monkeypatch.setenv("AGENTIC_OS_PRODUCTS", write_registry(tmp_path, sentinel))
@@ -946,3 +946,18 @@ def test_a_misfiled_run_can_be_withdrawn_by_who_may_report_and_by_nobody_else(qa
     d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
     assert not any("wrong-suite" in r["label"] for p in d["panels"] if p["kind"] == "matrix" for r in p["rows"])      # gone at once, not after a cache expiry
     assert c.delete("/api/dashboards/qa/results", params=key, headers={"X-Service-Token": SVC}).status_code == 404
+
+
+def test_a_project_that_reported_but_is_not_declared_has_a_row_in_the_readiness_table(monkeypatch, tmp_path):
+    """With no project declared (the desktop default) any reported project id is accepted. Its results are in the totals, so the table
+    that explains the totals must have its row (found when an agent read the dashboards of the desktop app)."""
+    c, *_ = _app(monkeypatch, tmp_path, config="schema: aos.dashboards/v1\ndata_dir: {data}\n{access}\n")
+    assert _report(c, project="elsewhere", suite="smoke", run="r1", release="9.9.9", results={"a": "passed", "b": "failed"}, at=T0 - 60).status_code == 200
+    assert _report(c, project="other", suite="smoke", run="o1", results={"a": "passed"}, at=T0 - 60).status_code == 200
+    got = c.get("/api/dashboards/qa")
+    d = got.json()
+    assert "panels" in d, (got.status_code, str(d)[:300])
+    rows = {r["cells"]["project"]: r for r in _panel(d, "readiness")["rows"]}
+    assert rows["elsewhere (not declared)"]["cells"]["readiness"] == "Not ready" and rows["elsewhere (not declared)"]["cells"]["failed"] == 1
+    assert rows["other (not declared)"]["cells"]["readiness"] != "Not ready"
+    assert any("9.9.9" in str(x) for x in _panel(d, "by_suite")["x"])               # the reported release label is in the suite's name

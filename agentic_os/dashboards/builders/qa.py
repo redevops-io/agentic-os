@@ -302,6 +302,20 @@ def build(b: Build) -> None:
                          "planned": k["planned"], "coverage": pct(k["executed"], k["planned"]), "passed": k["passed"], "failed": k["failed"],
                          "blocked": k["blocked"], "unexecuted": k["unexecuted"], "unsupported": k["unsupported"]},
                         tone=rd["tone"], drill=f"project:{pid}:open" if rd["state"] == "not_ready" else ""))
+    # a project id that results were reported for but that the configuration does not declare still has a readiness: it is shown,
+    # named for what it is, rather than counted in the totals above and absent from the table that explains them
+    declared = {str(p["id"]) for p in b.projects}
+    for pid in sorted({c[0] for c in m.planned} - declared):
+        if b.f.project and pid != b.f.project:
+            continue
+        rd = m.readiness(pid)
+        k = rd["counts"]
+        b.drill(f"project:{pid}:open", f"{pid} (not declared): what blocks the release",
+                [m.cell_record(x) for st in ("failed", "blocked", "unexecuted") for x in m.cells(st, pid)], columns=cols)
+        rows.append(row({"project": f"{pid} (not declared)", "readiness": rd["label"], "why": "; ".join(rd["reasons"]) or "every planned test passed",
+                         "planned": k["planned"], "coverage": pct(k["executed"], k["planned"]), "passed": k["passed"], "failed": k["failed"],
+                         "blocked": k["blocked"], "unexecuted": k["unexecuted"], "unsupported": k["unsupported"]},
+                        tone=rd["tone"], drill=f"project:{pid}:open" if rd["state"] == "not_ready" else ""))
     d.panels.append(panel("readiness", "Release readiness by project", "table", sources=SRC, span=2, rows=rows,
                           note="Ready means every planned test passed in its latest run and no evidence was rejected.",
                           columns=[col("project", "Project"), col("readiness", "Readiness"), col("why", "Why"), col("planned", "Planned", "right"),
