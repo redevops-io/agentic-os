@@ -124,6 +124,9 @@ directory; `AGENTIC_OS_WRITES_TTL_S` (default 86400) is how long a proposal wait
 (or `app:*`), and `writes:decide` to let its `approver:<tenant>` credential decide. A deployment connects one of each
 application, so two tenants granted the same one see the same data.
 
+A retry with the same `idempotency_key` returns the **original answer** (the request as it was when proposed), never a second
+request; use `<app>.request_status` for its current state.
+
 **Permitted, approval required, or denied.** Every lookup and proposal gets one of three answers, and **an approval only
 ever satisfies "approval required"; it never overrides a denial**:
 
