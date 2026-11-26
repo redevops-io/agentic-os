@@ -46,7 +46,8 @@ def _optional_fields(client: Any, ex: Extraction, doctype: str, base: Sequence[s
         return rows
     rows2 = _read(client, ex, doctype, list(base))
     if rows2 is not None and extra:
-        ex.gap(f"erpnext:{doctype}", f"fields {list(extra)} are not available on this site", why)
+        # custom fields are an optional extension a site may not have: said, but the read is not incomplete without them
+        ex.note(f"erpnext:{doctype}", f"fields {list(extra)} are not available on this site", why)
     return rows2 or []
 
 
