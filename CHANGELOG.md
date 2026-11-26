@@ -15,7 +15,12 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.19; no version set)
+## Unreleased (after v0.4.20; no version set)
+
+## v0.4.20 (Edge Sentinel reads no longer write; CI runs the cross-app checks; images verify against their tag)
+
+- **Behaviour change (Edge Sentinel, #851):** no GET ingests detections any more. Cases are ingested by a background loop (`SENTINEL_SYNC_INTERVAL_S`, default 15 s, 0 turns it off) and by the operator-only `POST /api/v1/sync`, so a case list read right after start can be empty until the first tick. The demo fixture's clock is fixed at start (`EDGE_SENTINEL_DEMO_NOW` pins it).
+- The image release workflow refuses to run unless the branch it runs from is at the release tag: its signed provenance names the commit the workflow ran from, so an image built after `main` had moved (v0.4.19) could not be verified against its tag. **Use v0.4.20 images, not v0.4.19.**
 
 - CI now runs the test files directly under `apps/` (15 files, including route authorisation, fail-closed operator seams and the capability manifest check). No workflow ran them before, so the v0.4.18 statement that a stale manifest fails CI was wrong until now.
 - Edge Sentinel's `POST /api/v1/sync` now has a declared route policy (operator boundary). Without one the route layer refused it on any network request. Found by the checks CI had not been running.

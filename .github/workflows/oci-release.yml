@@ -54,6 +54,9 @@ jobs:
         id: vars
         run: |
           COMMIT="$(git rev-parse HEAD)"
+          # The signed provenance names GITHUB_SHA, the commit this workflow RAN FROM, not the tag it checked out. If the
+          # two differ the image cannot be verified against its release, so nothing is built.
+          [ "$COMMIT" = "$GITHUB_SHA" ] || { echo "::error::main is at $GITHUB_SHA but $REF is $COMMIT: dispatch while main is at the tag (or cut a new release)"; exit 1; }
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
           echo "short=${COMMIT:0:12}" >> "$GITHUB_OUTPUT"
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
