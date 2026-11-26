@@ -17,6 +17,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.22; no version set)
 
+- Agent gateway: ERPNext, support and CRM for external agents behind named grants: record lookups, and **governed writes** an agent only proposes (comment, draft purchase order, private note, add-if-absent company or contact). Each waits in the Mission Runtime's approval gate for a person of its tenant (`/api/writes`, `writes:decide`), runs once and is read back; an unknown outcome is never re-sent. Off until configured (`AGENTIC_OS_WRITES_DIR`, `app:<name>` per tenant).
+- Fixed: egress redaction masked parts of some UUID record ids (its card-number pattern).
+- Fixed: the Twenty writer created a contact when its duplicate lookup failed (a failed lookup was read as "no such person").
 - Fixed: the finance and procurement dashboards counted an invoice or order due **today** as overdue or late (a due date was read as its first instant). Overdue, aging, days overdue and late orders now count whole calendar days (UTC), as the applications do. Found by checking a deployment's figures against its own ERPNext.
 - Agent gateway: Edge Sentinel and redevops-qa tools for external agents behind named grants (`security.read`, `security.propose`, `quality.read`, `quality.run`), each product granted per tenant (`products:<id>`); writes need an `idempotency_key`. An agent can propose and start bounded work, never decide or execute. New `quality.qa_list_runs`.
 - Agent gateway, **stricter**: every call's arguments are checked against the capability's published schema (REST and MCP alike): required inputs and types always; unknown inputs where the schema says `additionalProperties: false`, as every capability the mounted gateway offers does. MCP marks a failed call `isError`. The validator is stdlib-only (`agentic_os.schema_check`).

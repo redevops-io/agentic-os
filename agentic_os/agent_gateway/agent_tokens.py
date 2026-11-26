@@ -46,6 +46,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
 from agentic_os.overlays import Principal
 
+from .app_record_capabilities import GRANTS as APP_GRANTS_TEXT
 from .contracts import GatewayPrincipal
 
 SCHEMA = "aos.agent-gateway.agents/v1"
@@ -55,7 +56,9 @@ READ_GRANTS: FrozenSet[str] = frozenset({"projects.read", "missions.read", "sour
 #: read grants that expose business figures. Never part of a default set: a token has one only when the operator names it.
 NAMED_GRANTS: FrozenSet[str] = frozenset({"dashboards.read",
                                           # the integrated products' tools (product_capabilities.py); two of these stage or start work
-                                          "security.read", "security.propose", "quality.read", "quality.run"})
+                                          "security.read", "security.propose", "quality.read", "quality.run",
+                                          # ERP, support and CRM: record lookups and proposals (app_record_capabilities.py)
+                                          *APP_GRANTS_TEXT})
 ALLOWED_GRANTS: FrozenSet[str] = READ_GRANTS | NAMED_GRANTS
 TOKEN_PREFIX = "aga_"
 MAX_DAYS = 366
@@ -205,12 +208,13 @@ def record_authority(authority_db: str, agent_id: str, grants: List[str], *, ten
                      max_actions: int = MAX_ACTIONS) -> str:
     """Store what this agent may do: exactly the capabilities its grants name, each at its own risk tier, for its tenant,
     until its token ends. No delegation, no spend. Returns the record's digest."""
+    from agentic_os.agent_gateway.app_record_capabilities import manifests as app_manifests  # noqa: PLC0415
     from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES  # noqa: PLC0415
     from agentic_os.agent_gateway.product_capabilities import GRANTS as PRODUCT_GRANTS, manifests as product_manifests  # noqa: PLC0415
     from agentic_os.mission.authority import AuthorityEnvelope, AutonomyBudget, Grant, SqliteEnvelopeStore  # noqa: PLC0415
     held = set(grants) & ALLOWED_GRANTS
     # the product tools only for a token that holds one of their grants: they need the products package's dependencies
-    known = (*READ_CAPABILITIES, *(product_manifests() if held & set(PRODUCT_GRANTS) else ()))
+    known = (*READ_CAPABILITIES, *app_manifests(), *(product_manifests() if held & set(PRODUCT_GRANTS) else ()))
     tiers = {c.name: int(c.risk_tier) for c in known if c.permissions and set(c.permissions) <= held}
     env = AuthorityEnvelope(
         tenant=tenant, principal=f"agent:{agent_id}", mission_id=envelope_key(agent_id),

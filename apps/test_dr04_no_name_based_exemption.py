@@ -75,15 +75,19 @@ def test_only_the_kernel_plane_modules_can_register_an_exemption():
 
 
 def test_the_exact_registrations_are_pinned():
-    """Exactly three modules register, each once, each with a reason; a new registration is a deliberate change to this list."""
+    """Exactly four modules register, each once, each with a reason; a new registration is a deliberate change to this list.
+    The fourth, governed writes: nothing it builds runs without writes being enabled, a named gateway grant, the tenant's
+    application and a person's approval in the Mission Runtime gate (tests/test_governed_writes.py)."""
     sites = []
     for f in sorted((ROOT / "agentic_os").rglob("*.py")):
         tree = ast.parse(f.read_text())
         for n in ast.walk(tree):
             if isinstance(n, ast.Call) and ((isinstance(n.func, ast.Attribute) and n.func.attr == "kernel_governed") or (isinstance(n.func, ast.Name) and n.func.id == "kernel_governed")):
                 sites.append(str(f.relative_to(ROOT)))
-    assert sorted(sites) == ["agentic_os/agent_gateway/external/operator.py", "agentic_os/agent_gateway/social/operator.py", "agentic_os/interaction/operator.py"]
-    assert app_gate.KERNEL_GOVERNED_MODULES == {"agentic_os.agent_gateway.external.operator", "agentic_os.agent_gateway.social.operator", "agentic_os.interaction.operator"}
+    assert sorted(sites) == ["agentic_os/agent_gateway/external/operator.py", "agentic_os/agent_gateway/social/operator.py", "agentic_os/governed_writes/service.py",
+                             "agentic_os/interaction/operator.py"]
+    assert app_gate.KERNEL_GOVERNED_MODULES == {"agentic_os.agent_gateway.external.operator", "agentic_os.agent_gateway.social.operator", "agentic_os.interaction.operator",
+                                                "agentic_os.governed_writes.service"}
 
 
 def test_the_interaction_operator_built_by_the_kernel_runs_under_permissions():

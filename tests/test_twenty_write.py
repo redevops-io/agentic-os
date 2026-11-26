@@ -109,6 +109,19 @@ def test_sequential_upsert_person_same_email_creates_at_most_once(monkeypatch):
     assert second["created"] is False and second["person"]["id"] == "p1"
 
 
+@pytest.mark.parametrize("answer", ["http", "transport"])
+def test_a_failed_person_lookup_creates_nothing(monkeypatch, answer):
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if answer == "transport":
+            raise OSError("connection reset")
+        return _Resp(500)
+
+    monkeypatch.setattr(tw.httpx, "get", fake_get)
+    monkeypatch.setattr(tw.httpx, "post", lambda *a, **k: pytest.fail("created on an unanswered lookup"))
+    out = tw.TwentyWriteClient(base_url="http://twenty.example", api_key="k", shadow=False).upsert_person(name="Dana R", email="dana@example.com")
+    assert out["created"] is False and out["error"].startswith("lookup failed")
+
+
 def test_twenty_write_from_env_requires_both_vars(monkeypatch):
     monkeypatch.delenv("TWENTY_BASE_URL", raising=False)
     monkeypatch.delenv("TWENTY_API_KEY", raising=False)

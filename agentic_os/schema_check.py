@@ -1,7 +1,7 @@
 """A small, stdlib-only validator for the JSON Schema subset the kernel publishes for its tools and capabilities.
 
 It implements only what those schemas use: type (object, string, integer, number, boolean, array), enum, pattern,
-minLength/maxLength, minimum/maximum, required, properties, additionalProperties false, items, maxItems. It raises
+minLength/maxLength, minimum/maximum, required, properties, additionalProperties false, items, minItems/maxItems. It raises
 :class:`SchemaError` listing every violation (field paths, never values).
 
 It lives at the package root, with no third-party import, because the agent gateway validates EVERY call with it: it
@@ -70,6 +70,8 @@ def _check(v: Any, schema: Mapping[str, Any], path: str, out: List[str]) -> None
             if k in v:
                 _check(v[k], sub, f"{path + '.' if path else ''}{k}", out)
     if isinstance(v, list):
+        if "minItems" in schema and len(v) < schema["minItems"]:
+            out.append(f"{path or '$'}: too few items")
         if "maxItems" in schema and len(v) > schema["maxItems"]:
             out.append(f"{path or '$'}: too many items")
         if "items" in schema:

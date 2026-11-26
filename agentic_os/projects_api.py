@@ -1475,9 +1475,10 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     granted (``agent_gateway/scope.py``). ``dashboards.read`` belongs to per-agent tokens that name it; the shared bearer
     never has it.
 
-    Only READ capabilities are wired (projects/missions/sources/dashboards), each running the one governed path
-    with PolicyEgressEngine on the way out, so PII/secrets are redacted/denied and every call audits.
-    Writes, mission delegation and the sandbox are intentionally NOT exposed on this surface.
+    Wired: the reads (projects/missions/sources/dashboards, application records) and, for agents with their own identity
+    and a named grant, product tools and PROPOSALS (Edge Sentinel, test runs, ERP/support/CRM writes). Every call runs the
+    one governed path with PolicyEgressEngine on the way out. Nothing here decides: a person approves in Projects or in the
+    product. Mission delegation and the sandbox are intentionally NOT exposed on this surface.
     """
     import hmac
     import json
@@ -1578,6 +1579,27 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         from agentic_os.agent_gateway import product_capabilities
         from agentic_os.products.tools import ProductTools
         product_capabilities.register(registry, ProductTools(hub))
+    app_writers, app_writes = {}, None
+    if agents is not None or oauth is not None:
+        # ERP, support and CRM: lookups behind named grants; proposals only where a state directory is configured, and each
+        # one waits in the Mission Runtime's gate for a person (agentic_os.governed_writes)
+        from agentic_os.agent_gateway import app_record_capabilities
+        from agentic_os.governed_writes.apps import writers_from_env
+        app_writers = writers_from_env()
+        writes_dir = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
+        if writes_dir and app_writers:
+            from agentic_os.governed_writes.routes import WRITE_ROUTE_POLICIES, make_router
+            from agentic_os.governed_writes.service import GovernedWrites
+            from agentic_os.products.principal import current_principal
+            app_writes = GovernedWrites(writes_dir, app_writers,
+                                        ttl_s=max(60.0, float(os.environ.get("AGENTIC_OS_WRITES_TTL_S", "") or 86400)))
+
+            def _person():
+                hub_ = getattr(prov, "products_hub", None)
+                return current_principal(hub_.registry.single_owner if hub_ is not None else "")
+            app.include_router(make_router(app_writes, _person))
+            app.state.governed_writes = app_writes
+        app_record_capabilities.register(registry, app_writers, app_writes)
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink
@@ -1662,6 +1684,8 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     query = RoutePolicy("projects.agent_gateway_invoke", "operator_boundary",
                         rationale="the gateway authenticates the agent and authorizes each capability call")
     policies = {"POST /api/agent-gateway/capabilities/{name}/invoke": query, "POST /api/agent-gateway/mcp": query}
+    if app_writes is not None:
+        policies.update(WRITE_ROUTE_POLICIES)
     if getattr(app.state, "agent_gateway_mcp_server", False):
         for method in ("POST", "DELETE"):                  # DELETE ends the client's own MCP session
             policies[f"{method} /api/agent-gateway/mcp-server/{{rest:path}}"] = query
@@ -1685,6 +1709,14 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                     cannot[grant] = f"no {kind} product is registered on this deployment"
                 elif not any(tenant_may_use(probe, s.id) for s in mine):
                     cannot[grant] = f"the tenant {tenant} is not granted that product here (products:<id> in AGENTIC_OS_TENANT_LIMITS)"
+            from agentic_os.agent_gateway import app_record_capabilities as records
+            for grant, app_name in records.GRANT_APP.items():
+                if app_name not in app_writers:
+                    cannot[grant] = f"{records.APP_NAMES[app_name]} is not connected on this deployment"
+                elif grant.endswith(".propose") and app_writes is None:
+                    cannot[grant] = "governed writes are not enabled on this deployment (AGENTIC_OS_WRITES_DIR)"
+                elif not records.tenant_may_use_app(probe, app_name):
+                    cannot[grant] = f"the tenant {tenant} is not granted that application here (app:{app_name} in AGENTIC_OS_TENANT_LIMITS)"
             return cannot
 
         policies.update(oauth_http.mount(app, oauth, single_owner=lambda: hub.registry.single_owner if hub is not None else "",

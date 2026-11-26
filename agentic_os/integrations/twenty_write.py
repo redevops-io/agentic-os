@@ -35,16 +35,18 @@ class TwentyWriteClient:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
-    def _find_person_by_email(self, email: str) -> Optional[dict]:
+    def _find_person_by_email(self, email: str) -> "tuple[Optional[dict], Optional[str]]":
+        """(existing person, lookup error). A failed lookup is reported, never treated as "absent": creating on an
+        unanswered lookup is how duplicates are made."""
         try:
             r = httpx.get(f"{self.base_url}/rest/people", params={"filter": f"emails.primaryEmail[eq]:{email}"},
                          headers=self._headers(), timeout=self.timeout)
             if r.status_code >= 400:
-                return None
+                return None, f"lookup failed: http {r.status_code}"
             people = (r.json().get("data", {}) or {}).get("people") or []
-            return people[0] if people else None
-        except Exception:  # noqa: BLE001
-            return None
+            return (people[0] if people else None), None
+        except Exception as exc:  # noqa: BLE001
+            return None, f"lookup failed: {type(exc).__name__}"
 
     def upsert_person(self, *, name: str, email: str, company_id: Optional[str] = None) -> dict:
         """Create the Person if no record with `email` exists yet, else leave the existing one alone
@@ -53,7 +55,9 @@ class TwentyWriteClient:
         if self.shadow:
             return {"shadow": True, "would_upsert": "person", "name": name, "email": email,
                     "company_id": company_id}
-        existing = self._find_person_by_email(email)
+        existing, err = self._find_person_by_email(email)
+        if err:
+            return {"shadow": False, "created": False, "error": err}
         if existing is not None:
             return {"shadow": False, "created": False, "person": existing}
         first, _, last = name.partition(" ")
