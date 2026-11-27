@@ -31,7 +31,7 @@ does not move. **Nobody holds merges** while a release is cut: what is not in th
 does not cancel the commit's checks.
 
 ```bash
-C=<the merge commit of the release PR>
+C="$(git rev-parse origin/main)"     # the merge commit of the release PR, taken right after merging it
 python3 scripts/cut_release.py candidate vX.Y.Z --commit $C                  # integration-checks on exactly that commit (branch rc/vX.Y.Z)
 python3 scripts/cut_release.py check     vX.Y.Z --commit $C                  # it is this version and every run on it passed
 python3 scripts/cut_release.py publish   vX.Y.Z --commit $C --notes NOTES.md # build, probe, tag, DRAFT, re-download, check, publish, images
