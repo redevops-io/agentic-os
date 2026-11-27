@@ -19,7 +19,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .approval_center import ApprovalCenter, Card, DecisionRefused, Person
-from .approver_session import COOKIE, TTL_S, Sessions
+from .approver_session import COOKIE, THROTTLE_DELAY_S, TTL_S, Sessions
 
 PREFIX = "/approvals"
 #: what the sign-in gate lets through with no credential at all: the sign-in page and its answer
@@ -199,12 +199,16 @@ class ApprovalPages:
                                                     "or on this machine (for example through an SSH tunnel to localhost).</p>", 403)
             form = _form(await request.body())
             client = request.client.host if request.client else "unknown"
-            if self.sessions.blocked(client):
-                return _page("Too many attempts", signin_html(base, safe_next(form.get("next", "")), "Too many failed attempts. Wait a few minutes."), 429)
+            import asyncio  # noqa: PLC0415
+            throttled = self.sessions.throttled(client)
+            if throttled:
+                await asyncio.sleep(THROTTLE_DELAY_S)          # before the check: right and wrong take the same time
             value = self.sessions.sign_in(client, token=form.get("token", "").strip(), username=form.get("username", ""),
                                           password=form.get("password", ""))
             if value is None:
-                import asyncio  # noqa: PLC0415
+                if throttled:
+                    return _page("Too many attempts", signin_html(base, safe_next(form.get("next", "")),
+                                 "That credential was not accepted. There have been many failed attempts from this address."), 429)
                 await asyncio.sleep(self.sessions.failure_delay())
                 return _page("Sign in to approve", signin_html(base, safe_next(form.get("next", "")), "That credential was not accepted."), 401)
             out = RedirectResponse(base + safe_next(form.get("next", "")), 303, headers=HEADERS)

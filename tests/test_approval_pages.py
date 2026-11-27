@@ -232,9 +232,6 @@ def test_sign_in_refuses_wrong_cross_site_cleartext_and_repeated_attempts(world)
     assert ok.status_code == 303 and "secure" in ok.headers["set-cookie"].lower()
     operator = world["browser"]()
     assert sign_in(operator, username="operator", password="p" * 24).status_code == 303
-    for _ in range(9):
-        last = sign_in(c, "y" * 40)
-    assert last.status_code == 429 and sign_in(c, A_APPROVER).status_code == 429       # locked out, even with the right one
 
 
 def test_other_peoples_failures_never_lock_an_approver_out(world):
@@ -245,9 +242,43 @@ def test_other_peoples_failures_never_lock_an_approver_out(world):
     for n in range(FAILURES_IN_ALL * 10):                                       # a flood from many (or forged) addresses
         s.sign_in(f"attacker-{n}", token="z" * 40)
     assert s.failure_delay() == FLOOD_DELAY_S and len(s._all_failures) <= FAILURES_IN_ALL * 4
-    assert not s.blocked("the-approver") and s.sign_in("the-approver", token=A_APPROVER)
+    assert not s.throttled("the-approver") and s.sign_in("the-approver", token=A_APPROVER)
     now[0] += 301
     assert s.failure_delay() == 0.0
+
+
+def test_failed_sign_ins_never_stop_a_correct_credential_even_from_the_same_address(world, monkeypatch):
+    """The address is whatever the server reports, and behind a proxy the caller may choose it. So strangers' failures
+    can be made to carry an approver's own address: the approver must still get in."""
+    from agentic_os.projects import approval_pages
+    from agentic_os.projects.approver_session import FAILURES_PER_CLIENT
+    monkeypatch.setattr(approval_pages, "THROTTLE_DELAY_S", 0.0)
+    stranger = world["browser"]()
+    answers = [sign_in(stranger, "y" * 40).status_code for _ in range(FAILURES_PER_CLIENT * 3)]
+    assert answers == [401] * FAILURES_PER_CLIENT + [429] * (FAILURES_PER_CLIENT * 2)
+    assert sign_in(world["browser"](), A_APPROVER).status_code == 303                 # same address, correct token
+    assert sign_in(world["browser"](), username="operator", password="p" * 24).status_code == 303
+    assert sign_in(world["browser"](), "y" * 40).status_code == 429                    # which clears nothing for wrong ones
+
+
+def test_a_throttled_address_waits_before_the_check_and_its_record_stays_small(world, monkeypatch):
+    from agentic_os.projects import approval_pages
+    from agentic_os.projects.approver_session import FAILURES_PER_CLIENT
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+    c = world["browser"]()
+    for _ in range(FAILURES_PER_CLIENT):
+        sign_in(c, "y" * 40)
+    monkeypatch.setattr("asyncio.sleep", sleep)
+    monkeypatch.setattr(approval_pages, "THROTTLE_DELAY_S", 0.25)
+    assert sign_in(world["browser"](), A_APPROVER).status_code == 303 and waits == [0.25]
+    assert sign_in(c, "y" * 40).status_code == 429 and waits == [0.25, 0.25]          # right and wrong waited alike
+    s = Sessions(clock=lambda: 1000.0)
+    for _ in range(500):
+        s.sign_in("one-address", token="z" * 40)
+    assert s.throttled("one-address") and len(s._failures["one-address"]) == FAILURES_PER_CLIENT
 
 
 def test_signing_in_never_redirects_elsewhere(world):

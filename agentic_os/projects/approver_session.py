@@ -23,11 +23,13 @@ COOKIE = "aos_approver"
 TTL_S = 8 * 3600
 IDLE_S = 1800
 MAX_SESSIONS = 500
-#: failed sign-ins one client address may make in five minutes before it is refused; and the number from everywhere past
-#: which each further FAILURE is slowed. Nobody is refused for what others did: an overall lockout would let anyone on the
-#: internet keep every approver out.
+#: Limits only ever refuse or slow WRONG answers. A configured credential always signs in, whatever anyone has failed
+#: before it: a client address is not proof of who is asking (behind a proxy that trusts ``X-Forwarded-For`` the caller
+#: chooses it), so a limit that refused the right credential would let a stranger keep a chosen approver out.
+#: After this many failures in five minutes from one address, its next attempts all wait the same time before they are
+#: checked, and its wrong ones are answered 429. Past the second number from everywhere, every failure is slowed.
 FAILURES_PER_CLIENT, FAILURES_IN_ALL, FAILURE_WINDOW_S = 8, 60, 300
-FLOOD_DELAY_S = 2.0
+FLOOD_DELAY_S = THROTTLE_DELAY_S = 2.0
 
 
 def _digest(value: str) -> str:
@@ -100,8 +102,8 @@ class Sessions:
             q.popleft()
         return len(q)
 
-    def blocked(self, client: str) -> bool:
-        """This client failed too often itself."""
+    def throttled(self, client: str) -> bool:
+        """This address has failed too often: its attempts are slowed and its wrong ones answered 429."""
         with self._lock:
             return self._recent(self._failures.get(client, deque()), self.clock()) >= FAILURES_PER_CLIENT
 
@@ -113,16 +115,15 @@ class Sessions:
             return FLOOD_DELAY_S if self._recent(self._all_failures, self.clock()) >= FAILURES_IN_ALL else 0.0
 
     def sign_in(self, client: str, *, token: str = "", username: str = "", password: str = "") -> Optional[str]:
-        """The new session's cookie value, or None. Refused attempts count against the client."""
-        if self.blocked(client):
-            return None
+        """The new session's cookie value, or None. A configured credential is never refused; a wrong one counts against
+        the address it came from."""
         found = identify(token=token, username=username, password=password)
         with self._lock:
             now = self.clock()
             if found is None:
                 if len(self._failures) > 1000:
                     self._failures.clear()
-                self._failures.setdefault(client, deque()).append(now)
+                self._failures.setdefault(client, deque(maxlen=FAILURES_PER_CLIENT)).append(now)
                 self._all_failures.append(now)
                 while len(self._all_failures) > FAILURES_IN_ALL * 4:           # bounded, however long a flood lasts
                     self._all_failures.popleft()

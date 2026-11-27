@@ -173,8 +173,12 @@ ERPNext.
 requester) token. The session is a cookie (HttpOnly, SameSite=Lax) naming a server-side record that lives 8 hours at most
 and 30 idle minutes; removing or replacing the credential ends it at once, as does a restart. A decision also needs the
 session's CSRF token and the same origin. Sign-in is refused over plain HTTP except from this machine (an SSH tunnel to
-localhost); a client address that keeps failing is refused for five minutes, and during a flood failed answers are
-slowed. Nobody is locked out by other people's failures. Behind `PROJECTS_OPERATOR_GATE`, a session opens these pages and nothing else.
+localhost). **A configured credential always signs in**, whatever has failed before it: limits only slow or refuse wrong
+answers. An address with eight failures in five minutes has its next attempts delayed and its wrong ones answered 429;
+during a flood from many addresses every failure is slowed. These limits are not what protects a credential: behind a
+proxy the caller may choose the address the server sees, and the other gated routes accept the same operator password
+without an attempt limit. Use long random credentials. Behind `PROJECTS_OPERATOR_GATE`, a session opens these pages and
+nothing else.
 
 The pages apply what the APIs apply: a tenant approver needs `writes:decide` for a governed write and `projects:write`
 plus the product's `products:<id>` for a product action; a requester never decides a write, and decides nothing once its
