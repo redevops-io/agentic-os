@@ -244,6 +244,7 @@ def test_findings_name_what_they_did_not_evaluate_and_show_message_text_only_wit
     out = plain["output"]
     kinds = {f["kind"] for f in out["findings"]}
     assert "adjustment_without_verified_authorization" in kinds, out["findings"]          # a comment saying "approved" is a claim, never a verification
+    assert all(f["recorded"]["kind"] in ("discount", "return") and f["recorded"]["on"] for f in out["findings"] if f["subject"].endswith((":discount", ":sale")))
     assert set(out["not_evaluated"]) == {"recorded_without_rationale", "commitment_without_record", "decision_not_executed"}
     assert out["withheld"]["count"] > 0 and all(not f["evidence"] for f in out["findings"])
     assert SECRET_NOTE not in json.dumps(out) and CRM_WORDS not in json.dumps(out)

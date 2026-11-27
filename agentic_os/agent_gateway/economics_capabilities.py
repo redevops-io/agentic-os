@@ -230,9 +230,13 @@ def _findings(client: Any, readers: Mapping[str, Any], principal: GatewayPrincip
     events = [e for e in ex.events if not customer or e.subjects.get("customer") == customer]
     found = findings.reconcile_both(events, {}, (), (), visible)
     by_id = {c.ref.id: c for c in visible}
+    recorded = {e.id: e for e in ex.events}
     out = []
     for f in found[:MAX_ITEMS * 5]:
         row = f.to_json()
+        e = recorded.get(f.subject)
+        if e is not None:                                  # say WHAT was recorded: a credit note is subject "<invoice>:sale" and must not read as something else
+            row["recorded"] = {"kind": e.kind.value, "on": e.at, "basis": e.basis.value, "invoice": e.subjects.get("invoice", "")}
         row["evidence"] = [{**by_id[r].ref.to_json(), "excerpt": by_id[r].text[:MAX_EXCERPT]} for r in f.evidence if r in by_id][:MAX_ITEMS]
         row["evidence_count"] = len(row["evidence"])
         out.append(row)
