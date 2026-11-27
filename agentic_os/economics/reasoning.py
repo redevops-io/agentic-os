@@ -113,9 +113,16 @@ def explain_adjustment(event: EconomicEvent, comms_by_id: Mapping[str, Communica
     # the rest of a conversation a linked message belongs to is context for it (a customer's acceptance follows the company's offer)
     threads = {(comms_by_id[i].ref.provenance.provider, comms_by_id[i].ref.thread) for i in ids if i in comms_by_id}
     shown = [c for c in comms_by_id.values() if (c.ref.provenance.provider, c.ref.thread) in threads and c.customer == event.subjects.get("customer")]
-    shown = [c for c in shown if not untrusted(c.text)] or []
     if untrusted_ids := [c.ref.id for c in comms_by_id.values() if (c.ref.provenance.provider, c.ref.thread) in threads and untrusted(c.text)]:
         out.notes.append(f"untrusted instruction-like text in {untrusted_ids}: reported, not used")
+    return explain_shown(event, shown, comms_by_id, complete, out)
+
+
+def explain_shown(event: EconomicEvent, shown: Sequence[Communication], comms_by_id: Mapping[str, Communication], complete: Complete, out: Optional["Explanation"] = None) -> "Explanation":
+    """The model step and the guards of ``explain_adjustment`` for an already chosen set of messages. How the set was chosen (correlation edges, a semantic search, a context plan) is the
+    caller's; instruction-like text is dropped here whatever chose it, and a reason is kept only if the messages it cites were shown."""
+    out = out or Explanation(event.id, str(abs(event.amount)), "unknown", None)
+    shown = [c for c in shown if not untrusted(c.text)]
     if not shown:
         out.notes.append("no linked communication for this event")
         return out

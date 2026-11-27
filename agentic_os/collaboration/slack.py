@@ -65,6 +65,32 @@ class SlackCollaborationProvider:
             out.append(self.normalize_event({"team_id": "", "event": {**m, "channel": channel}}))
         return out
 
+    def read_history(self, channel: str, *, oldest: str = "", page: int = 200, max_pages: int = 50) -> list[InboundEvent]:
+        """Every top-level message of a channel (``conversations.history``), oldest first, with each thread's replies (``conversations.replies``). Read-only. A page that fails raises
+        ``SlackError``, and so does a history that is still ``has_more`` after ``max_pages``: a cut history is never returned as a complete one."""
+        out: list[InboundEvent] = []
+        cursor, pages = "", 0
+        while True:
+            payload = {"channel": channel, "limit": page}
+            if oldest:
+                payload["oldest"] = oldest
+            if cursor:
+                payload["cursor"] = cursor
+            resp = self._call("conversations.history", payload)
+            pages += 1
+            for m in resp.get("messages", []) or []:
+                out.append(self.normalize_event({"team_id": "", "event": {**m, "channel": channel}}))
+                if m.get("reply_count") and m.get("ts"):
+                    replies = self.read_thread(channel, m["ts"], limit=200)
+                    out.extend(r for r in replies if r.message_id != m["ts"])
+            cursor = ((resp.get("response_metadata") or {}).get("next_cursor") or "")
+            if not resp.get("has_more") or not cursor:
+                break
+            if pages >= max_pages:
+                raise SlackError("history_incomplete: more pages than max_pages")
+        out.sort(key=lambda e: float(e.ts or 0))
+        return out
+
     # ── outbound / actions ───────────────────────────────────────────────────────────────────────────────
     def post_message(self, msg: OutboundMessage) -> str:
         payload = {"channel": msg.channel, "text": msg.text}
