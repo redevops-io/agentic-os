@@ -11,10 +11,13 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from agentic_os import financial_access
+
 from . import access as accessmod
 from .access import Access
 from .build import Build
-from .builders import business, ops, qa
+from .builders import business, economics, ops, qa
+from .builders.self_improvement import self_improvement
 from .config import DashboardsConfig, config_from_env
 from .contracts import NOT_CONNECTED, UNAUTHORIZED, Dashboard, Drill, Filters, Record
 from .sources import SOURCE_META, Context, SourceCache
@@ -22,6 +25,9 @@ from .store import DAY, DashboardStore, open_store
 
 MAX_DRILL = 200
 FRESH_MIN_INTERVAL_S = 5.0
+#: how long a built dashboard may be handed out again while nothing it was built from has changed
+BUILD_MEMO_S = 30.0
+BUILD_STALE_OK_S = 120.0     # an older build is still SERVED this long while one background build replaces it
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,8 @@ DEFINITIONS: Tuple[Definition, ...] = (
                "How missions end, what fails, and what is waiting for a person."),
     Definition("revenue", "Revenue and sales", "P1", "Business", ("twenty", "metabase"), business.revenue, "Pipeline, wins and stalled deals from the CRM."),
     Definition("finance", "Financial health", "P1", "Business", ("erpnext", "lago"), business.finance, "Receivables, payables, overdue invoices and billing."),
+    Definition("economics", "Profit and loss events", "P1", "Business", ("economics",), economics.build,
+               "Profit per customer after discounts, support and rework, what cancellations and discounts cost and who approved them, supplier cost, payments the bank does not confirm."),
     Definition("market", "Market and conversion", "P1", "Business", ("umami",), business.market, "Traffic, top pages and the path from visitor to won deal."),
     Definition("support", "Customer support", "P1", "Business", ("chatwoot",), business.support, "Backlog, response time and conversations waiting on you."),
     Definition("procurement", "Suppliers and procurement", "P1", "Business", ("erpnext",), business.procurement, "Open and late purchase orders, spend by supplier."),
@@ -55,11 +63,14 @@ DEFINITIONS: Tuple[Definition, ...] = (
                "Component health, product readiness and deployment findings."),
     Definition("knowledge", "Knowledge and data quality", "P2", "Operations", ("context_sources",), ops.knowledge,
                "Context sources, what was indexed or skipped, and what is stale."),
+    Definition("self_improvement", "Self-improvement", "P2", "Quality", ("sim_runs",), self_improvement,
+               "What the harness optimizer tried: predictions written before evaluation, measured outcomes, accepted and rejected edits, "
+               "regressions, transfer between runs and rollbacks."),
 )
 BY_ID = {d.id: d for d in DEFINITIONS}
 #: every source a dashboard reads (not only the ones that decide whether it is offered), fetched together before it is built
 WARM = {"portfolio": ("missions", "attention", "qa", "qa_ingest", "sentinel"), "missions": ("missions", "attention"), "market": ("umami", "twenty"),
-        "revenue": ("twenty", "metabase"), "finance": ("erpnext", "lago", "metabase"), "marketing": ("postiz", "listmonk")}
+        "revenue": ("twenty", "metabase"), "finance": ("erpnext", "lago", "metabase"), "economics": ("economics",), "marketing": ("postiz", "listmonk")}
 
 
 class NotFound(LookupError):
@@ -68,6 +79,10 @@ class NotFound(LookupError):
 
 class Forbidden(PermissionError):
     pass
+
+
+class NeedsFinancialGrant(Forbidden):
+    """Refused for want of the financial-data grant alone; its message says what to ask for."""
 
 
 def parse_filters(q: Mapping[str, Any], *, now: float) -> Filters:
@@ -103,6 +118,9 @@ class DashboardService:
                            clients=dict(clients or {}))
         self.cache = SourceCache(self.ctx)
         self._last_fresh = -1e9
+        self._memo: Dict[Any, Any] = {}
+        self._memo_lock = __import__("threading").Lock()
+        self._rebuilding: set = set()
 
     # ── projects ──────────────────────────────────────────────────────────────────────────────────
     def _provider_projects(self) -> List[Dict[str, Any]]:
@@ -136,10 +154,13 @@ class DashboardService:
         return self.cache.get(sid).status.state
 
     def catalog(self, acc: Access) -> Dict[str, Any]:
-        shown, hidden = [], []
+        shown, hidden, locked = [], [], []
         self.cache.warm([sid for df in DEFINITIONS for sid in df.needs_any if acc.source(sid)])
         for df in DEFINITIONS:
             states = {sid: self._source_state(sid, acc) for sid in df.needs_any}
+            if all(st in (NOT_CONNECTED, UNAUTHORIZED) for st in states.values()) and self._only_money_missing(df, acc):
+                locked.append({"id": df.id, "title": df.title, "detail": financial_access.refusal(f"the {df.title} dashboard")})
+                continue
             if any(st not in (NOT_CONNECTED, UNAUTHORIZED) for st in states.values()):
                 shown.append({"id": df.id, "title": df.title, "priority": df.priority, "group": df.group, "about": df.about,
                               "sources": [{"id": sid, "label": SOURCE_META[sid][0], "state": st} for sid, st in states.items() if st != NOT_CONNECTED]})
@@ -149,7 +170,7 @@ class DashboardService:
                 entry = {"id": df.id, "title": df.title, "priority": df.priority, "about": df.about,
                          "connect": sorted({SOURCE_META[sid][0] for sid in df.needs_any})}
                 # How to enable a source (and what its connection reports) is said only to a caller who may read that source:
-                # for anyone else the entry stays what it was, a title and the applications it is built on. (Same as main, #823.)
+                # for anyone else the entry stays what it was, a title and the applications it is built on.
                 needs = []
                 for sid in df.needs_any:
                     if acc.source(sid):
@@ -161,9 +182,13 @@ class DashboardService:
                     entry["needs"] = needs
                 hidden.append(entry)
         projects = [p for p in self.projects() if acc.project(str(p["id"]))]
-        return {"dashboards": shown, "not_connected": hidden, "projects": projects,
+        return {"dashboards": shown, "not_connected": hidden, "needs_financial_grant": locked, "projects": projects,
                 "access": {"principal": acc.principal, "scoped": acc.scoped, "basis": acc.basis},
                 "history": {"durable": self.store.durable}, "config_errors": len(self.config.errors), "generated_at": self.clock()}
+
+    def _only_money_missing(self, df: Any, acc: Access) -> bool:
+        enabled = [sid for sid in df.needs_any if self.cache.enabled(sid)]
+        return bool(enabled) and all(acc.lacks_money(sid) for sid in enabled)
 
     # ── build / drill ─────────────────────────────────────────────────────────────────────────────
     def build(self, dashboard_id: str, filters: Filters, acc: Access, *, fresh: bool = False) -> Dashboard:
@@ -172,6 +197,8 @@ class DashboardService:
             raise NotFound(dashboard_id)
         states = [st for st in (self._source_state(sid, acc) for sid in df.needs_any) if st != NOT_CONNECTED]
         if states and all(st == UNAUTHORIZED for st in states):
+            if self._only_money_missing(df, acc):
+                raise NeedsFinancialGrant(financial_access.refusal(f"the {df.title} dashboard"))
             raise Forbidden(dashboard_id)
         if filters.project and not acc.project(filters.project):
             raise Forbidden(filters.project)
@@ -182,6 +209,50 @@ class DashboardService:
             self._last_fresh = time.monotonic()
             self.cache.invalidate()
         self.cache.warm([sid for sid in WARM.get(df.id, df.needs_any) if acc.source(sid)])
+        # A dashboard already built from exactly these reads, for exactly this caller and these filters, is the same dashboard:
+        # it is handed out again instead of being rebuilt (the QA model walks every result of every loaded run). It is dropped
+        # as soon as any read is replaced, and after BUILD_MEMO_S regardless, because some figures depend on the time of day.
+        memo_key = (df.id, filters, acc.principal, acc.grant, acc.basis)
+        gen, epoch, now_m = self.cache.generation, self.cache.epoch, time.monotonic()
+        with self._memo_lock:
+            hit = self._memo.get(memo_key)
+        if hit and hit[3] == epoch:
+            if hit[0] == gen and now_m - hit[1] < BUILD_MEMO_S:
+                return hit[2]
+            # Older than that, or a source was re-read behind it: nobody waits for the rebuild (the QA model takes seconds on
+            # a large history, and the sources are re-read every few seconds under traffic, so somebody always did). The
+            # previous build is served as it is - its numbers and its drill-downs are one snapshot, and it says when it was
+            # generated - while ONE background build replaces it. Never after a write or a forced refresh (the epoch).
+            if now_m - hit[1] < BUILD_STALE_OK_S and self._rebuild_behind(memo_key, df, filters, acc, states):
+                return hit[2]
+        return self._build_now(memo_key, df, filters, acc, states)
+
+    def _rebuild_behind(self, memo_key: Any, df: Any, filters: Filters, acc: Access, states: List[str]) -> bool:
+        """Start one background build for this key. False = it could not be started (no threads): the caller builds."""
+        with self._memo_lock:
+            if memo_key in self._rebuilding:
+                return True
+            self._rebuilding.add(memo_key)
+
+        def run() -> None:
+            try:
+                self._build_now(memo_key, df, filters, acc, states)
+            except Exception:      # noqa: BLE001  (the next request builds in the foreground and reports the error to its caller)
+                with self._memo_lock:
+                    self._memo.pop(memo_key, None)
+            finally:
+                with self._memo_lock:
+                    self._rebuilding.discard(memo_key)
+        try:
+            __import__("threading").Thread(target=run, name=f"dash-build-{df.id}", daemon=True).start()
+        except RuntimeError:
+            with self._memo_lock:
+                self._rebuilding.discard(memo_key)
+            return False
+        return True
+
+    def _build_now(self, memo_key: Any, df: Any, filters: Filters, acc: Access, states: List[str]) -> Dashboard:
+        gen, epoch, now_m = self.cache.generation, self.cache.epoch, time.monotonic()
         d = Dashboard(id=df.id, title=df.title, priority=df.priority)
         b = Build(dashboard=d, cache=self.cache, access=acc, store=self.store, filters=filters, projects=self.projects(), now=self.clock())
         df.builder(b)
@@ -193,6 +264,11 @@ class DashboardService:
             d.empty = f"This dashboard needs {need}, which is not connected on this deployment. What is shown comes from other connected applications only."
         connected = [s for s in d.sources if s.state != NOT_CONNECTED]
         d.sources = connected or d.sources          # a source that was never connected is not listed next to ones that are
+        if self.cache.generation == gen:            # nothing was re-read while this was being built: it is a faithful snapshot
+            with self._memo_lock:
+                if len(self._memo) >= 64:
+                    self._memo.pop(min(self._memo, key=lambda k: self._memo[k][1]))
+                self._memo[memo_key] = (gen, now_m, d, epoch)
         return d
 
     def drill(self, dashboard_id: str, key: str, filters: Filters, acc: Access, *, limit: int = MAX_DRILL) -> Dict[str, Any]:
@@ -270,6 +346,8 @@ class DashboardService:
             return None
         try:
             d = self.build(did, filters or parse_filters({}, now=self.clock()), acc)
+        except NeedsFinancialGrant as e:
+            return {"text": str(e), "topic": "Dashboards"}
         except (Forbidden, NotFound):
             return {"text": "You do not have access to that dashboard.", "topic": "Dashboards"}
         srcs = "; ".join(f"{s.label} ({s.state}{', read ' + _ago(d.generated_at - s.observed_at) if s.observed_at else ''})" for s in d.sources) or "no source"
@@ -300,4 +378,5 @@ def _ago(seconds: float) -> str:
     return "just now" if s < 60 else f"{s // 60} min ago" if s < 3600 else f"{s // 3600} h ago"
 
 
-__all__ = ["DashboardService", "Definition", "DEFINITIONS", "BY_ID", "NotFound", "Forbidden", "parse_filters", "MAX_DRILL"]
+__all__ = ["DashboardService", "Definition", "DEFINITIONS", "BY_ID", "NotFound", "Forbidden", "NeedsFinancialGrant", "parse_filters",
+           "MAX_DRILL"]

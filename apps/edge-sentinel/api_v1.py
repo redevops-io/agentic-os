@@ -138,11 +138,11 @@ def _replay_guard():
     return _REPLAY
 
 
-def human(request: Request, capability: str, inputs: dict) -> Principal:
+def human(request: Request, capability: str, inputs: dict, gate: str = "ban_ip") -> Principal:
     """A person: a session/Basic user with the operator role, or the service credential + a verified approval token for a LINKED user.
     A body field never names the actor."""
     p = current(request)
-    _gate("ban_ip")
+    _gate(gate)
     if p.kind == "user":
         if not p.at_least("operator"):
             raise _err(403, "role_required", "deciding and executing need the operator role", role="operator")
@@ -169,8 +169,8 @@ def _body(data) -> dict:
 
 
 def _sync(force: bool = False) -> None:
-    if force or time.time() - _SYNC["ts"] > 4.0:
-        _SYNC["ts"] = time.time()
+    """Reads do not ingest. Only the background loop and an explicit, operator-authorised ``POST /sync`` do."""
+    if force:
         live.sync_cases()
 
 
@@ -294,9 +294,15 @@ def decisions(limit: int = 100, cursor: str = "", p: Principal = Depends(viewer)
 
 # ── cases and evidence ───────────────────────────────────────────────────────────────────────────────────────
 
+@router.post("/sync")
+def sync(p: Principal = Depends(operator), _rl=Depends(ratelimit.rate_limit)):
+    """Ingest the core's current alerts into cases NOW. The only request that does; every GET reads what is stored."""
+    ids = live.sync_cases()
+    return {"synced": len(ids), "case_ids": ids, "synced_at": live.last_sync_at()}
+
+
 @router.get("/cases")
 def cases(status: str = "", severity: str = "", q: str = "", limit: int = 50, cursor: str = "", p: Principal = Depends(viewer)):
-    _sync()
     try:
         return _hs().list_cases(status=status, severity=severity, q=q[:80], limit=limit, cursor=cursor or None)
     except ValueError:
@@ -305,7 +311,6 @@ def cases(status: str = "", severity: str = "", q: str = "", limit: int = 50, cu
 
 @router.get("/cases/{case_id}")
 def case(case_id: str, p: Principal = Depends(viewer)):
-    _sync()
     c = _hs().get_case(case_id)
     if c is None:
         raise _err(404, "not_found", f"unknown case '{case_id}'")
@@ -347,11 +352,30 @@ async def open_case(request: Request, p: Principal = Depends(operator), _rl=Depe
         raise _err(409, e.code, str(e)) from None
 
 
+@router.post("/cases/{case_id}/resolution")
+async def resolve_case(case_id: str, request: Request, _rl=Depends(ratelimit.rate_limit)):
+    """Close a case that was opened from a quality finding (`qa.finding`), on the record of a re-test that passed. A person's decision,
+    bound to the case and the exact record: a service credential alone cannot do it."""
+    current(request)                                   # authenticate before looking at the body
+    body = _body(await _json(request))
+    if set(body) - {"evidence", "digest"}:
+        raise _err(422, "invalid_body", "body must be {evidence: {...}, digest: <64 hex>}")
+    try:
+        ev = live.clean_resolution(body.get("evidence"))
+    except ValueError as e:
+        raise _err(422, "invalid_evidence", str(e)) from None
+    digest = body.get("digest")
+    if not isinstance(digest, str) or digest != live.resolution_digest(case_id, ev):
+        raise _err(422, "digest_required", "digest is required and must be the digest of this case and this re-test record")
+    p = human(request, "sentinel.resolve_case", {"case_id": case_id, "digest": digest}, gate="threat_summary")
+    _ensure_active(case_id)
+    return _live_errors(lambda: live.resolve_finding_case(case_id, ev, actor=p.actor, via=p.via))
+
+
 # ── actions: queue, decision, execution, verification ────────────────────────────────────────────────────────
 
 @router.get("/actions")
 def actions(state: str = "", limit: int = 50, cursor: str = "", p: Principal = Depends(viewer)):
-    _sync()
     try:
         return _hs().list_actions(state=state, limit=limit, cursor=cursor or None)
     except ValueError:
@@ -449,7 +473,6 @@ async def execute(case_id: str, request_id: str, request: Request, _rl=Depends(r
 
 @router.get("/changes")
 def changes(after: int = 0, limit: int = 100, p: Principal = Depends(viewer)):
-    _sync()
     return _hs().changes(after, limit)
 
 

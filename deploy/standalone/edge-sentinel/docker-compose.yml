@@ -32,7 +32,7 @@ services:
     # no published ports: only Sentinel on the private network talks to the LAPI
 
   edge-sentinel:
-    image: ${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel:0.6.4}
+    image: ${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel:0.6.7}
     restart: unless-stopped
     depends_on:
       crowdsec:
@@ -56,6 +56,7 @@ services:
       SENTINEL_BLOCK_ALLOW_NETWORKS: "${SENTINEL_BLOCK_ALLOW_NETWORKS:-}"
       # synthetic fixture data and no external reads or writes, for a first look: set to 1
       EDGE_SENTINEL_DEMO: "${EDGE_SENTINEL_DEMO:-}"
+      SENTINEL_ENFORCEMENT_PROBE: "${SENTINEL_ENFORCEMENT_PROBE:-}"
       # development only (unauthenticated reads, no production profile): AGENTIC_OS_PROFILE=development and SENTINEL_REQUIRE_AUTH=0
     secrets:
       - operator_password

@@ -255,6 +255,8 @@ def test_the_operator_signs_in_once_and_the_decision_then_execution_workflow_run
     live = importlib.import_module("edge-sentinel.live")
     live.reset_store()
     monkeypatch.setattr(core, "fetch_alerts", lambda: [ALERT])
+    assert gated.get("/api/cases", auth=CRED).json()["cases"] == []        # a read ingests nothing
+    live.sync_cases()                                                     # what the background loop does on its next tick
     cases = gated.get("/api/cases", auth=CRED).json()["cases"]
     assert len(cases) == 1 and cases[0]["status"] == "AWAITING_APPROVAL"
     cid, rid = cases[0]["case_id"], cases[0]["open_action"]["request_id"]
@@ -325,10 +327,11 @@ REFERENCE_ENV = {
 
 #: The routes added after the reference contract was frozen. Adding a route means adding it HERE, deliberately, in the same change.
 ADDED_ROUTES = {
-    ("GET", "/readyz"),
+    ("GET", "/readyz"), ("GET", "/enforcement/{address}"),
     ("GET", "/api/v1/info"), ("GET", "/api/v1/posture"), ("GET", "/api/v1/events"), ("GET", "/api/v1/decisions"), ("GET", "/api/v1/cases"),
-    ("POST", "/api/v1/cases"), ("GET", "/api/v1/cases/{case_id}"), ("GET", "/api/v1/cases/{case_id}/evidence/{artifact_id}"),
+    ("POST", "/api/v1/cases"), ("POST", "/api/v1/sync"), ("GET", "/api/v1/cases/{case_id}"), ("GET", "/api/v1/cases/{case_id}/evidence/{artifact_id}"),
     ("GET", "/api/v1/actions"), ("GET", "/api/v1/actions/{request_id}"), ("GET", "/api/v1/actions/{request_id}/verification"),
+    ("POST", "/api/v1/cases/{case_id}/resolution"),
     ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/decision"), ("POST", "/api/v1/cases/{case_id}/actions/{request_id}/execute"),
     ("GET", "/api/v1/changes"), ("GET", "/api/v1/history"), ("POST", "/api/v1/session"), ("GET", "/api/v1/session"), ("DELETE", "/api/v1/session"),
     ("POST", "/api/v1/session/password"), ("GET", "/api/v1/users"), ("POST", "/api/v1/users"), ("PATCH", "/api/v1/users/{name}"),

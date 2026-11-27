@@ -95,7 +95,7 @@ def client():
 def test_capabilities_manifest(client):
     m = client.get("/capabilities").json()
     caps = {c["name"]: c for c in m["capabilities"]}
-    assert set(caps) == {"growth.analyze", "growth.reallocate_budget"}
+    assert set(caps) == {"growth.analyze", "growth.reallocate_budget", "growth.remeasure"}
     # the budget-moving capability is gated (matches modules.yaml's [budget_change] gate);
     # attribution/analyze reads are not.
     assert caps["growth.reallocate_budget"]["approval_required"] is True
@@ -210,3 +210,18 @@ def test_economics_are_labelled_modeled_estimate():
     assert res["economics_basis"] == "modeled_estimate"
     assert all(f["economics_basis"] == "modeled_estimate" for f in res["findings"])
     assert "modeled_estimate" in res["summary"]
+
+
+def test_the_summary_says_what_is_measured_and_what_is_modelled(monkeypatch):
+    """Visits are measured; conversions and the booked rate are fixed rates applied to them. The summary and the result keep the two apart."""
+    import importlib
+    core = importlib.import_module("growth-engine.core")
+    totals = {"top_channel": "Organic / Direct", "leads": 306, "visitors": 256, "conversions": 67, "booked_rate": 22, "blended_cpl": 0, "blended_roas": None}
+    monkeypatch.setattr(core, "fetch_activity", lambda force=False: {"channels": [], "totals": totals})
+    out = core.analyze()
+    s = out["summary"]
+    measured, modelled = s.split("Modelled from fixed rates, not measured:")
+    assert "256 visitors" in measured and "306 visits attributed to a channel" in measured and "conversions" not in measured and "leads" not in measured
+    assert "67 conversions (22% booked rate)" in modelled and "modeled_estimate" in modelled
+    assert out["measured"] == {"visitors": 256, "attributed_visits": 306, "top_channel": "Organic / Direct", "window": "30d", "source": "umami"}
+    assert out["modelled"]["conversions"] == 67 and "fixed conversion rates" in out["modelled"]["basis"]

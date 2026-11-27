@@ -16,6 +16,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
+from agentic_os.revenue.contact_intake import ContactUpsertProposal, propose_contact_from_classification
 from agentic_os.revenue.intent import classify_intent
 from agentic_os.revenue.leakage import RevenueLeakage, unanswered_quote_intent
 
@@ -29,11 +30,19 @@ def _first_inbound_text(conv: dict) -> str:
     return (last.get("content") or "").strip()
 
 
+def _sender(conv: dict) -> dict:
+    meta = conv.get("meta") or {}
+    return meta.get("sender") or {}
+
+
 def _subject(conv: dict) -> str:
     """A stable subject for the leakage: the contact's name/email, else the conversation id."""
-    meta = conv.get("meta") or {}
-    sender = meta.get("sender") or {}
+    sender = _sender(conv)
     return str(sender.get("name") or sender.get("email") or f"conversation:{conv.get('id', '')}")
+
+
+class ChatwootReadError(Exception):
+    """A read of Chatwoot failed. The text names what was read and the status, never a body or a credential."""
 
 
 @dataclass
@@ -57,6 +66,53 @@ class ChatwootClient:
             return r.status_code == 200
         except Exception:  # noqa: BLE001
             return False
+
+    def _read(self, path: str, params: dict) -> dict:
+        import httpx
+        try:
+            r = httpx.get(f"{self._acct_base()}{path}", headers=self._headers(), params=params, timeout=self.timeout)
+        except Exception as e:  # noqa: BLE001
+            raise ChatwootReadError(f"{path}: could not be reached ({type(e).__name__})") from None
+        if r.status_code >= 400:
+            raise ChatwootReadError(f"{path}: the application answered HTTP {r.status_code}")
+        try:
+            return r.json()
+        except ValueError:
+            raise ChatwootReadError(f"{path}: the answer could not be read") from None
+
+    def read_conversations(self, *, status: str = "all", max_pages: int = 200) -> List[dict]:
+        """Every conversation in a status (``all`` includes resolved), following pagination. RAISES on a failed page, and when the collection is longer than ``max_pages``
+        pages; ``conversations`` returns what it had and hides the failure."""
+        out: List[dict] = []
+        for page in range(1, max_pages + 1):
+            payload = ((self._read("/conversations", {"status": status, "page": page}).get("data") or {}).get("payload")) or []
+            out.extend(payload)
+            if not payload:
+                return out
+        raise ChatwootReadError(f"/conversations: more than {max_pages} pages; the read was cut")
+
+    def read_messages(self, conversation_id: int, *, max_pages: int = 500) -> List[dict]:
+        """Every message of a conversation, oldest first, private notes included and marked (``private``). Pages backwards with ``before``; RAISES on a failed page."""
+        out: List[dict] = []
+        before: Optional[int] = None
+        for _ in range(max_pages):
+            params = {"before": before} if before else {}
+            payload = self._read(f"/conversations/{int(conversation_id)}/messages", params).get("payload") or []
+            if not payload:
+                break
+            out.extend(payload)
+            oldest = min(int(m["id"]) for m in payload)
+            if before is not None and oldest >= before:
+                break
+            before = oldest
+        else:
+            raise ChatwootReadError(f"/conversations/{conversation_id}/messages: more than {max_pages} pages; the read was cut")
+        seen, uniq = set(), []
+        for m in out:
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                uniq.append(m)
+        return sorted(uniq, key=lambda m: (int(m.get("created_at") or 0), int(m["id"])))
 
     def conversations(self, *, status: str = "open", max_pages: int = 20) -> List[dict]:
         """Conversations in a status, following pagination. Empty on any failure (self-skip)."""
@@ -104,6 +160,30 @@ def scan_unanswered_quotes(client: ChatwootClient, *, now_ms: int,
             observation_refs=(f"chatwoot:conversation:{conv.get('id', '')}",))
         if leak is not None:
             out.append(leak)
+    return out
+
+
+def scan_inbound_contacts(client: ChatwootClient, *, now_ms: int, status: str = "open",
+                          min_confidence: float = 0.6) -> List[ContactUpsertProposal]:
+    """Read open conversations and propose a Contact upsert for each sender with a real email and an
+    actionable commercial-intent opening message (Stage E's `Inbound event -> intent classification ->
+    validated Contact upsert` hop, 2026-11-16). Still read-only: this only proposes — the caller hands
+    proposals to the approval-gated `integrations.twenty_operator`, which is the only thing that writes.
+    """
+    out: List[ContactUpsertProposal] = []
+    for conv in client.conversations(status=status):
+        text = _first_inbound_text(conv)
+        sender = _sender(conv)
+        email = str(sender.get("email") or "").strip()
+        name = str(sender.get("name") or "").strip()
+        if not text or not email:
+            continue
+        ic = classify_intent(text, source="chatwoot", source_ref=str(conv.get("id", "")), observed_at_ms=now_ms)
+        if ic.confidence < min_confidence:
+            continue
+        proposal = propose_contact_from_classification(ic, name=name, email=email)
+        if proposal is not None:
+            out.append(proposal)
     return out
 
 

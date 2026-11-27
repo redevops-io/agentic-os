@@ -35,6 +35,8 @@ Config (env; seed.py writes agents/edge-sentinel/.env automatically):
                       SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1 — see security.py.
   SENTINEL_BASIC_AUTH_USER / _PASS  operator credentials for execution (Basic auth; fail-closed 503 unset)
   SENTINEL_BLOCK_ENABLED            default OFF: an authenticated execution is a dry run without it
+  SENTINEL_ENFORCEMENT_PROBE        default OFF: GET /enforcement/<address> says whether a DOCUMENTATION address is banned
+                                    (read-only, no sign-in; never on with EDGE_SENTINEL_DEMO) — see enforcement_probe.py
   WAZUH_TLS_VERIFY    default on; `off` skips certificate verification, `/<path>` uses a private CA bundle
   REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model; if set (and actually in-boundary) `triage` adds an LLM
                       blurb via the governed router. The endpoint works fully without it.
@@ -53,7 +55,7 @@ import os
 # be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
 from . import secret_files as _secret_files  # noqa: E402  (must run before anything reads the environment)
 _secret_files.load_file_secrets()                # NAME_FILE -> NAME (Docker/Kubernetes secrets)
-from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
+from agentic_os.app_gate import RequestContext as _RequestContext, console_authorizer as _console_authorizer, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
 from agentic_os.app_gate import with_authorization as _with_authorization
 _GATE_APP = "edge-sentinel"
 _req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
@@ -84,6 +86,7 @@ from . import deploy_scan  # noqa: E402 — runtime-DAST proxy to the deploy-sca
 from . import permissions_ui  # noqa: E402 — live vuln-DB permissions demo
 from . import security as _security  # noqa: E402 — secure defaults: loopback bind, TLS verify, headers (P9)
 from . import fixture_mode  # noqa: E402 — opt-in fixture core for demos and UI acceptance (P4)
+from . import enforcement_probe  # noqa: E402 — opt-in read-only "is this documentation address banned" page
 from .core import (  # noqa: E402
     TENANT, SUBTITLE, fetch_activity, _severity,
 )
@@ -150,6 +153,7 @@ async def _require_operator_everywhere(request: Request, call_next):
     auth.align_kernel_operator_credential()
     path = request.url.path
     if (auth.require_auth_everywhere() and path not in auth.PUBLIC_PATHS and path not in auth.SELF_AUTHENTICATED_PATHS
+            and not (path.startswith(enforcement_probe.PATH_PREFIX) and enforcement_probe.enabled())   # opt-in, documentation addresses only
             and not path.startswith("/api/v1/") and not (path == "/ui" or path.startswith("/ui/"))
             and not (path == "/" and _ui_routes.ui_enabled())):          # the front page only redirects to the console
         from . import api_v1
@@ -170,6 +174,17 @@ async def _security_headers(request: Request, call_next):
     for _h, _v in _security.SECURITY_HEADERS.items():
         response.headers.setdefault(_h, _v)
     return response
+
+
+@app.on_event("startup")
+def _start_case_sync():
+    """Cases are built from alerts on a timer (SENTINEL_SYNC_INTERVAL_S, default 15 s; 0 turns it off), not by whoever reads them."""
+    live.start_sync_loop()
+
+
+@app.on_event("shutdown")
+def _stop_case_sync():
+    live.stop_sync_loop()
 
 
 @app.on_event("startup")
@@ -887,9 +902,16 @@ def _triage(body: dict) -> dict:
 
 # ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
 try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
+    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole
+    from agentic_os.app_gate import validate_console as _validate_console
+    from agentic_os.tool_actions import console_tool as _console_tool
 except Exception:  # noqa: BLE001 — context-runtime absent → no console
     _AgentConsole = None
+
+# Each tool's risk class is read from agentic_os/tool_actions.py, where the launcher behind it was read line by
+# line (a scanner that starts a process and writes a cache is ``write`` whatever its name says). A class typed at
+# a registration here would be a second table, and a side-effecting tool classified ``read`` refuses to register.
+_crtool = _console_tool(_GATE_APP) if _AgentConsole is not None else None
 
 _SENTINEL_PRIMER = """CrowdSec is the open-source engine watching your network. It reads your logs, spots attacks, and records ban decisions for attacking IP addresses; whether anything is actually blocked depends on a bouncer, which edge-sentinel neither provides nor checks. edge-sentinel is the agent layer on top: you can ask it what CrowdSec currently holds, and it keeps a human in the loop before any block is executed.
 
@@ -1462,11 +1484,15 @@ def _build_sentinel_console(console_cls, _crtool):
         suggestions=_chips(),
         subtitle="Ask what CrowdSec holds, to explain an alert, to look up a CVE, or to read the sample network and backup reviews.",
         model=_GovernedConsoleModel(),
+        # named, not inherited: the console answers on the gate's plane, in the shape a ToolRegistry reads
+        authorizer=_console_authorizer(_GATE_APP),
         allow_side_effects=[],  # ban_ip stays gated → the harness asks for human approval before blocking
     )
 
 
 _SENTINEL_CONSOLE = _build_sentinel_console(_AgentConsole, _crtool) if _AgentConsole is not None else None
+if _SENTINEL_CONSOLE is not None:
+    _validate_console(_GATE_APP, _SENTINEL_CONSOLE)   # gated or not at all: the chat cannot offer a scan it is not allowed to start
 
 
 # --- routes ------------------------------------------------------------------
@@ -1478,7 +1504,19 @@ def health() -> dict:
     # be reporting a connection that does not exist.
     return _with_authorization(_GATE_APP, {"status": "ok" if sh["ok"] else "degraded", "core": "crowdsec",
             "connected": core.crowdsec_connected(), "demo": fixture_mode.status(),
-            "state": sh})
+            "enforcement_probe": enforcement_probe.status(), "state": sh})
+
+
+@app.get("/enforcement/{address}", response_class=HTMLResponse, dependencies=[Depends(ratelimit.rate_limit)])
+def enforcement(address: str) -> HTMLResponse:
+    """Whether the edge holds a ban for one documentation address (see enforcement_probe.py). 404 unless SENTINEL_ENFORCEMENT_PROBE=1 and
+    the address is a documentation address; 503 with the word `unknown` when the edge could not be read. Reads only."""
+    ip = enforcement_probe.documentation_address(address) if enforcement_probe.enabled() else None
+    if ip is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    st = enforcement_probe.state(ip)
+    return HTMLResponse(enforcement_probe.page(ip, st), status_code=503 if st == enforcement_probe.UNKNOWN else 200,
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/readyz")
@@ -1571,12 +1609,11 @@ def backups_ui() -> str:
 
 @app.get("/api/cases")
 def api_cases() -> JSONResponse:
-    """List live investigation cases, worst severity first. Syncs the latest CrowdSec alerts into cases first
-    (idempotent), so the list reflects real detections — never a canned scenario."""
+    """List the stored investigation cases, worst severity first. A read: it ingests nothing. The cases are the ones the background loop
+    (or ``POST /api/v1/sync``) built from CrowdSec's alerts, so the list reflects real detections — never a canned scenario."""
     if (_r := _deny_response(_GATE_APP, "threat_summary")):
         return _r
-    live.sync_cases()
-    return JSONResponse({"cases": live.case_summaries()})
+    return JSONResponse({"cases": live.case_summaries(), "synced_at": live.last_sync_at()})
 
 
 @app.get("/api/cases/{case_id}")
@@ -1708,7 +1745,6 @@ def _legacy_index() -> str:
                    f"<code>{html.escape(fixture_mode.DEMO_ENV)}</code> to operate against real "
                    "integrations.</div></section>")
     try:
-        live.sync_cases()
         blocks += ("<section class='shell' style='margin-top:var(--sp-4)'>"
                    + _cases_panel(live.case_summaries()) + "</section>")
     except Exception:  # noqa: BLE001 — the case workspace is additive; never break the dashboard

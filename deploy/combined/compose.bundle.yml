@@ -37,7 +37,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   edge-sentinel:
-    image: "${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel}:${EDGE_SENTINEL_IMAGE_TAG:-0.6.4}"
+    image: "${EDGE_SENTINEL_IMAGE:-ghcr.io/redevops-io/edge-sentinel}:${EDGE_SENTINEL_IMAGE_TAG:-0.6.7}"
     restart: unless-stopped
     depends_on:
       crowdsec:
@@ -64,6 +64,9 @@ services:
       SENTINEL_PROTECTED_IPS: "${SENTINEL_PROTECTED_IPS:-}"
       SENTINEL_BLOCK_ALLOW_NETWORKS: "${SENTINEL_BLOCK_ALLOW_NETWORKS:-}"
       EDGE_SENTINEL_DEMO: "${EDGE_SENTINEL_DEMO:-}"
+      # off by default. bundle-remediation.sh sets it: a read-only page that says whether a DOCUMENTATION address is banned, so that
+      # redevops-qa can re-test an edge block against this real instance (apps/edge-sentinel/enforcement_probe.py).
+      SENTINEL_ENFORCEMENT_PROBE: "${SENTINEL_ENFORCEMENT_PROBE:-}"
     volumes:
       - edge-sentinel-data:/data
     read_only: true
@@ -73,8 +76,8 @@ services:
     networks: [ts]
 
   redevops-qa:
-    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.3}"
-    platform: linux/amd64   # QA publishes linux/amd64 lanes only; Apple Silicon runs this under Rosetta/QEMU
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.6}"
+    platform: "${QA_PLATFORM:-}"   # empty = the host's own architecture. From redevops-qa 0.6.6 the test lanes run natively on linux/amd64 and linux/arm64 (Apple Silicon included); nothing is emulated
     restart: unless-stopped
     ports:
       - target: 8080
@@ -104,6 +107,47 @@ services:
     cpus: 2
     networks: [ts]
 
+  # Only with `--profile remediation` (bundle-remediation.sh). redevops-qa accepts an external target on ITS OWN loopback and nowhere
+  # else, so this joins the QA container's network namespace and forwards 127.0.0.1:8203 there to Edge Sentinel. It is the QA image
+  # (no extra image to pull) running a 15-line TCP forwarder; it holds no credential and publishes no port.
+  qa-sentinel-loopback:
+    image: "${QA_IMAGE:-ghcr.io/redevops-io/redevops-qa}:${QA_IMAGE_TAG:-0.6.6}"
+    platform: "${QA_PLATFORM:-}"
+    profiles: ["remediation"]
+    restart: unless-stopped
+    network_mode: "service:redevops-qa"
+    depends_on:
+      redevops-qa:
+        condition: service_healthy
+    entrypoint:
+      - /opt/redevops-qa/venv/bin/python
+      - -I
+      - -c
+      - |
+        import asyncio
+        async def pipe(r, w):
+            try:
+                while (d := await r.read(65536)):
+                    w.write(d); await w.drain()
+            except OSError:
+                pass
+            finally:
+                w.close()
+        async def conn(r, w):
+            try:
+                ur, uw = await asyncio.open_connection("edge-sentinel", 8203)
+            except OSError:
+                w.close(); return
+            await asyncio.gather(pipe(r, uw), pipe(ur, w), return_exceptions=True)
+        async def main():
+            await (await asyncio.start_server(conn, "127.0.0.1", 8203)).serve_forever()
+        asyncio.run(main())
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 128m
+
   projects:
     image: "${PROJECTS_IMAGE:-ghcr.io/redevops-io/redevops-projects}:${PROJECTS_IMAGE_TAG:?set PROJECTS_IMAGE_TAG in .env}"
     restart: unless-stopped
@@ -115,6 +159,10 @@ services:
     environment:
       OPERATOR_BASIC_AUTH: "${OPERATOR_BASIC_AUTH:?set in .env — bundle/bootstrap.sh generates one (user:password)}"
       AGENTIC_OS_PRODUCTS: /etc/products/products.yaml
+      # Enforced profile: authority is checked against durable stores on the projects-state volume. A missing profile stops the container at start.
+      AGENTIC_OS_PROFILE: "${AGENTIC_OS_PROFILE:-production}"
+      AGENTIC_OS_AUTHORITY_DB: /state/authority.db
+      AGENTIC_OS_REPLAY_DB: /state/replay.db
       PROJECTS_PROVIDER: registered
       AGENTIC_OS_BIND_HOST: "${AGENTIC_OS_BIND_HOST:-0.0.0.0}"
       AGENTIC_OS_BEHIND_PROXY: "${AGENTIC_OS_BEHIND_PROXY:-0}"
@@ -128,6 +176,8 @@ services:
       EDGE_SENTINEL_SERVICE_TOKEN: "${EDGE_SENTINEL_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
       QA_SERVICE_TOKEN: "${QA_SERVICE_TOKEN:?set in .env — bundle/bootstrap.sh generates one}"
       APPROVAL_SECRET: "${APPROVAL_SECRET:?set in .env — bundle/bootstrap.sh generates one}"
+    volumes:
+      - projects-state:/state
     configs:
       - source: products_yaml
         target: /etc/products/products.yaml
@@ -172,6 +222,7 @@ configs:
             approval_secret_env: APPROVAL_SECRET
 
 volumes:
+  projects-state:
   qa-data:
   edge-sentinel-data:
   crowdsec-data:

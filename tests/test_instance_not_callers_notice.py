@@ -42,9 +42,13 @@ def test_key_only_init_does_not_need_it(capsys, monkeypatch, tmp_path):
     assert "grants   " not in out and "granted" not in out and SENTENCE not in out         # no grants were created, so there is no instance grant to warn about
 
 
+#: a gated plane of the kernel has no app directory: its integrator documentation carries the sentence
+PLANE_DOCS = {"governed-writes": "docs/AGENT_GATEWAY_EXTERNAL_AGENTS.md"}
+
+
 @pytest.mark.parametrize("app", sorted(TOOL_ACTIONS))
 def test_every_gated_apps_readme_says_it(app):
-    text = (ROOT / "apps" / app / "README.md").read_text()
+    text = (ROOT / PLANE_DOCS.get(app, f"apps/{app}/README.md")).read_text()
     assert SENTENCE in text, app
 
 

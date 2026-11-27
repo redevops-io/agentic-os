@@ -54,6 +54,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "unblock_ip", lambda inp: (bans.discard(inp["ip"]) or {"status": "done", "lifted": True}))
     monkeypatch.setattr(core, "triage", lambda: {"decisions": [{"value": b} for b in sorted(bans)] if state["verify_sees_ban"] else []})
     core._CACHE.update(ts=0.0, data=None)
+    live.sync_cases()            # one tick of the background loop: reads no longer ingest, so the alert is already a case when a test looks
     yield {"bans": bans, "state": state, "dir": tmp_path / "state"}
     history_store.reset()
     identity.reset()
@@ -288,6 +289,22 @@ def test_a_dry_run_is_labelled_everywhere_and_touches_nothing(env, monkeypatch):
     assert adm.get(f"/api/v1/actions/{act['request_id']}").json()["receipt"]["dry_run"] is True
 
 
+def test_the_projects_adapter_reads_this_apps_verification_route(env, monkeypatch):
+    """A contract between this route and ``agentic_os.products.sentinel``: its test double once answered a flat object,
+    and the read-back tool said "not run" about every real action, executed ones included."""
+    from agentic_os.products.sentinel import read_back_of
+    monkeypatch.setenv("SENTINEL_BLOCK_ENABLED", "0")
+    admin = basic(client())
+    olga = session(make_user(admin, "olga", "operator"))
+    case = first_case(olga)
+    act = action_of(olga, case["case_id"])
+    route = f"/api/v1/actions/{act['request_id']}/verification"
+    assert read_back_of(olga.get(route).json()) == {"state": "not_run", "detail": "", "at": "", "receipt_id": "", "receipt_status": ""}
+    assert decide(olga, case, act).status_code == 200 and run(olga, case, act).status_code == 200
+    got = read_back_of(olga.get(route).json())
+    assert got["state"] == "dry_run" and got["receipt_status"] == "DRY_RUN" and got["receipt_id"], got
+
+
 def test_an_approval_is_bound_to_the_digest_it_was_shown(env):
     adm = session(ADMIN)
     case = first_case(adm)
@@ -400,8 +417,10 @@ def test_a_manual_case_is_rebuilt_after_a_restart_from_its_stored_request(env):
     assert r.status_code == 201 and r.json()["state"] == "AWAITING_APPROVAL"
     cid, rid = r.json()["case_id"], r.json()["request_id"]
     _restart(env)
+    live.sync_cases()                                  # the loop's first tick, which runs when the app starts: it rebuilds the manual case and re-applies the stored state
     s = session(ADMIN)
-    assert [c["case_id"] for c in s.get("/api/v1/cases").json()["items"]] == [cid]
+    ids = [c["case_id"] for c in s.get("/api/v1/cases").json()["items"]]
+    assert cid in ids and len(ids) == 2                 # the manual case, rebuilt from its stored request, and the alert's case the fixture's tick ingested
     act = s.get(f"/api/v1/actions/{rid}").json()
     assert act["params"]["ip"] == "8.8.4.4" and act["params"]["duration"] == "2h"
     assert s.post(f"/api/v1/cases/{cid}/actions/{rid}/decision", json={"approved": True, "digest": act["digest"]}).status_code == 200
@@ -464,6 +483,94 @@ def test_an_approval_token_for_a_linked_user_decides_once_and_is_attributed_to_t
     assert adm.delete("/api/v1/actor-links/projects:local-owner").status_code == 200
 
 
+# ── a quality finding as a case, closed only on a passed re-test ─────────────────────────────────────────────────────────────────────
+
+QA_FINDING = {"kind": "qa.finding", "severity": "high", "subject": "qa-run:r20261124T100000Z-aaaaaa", "source": "redevops-qa",
+              "detail": "profile fixture-browser on tgt-1 ended FAILED: A-NOTIF-ON; evidence sha256:" + "1" * 64, "ts": 1.79e9}
+RETEST = {"kind": "qa.retest", "run_id": "r20261124T110000Z-bbbbbb", "outcome": "VERIFIED", "manifest_digest": "sha256:" + "2" * 64,
+          "finding_run_id": "r20261124T100000Z-aaaaaa"}
+
+
+def _resolution(case_id, ev):
+    return {"evidence": ev, "digest": live.resolution_digest(case_id, ev)}
+
+
+def test_a_quality_finding_case_is_closed_by_a_person_on_a_passed_retest_and_the_record_is_kept(env):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST))
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "RESOLVED" and r.json()["retest_run"] == RETEST["run_id"]
+    case = s.get(f"/api/v1/cases/{cid}").json()
+    assert case["summary"]["status"] == "RESOLVED" and any(h["type"] == "case.resolved" for h in case["history"])
+    got = s.get(f"/api/v1/cases/{cid}/evidence/{r.json()['evidence_id']}")
+    assert got.status_code == 200 and got.json()["evidence"]["run_id"] == RETEST["run_id"] and got.json()["resolved_by"] == "user:admin"
+    again = s.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST))
+    assert again.status_code == 409 and again.json()["error"] == "not_resolvable"          # already closed
+    _restart(env)
+    assert session(ADMIN).get(f"/api/v1/cases/{cid}").json()["summary"]["status"] == "RESOLVED"
+
+
+@pytest.mark.parametrize("change,status,error", [
+    ({"outcome": "FAILED"}, 409, "not_resolvable"),                                         # the re-test did not pass
+    ({"outcome": "NOT_COMPLETED"}, 409, "not_resolvable"),
+    ({"finding_run_id": "r20261124T090000Z-cccccc"}, 409, "not_resolvable"),                # a re-test of another finding
+    ({"run_id": "r20261124T100000Z-aaaaaa"}, 409, "not_resolvable"),                        # the finding run offered as its own re-test
+    ({"kind": "qa.finding"}, 422, "invalid_evidence"),
+    ({"extra": "x"}, 422, "invalid_evidence"),
+])
+def test_a_retest_record_that_does_not_show_a_pass_of_this_finding_closes_nothing(env, change, status, error):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    ev = {**RETEST, **change}
+    body = {"evidence": ev, "digest": live.resolution_digest(cid, ev) if error != "invalid_evidence" else "0" * 64}
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json=body)
+    assert r.status_code == status and r.json()["error"] == error, r.text
+    assert s.get(f"/api/v1/cases/{cid}").json()["summary"]["status"] == "INVESTIGATING"
+
+
+def test_a_resolution_is_bound_to_the_case_and_the_record_and_other_cases_cannot_be_closed_this_way(env):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    tampered = {**RETEST, "outcome": "VERIFIED", "run_id": "r20261124T120000Z-dddddd"}
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json={"evidence": tampered, "digest": live.resolution_digest(cid, RETEST)})
+    assert r.status_code == 422 and r.json()["error"] == "digest_required"                  # the digest is of another record
+    other = s.post("/api/v1/agent-events", json={"kind": "goal_loop_stuck", "severity": "high", "subject": "mission-7", "source": "mission-kernel"}).json()["case_id"]
+    r = s.post(f"/api/v1/cases/{other}/resolution", json=_resolution(other, RETEST))
+    assert r.status_code == 409 and r.json()["error"] == "not_resolvable"                   # not a quality finding
+    net = first_case(s)                                                                      # a CrowdSec case is never closed with a re-test
+    r = s.post(f"/api/v1/cases/{net['case_id']}/resolution", json=_resolution(net["case_id"], RETEST))
+    assert r.status_code == 409 and r.json()["error"] == "not_resolvable"
+    v = session(make_user(s, "vera", "viewer"))
+    assert v.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST)).json()["error"] == "role_required"
+    assert s.get(f"/api/v1/cases/{cid}").json()["summary"]["status"] == "INVESTIGATING"
+
+
+def test_the_service_credential_closes_a_finding_case_only_with_a_single_use_approval_of_a_linked_person(env, monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", "approval-secret-for-tests-0123456789abcdef")
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "service-token-for-tests-0123456789abcdef")
+    monkeypatch.setattr(api_v1, "_REPLAY", None)
+    adm = session(ADMIN)
+    make_user(adm, "olga", "operator")
+    assert adm.post("/api/v1/actor-links", json={"external_actor": "projects:local-owner", "user": "olga"}).status_code == 201
+    svc = client()
+    svc.headers["X-Control-Token"] = "service-token-for-tests-0123456789abcdef"
+    cid = svc.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    body = _resolution(cid, RETEST)
+    path = f"/api/v1/cases/{cid}/resolution"
+    assert svc.post(path, json=body).json()["error"] == "human_decision_required"           # the service alone cannot close a case
+    wrong = _tok("edge-sentinel", "sentinel.resolve_case", {"case_id": cid, "digest": "a" * 64}, "projects:local-owner")
+    assert svc.post(path, json=body, headers={"X-Approval-Token": wrong}).json()["error"] == "approval_token_invalid"
+    other_cap = _tok("edge-sentinel", "sentinel.decide", {"case_id": cid, "digest": body["digest"]}, "projects:local-owner")
+    assert svc.post(path, json=body, headers={"X-Approval-Token": other_cap}).json()["error"] == "approval_token_invalid"
+    tok = _tok("edge-sentinel", "sentinel.resolve_case", {"case_id": cid, "digest": body["digest"]}, "projects:local-owner")
+    ok = svc.post(path, json=body, headers={"X-Approval-Token": tok})
+    assert ok.status_code == 200 and ok.json()["status"] == "RESOLVED", ok.text
+    ev = adm.get(f"/api/v1/cases/{cid}/evidence/{ok.json()['evidence_id']}").json()
+    assert ev["resolved_by"] == "user:olga" and ev["via"] == "projects"
+    assert svc.post(path, json=body, headers={"X-Approval-Token": tok}).status_code in (403, 409)   # replayed token, and the case is closed
+
+
 def test_a_linked_viewer_cannot_decide_through_projects(env, monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", "approval-secret-for-tests-0123456789abcdef")
     monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "service-token-for-tests-0123456789abcdef")
@@ -497,7 +604,7 @@ def test_info_posture_events_decisions_and_pagination(env):
     assert s.get("/api/v1/posture").json()["source"] == "live"
     assert s.get("/api/v1/cases?limit=1&cursor=!!!").status_code == 400
     env["state"]["alerts"] = [{**ALERT, "created_at": f"2026-10-0{i}T10:00:00Z", "source": {"value": f"8.8.8.{i}", "scope": "Ip"}} for i in range(1, 6)]
-    api_v1._SYNC["ts"] = 0.0
+    assert s.post("/api/v1/sync").status_code == 200                       # reads ingest nothing: the new alerts become cases when something syncs
     page1 = s.get("/api/v1/cases?limit=2").json()
     assert len(page1["items"]) == 2 and page1["next_cursor"]
     page2 = s.get(f"/api/v1/cases?limit=10&cursor={page1['next_cursor']}").json()
@@ -652,3 +759,80 @@ def test_manual_and_agent_event_cases_have_their_own_replay_proof_and_source(env
     ev = s.post("/api/v1/agent-events", json={"kind": "k", "severity": "high"}).json()
     got = s.get(f"/api/v1/cases/{ev['case_id']}").json()
     assert got["replay"]["deterministic"] is True and [h["via"] for h in got["history"] if h["type"] == "case.opened"] == ["agent-runtime"]
+
+
+def test_a_resolved_case_says_when_it_was_closed_in_the_list_and_the_detail_and_still_does_after_a_restart(env):
+    s = session(ADMIN)
+    cid = s.post("/api/v1/agent-events", json=QA_FINDING).json()["case_id"]
+    row = next(c for c in s.get("/api/v1/cases").json()["items"] if c["case_id"] == cid)
+    assert row["resolved_at"] is None                                                     # open: no closing time, and none invented
+    r = s.post(f"/api/v1/cases/{cid}/resolution", json=_resolution(cid, RETEST))
+    assert r.status_code == 200, r.text
+    at = r.json()["resolved_at"]
+    assert at and at >= row["created_at"]
+    row = next(c for c in s.get("/api/v1/cases").json()["items"] if c["case_id"] == cid)
+    assert row["status"] == "RESOLVED" and row["resolved_at"] == at
+    assert s.get(f"/api/v1/cases/{cid}").json()["summary"]["resolved_at"] == at
+    assert s.get(f"/api/v1/cases/{cid}/evidence/{r.json()['evidence_id']}").json()["resolved_at"] == at    # the record itself carries the time
+    _restart(env)
+    s2 = session(ADMIN)
+    assert next(c for c in s2.get("/api/v1/cases").json()["items"] if c["case_id"] == cid)["resolved_at"] == at
+    assert s2.get(f"/api/v1/cases/{cid}").json()["summary"]["resolved_at"] == at
+
+
+# ── reads do not write ───────────────────────────────────────────────────────────────────────────────────────
+
+def _rows(env):
+    """Everything the history store holds that a read could have added: cases, evidence and actions."""
+    hs = history_store.get()
+    return {t: len(hs.rows(f"SELECT 1 FROM {t}")) for t in ("cases", "evidence", "actions")}
+
+
+def test_reading_never_ingests_and_only_an_explicit_sync_or_the_loop_does(env):
+    s = session(ADMIN)
+    before = _rows(env)
+    assert before["cases"] == 1
+    env["state"]["alerts"] = [{**ALERT, "created_at": f"2026-10-0{i}T10:00:00Z", "source": {"value": f"8.8.8.{i}", "scope": "Ip"}} for i in range(1, 4)]
+    for path in ("/api/v1/cases", "/api/v1/events", "/api/v1/decisions", "/api/v1/actions", "/api/v1/changes", "/api/v1/info", "/api/v1/posture"):
+        assert s.get(path).status_code == 200, path
+    assert s.get("/api/v1/cases").json()["items"].__len__() == 1
+    assert s.get("/api/cases").json()["cases"].__len__() == 1
+    assert _rows(env) == before, "a GET changed what the store holds"
+    first = s.post("/api/v1/sync").json()
+    assert first["synced"] == 3 and _rows(env)["cases"] == 4
+    again = _rows(env)
+    assert s.post("/api/v1/sync").json()["synced"] == 3 and _rows(env) == again, "ingesting the same alerts twice must not add anything"
+    assert len(s.get("/api/v1/cases").json()["items"]) == 4
+
+
+def test_syncing_needs_the_operator_role_and_a_viewer_cannot_cause_a_write(env):
+    adm = session(ADMIN)
+    make_user(adm, "vera", "viewer")
+    v = session(("vera", "long-enough-password-1"))
+    assert v.post("/api/v1/sync").status_code in (401, 403)
+    assert v.get("/api/v1/cases").status_code == 200
+
+
+def test_the_background_loop_ingests_on_its_own_and_stops(env):
+    import time as _t
+    env["state"]["alerts"] = [{**ALERT, "created_at": "2026-10-09T10:00:00Z", "source": {"value": "8.8.8.9", "scope": "Ip"}}]
+    assert live.start_sync_loop(0.05) is True and live.start_sync_loop(0.05) is False        # one loop; a second start does nothing
+    try:
+        end = _t.time() + 5
+        while _t.time() < end and _rows(env)["cases"] < 2:
+            _t.sleep(0.05)
+        assert _rows(env)["cases"] == 2 and live.last_sync_at() > 0
+    finally:
+        live.stop_sync_loop()
+    assert live.start_sync_loop(0) is False                                                      # an interval of 0 turns it off
+
+
+def test_the_demo_fixture_is_the_same_bytes_every_time_it_is_read_and_can_be_pinned_across_restarts(monkeypatch):
+    import json as _j
+    from importlib import import_module
+    fm = import_module("edge-sentinel.fixture_mode")
+    a, b = _j.dumps(fm.fixture_alerts(), sort_keys=True), _j.dumps(fm.fixture_alerts(), sort_keys=True)
+    assert a == b
+    monkeypatch.setenv(fm.NOW_ENV, "2026-11-26T12:00:00Z")
+    pinned = fm.fixture_alerts()
+    assert pinned[0]["created_at"] == "2026-11-26T11:53:00Z" and _j.dumps(fm.fixture_alerts(), sort_keys=True) == _j.dumps(pinned, sort_keys=True)

@@ -20,6 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
  && AGENTIC_OS_SKIP_UI_FETCH=1 PIP_NO_CACHE_DIR=1 pip install --no-cache-dir . \
  && apt-get purge -y git && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log /var/cache/ldconfig/aux-cache
+# A shipped image is a packaged deployment: it refuses to start until AGENTIC_OS_PROFILE is set explicitly (agentic_os/mission/profile.py).
+ENV AGENTIC_OS_PACKAGED=1
 # Run unprivileged. The control plane writes only under /data (permissions plane) and
 # /app/.agentic-os (the Context home when AGENTIC_OS_HOME is unset); both are created owned by
 # the service user so a fresh named volume mounted at /data inherits that ownership. An existing

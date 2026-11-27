@@ -22,6 +22,10 @@ services:
       # the supported activation: a registry file, mounted read-only; the app registers only what this file lists
       - AGENTIC_OS_PRODUCTS=/etc/products/products.yaml
       - PROJECTS_PROVIDER=registered
+      # Enforced profile: authority is checked against durable stores on the projects-state volume. A missing profile stops the container at start.
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-production}
+      - AGENTIC_OS_AUTHORITY_DB=/state/authority.db
+      - AGENTIC_OS_REPLAY_DB=/state/replay.db
       # what fronts this service (docs/SECURITY_MODEL.md, same declaration as deploy/projects-sidekick):
       # the port is published, so the bind inside the container is routable and every peer address is
       # enforced; BEHIND_PROXY=0 states that as shipped nothing forwards to it. The host-side publish stays
@@ -41,6 +45,7 @@ services:
       retries: 8
       start_period: 20s
     volumes:
+      - projects-state:/state
       - ./products.yaml:/etc/products/products.yaml:ro
       - ./secrets/edge-sentinel.service_token:/run/products/edge-sentinel.service_token:ro
       - ./secrets/redevops-qa.service_token:/run/products/redevops-qa.service_token:ro
@@ -54,7 +59,7 @@ services:
     # QA 0.6.3 publishes linux/amd64 lanes only and refuses aarch64 hosts with ARCHITECTURE_UNSUPPORTED —
     # even one emulated by Docker. Pinning the platform is what makes the lanes available on Apple Silicon
     # Docker Desktop (Rosetta/QEMU). This is emulated x86_64: slower, and NOT native-ARM64 evidence.
-    platform: linux/amd64
+    platform: "${QA_PLATFORM:-linux/amd64}"   # the QA test lanes exist for linux/amd64 only. Apple Silicon and arm64 Linux with QEMU run it emulated; an arm64 host without emulation sets QA_PLATFORM=linux/arm64 (the service starts, its lanes say ARCHITECTURE_UNSUPPORTED)
     restart: unless-stopped
     ports:
       - "${QA_BIND:-127.0.0.1}:${QA_PORT:-8080}:8080"
@@ -86,6 +91,7 @@ services:
     networks: [sentinel]
 
 volumes:
+  projects-state:
   qa-data:
 
 networks:

@@ -97,55 +97,77 @@ def _search_results(payload: dict) -> list:
 
 
 def trends(topic: str = "") -> dict:
-    """Trending angles for the niche/topic. Live: real YouTube search via vibexgen; else curated."""
+    """Trending angles for the niche/topic. Live: real YouTube search via vibexgen. Demo (not connected): curated samples,
+    labelled as such. A LIVE search that fails says so and returns no angles: samples are never passed off as its answer."""
     topic = (topic or NICHE).strip()
-    if _LIVE:
-        try:
-            r = httpx.post(f"{VIBEXGEN_API_URL}/tools/ytdlp_search", headers=_headers(),
-                           json={"query": f"{topic} shorts", "max_results": 6}, timeout=25.0)
-            if r.status_code < 400:
-                vids = _search_results(r.json())
-                angles = []
-                for v in vids[:5]:
-                    title = (v.get("title") or "").strip()
-                    if not title:
-                        continue
-                    views = v.get("view_count") or 0
-                    angles.append({
-                        "format": title,
-                        "hook": f"{views:,} views · {v.get('uploader', '')}".strip(" ·"),
-                        "why": "trending on YouTube right now — model a short on this angle",
-                        "url": v.get("url"),
-                        # a usable post/clip seed so Draft/Generate don't echo raw stats
-                        "seed": f"Create a {topic} short inspired by: {title}",
-                    })
-                if angles:
-                    return {"source": "vibexgen", "topic": topic,
-                            "hashtags": _DEMO_HASHTAGS, "angles": angles}
-        except Exception:
-            pass
-    return {"source": "demo", "topic": topic, "hashtags": _DEMO_HASHTAGS, "angles": _DEMO_ANGLES}
+    if not _LIVE:
+        return {"source": "demo", "status": "sample", "topic": topic, "hashtags": _DEMO_HASHTAGS, "angles": _DEMO_ANGLES,
+                "note": "vibexgen is not connected: these are built-in samples, not a search"}
+    try:
+        r = httpx.post(f"{VIBEXGEN_API_URL}/tools/ytdlp_search", headers=_headers(),
+                       json={"query": f"{topic} shorts", "max_results": 6}, timeout=25.0)
+    except Exception as e:  # noqa: BLE001
+        return _no_trends(topic, f"vibexgen did not answer ({type(e).__name__})")
+    if r.status_code >= 400:
+        return _no_trends(topic, f"vibexgen answered HTTP {r.status_code}")
+    try:
+        vids = _search_results(r.json())
+        angles = []
+        for v in vids[:5]:
+            title = (v.get("title") or "").strip()
+            if not title:
+                continue
+            views = v.get("view_count") or 0
+            angles.append({
+                "format": title,
+                "hook": f"{views:,} views · {v.get('uploader', '')}".strip(" ·"),
+                "why": "trending on YouTube right now — model a short on this angle",
+                "url": v.get("url"),
+                # a usable post/clip seed so Draft/Generate don't echo raw stats
+                "seed": f"Create a {topic} short inspired by: {title}",
+            })
+    except Exception as e:  # noqa: BLE001
+        return _no_trends(topic, f"vibexgen's answer could not be read ({type(e).__name__})")
+    if not angles:
+        return _no_trends(topic, "the search returned no video")
+    return {"source": "vibexgen", "status": "ok", "topic": topic, "hashtags": _DEMO_HASHTAGS, "angles": angles}
+
+
+def _no_trends(topic: str, why: str) -> dict:
+    return {"source": "vibexgen", "status": "unavailable", "topic": topic, "hashtags": [], "angles": [], "error": why}
+
+
+#: what ``generate`` can report. Only ``processed`` says vibexgen finished the work; nothing here ever says "queued".
+GENERATE_STATES = ("processed", "submitted", "failed", "unknown", "not_connected")
 
 
 def generate(prompt: str, kind: str = "clip") -> dict:
-    """Request a clip via the vibexgen video agent. Live: routes the prompt through vibexgen's
-    /chat agent (which plans the edit/render); demo: a queued placeholder."""
+    """Request a clip via the vibexgen video agent (its /chat agent plans and runs the edit).
+
+    ``processed``: it reported success and finished. ``submitted``: it accepted a background task (``task_id``); that is not
+    a finished render. ``failed``: it refused or reported an error. ``unknown``: no answer, so whether it started is not
+    known. ``not_connected``: nothing was sent, so nothing is waiting anywhere."""
     prompt = (prompt or "").strip()
-    if _LIVE:
-        try:
-            r = httpx.post(f"{VIBEXGEN_API_URL}/chat", headers=_headers(),
-                           json={"message": prompt}, timeout=30.0)
-            if r.status_code < 400:
-                d = r.json()
-                op = d.get("operation") or {}
-                return {"source": "vibexgen",
-                        "status": "processed" if d.get("success") else "error",
-                        "response": d.get("response"),
-                        "operation": op.get("tool"),
-                        "task_id": d.get("task_id"), "prompt": prompt}
-        except Exception:
-            pass
-    return {"source": "demo", "status": "queued",
-            "prompt": prompt, "kind": kind,
-            "note": "connect vibexgen (VIBEXGEN_API_URL + an authenticated VIBEXGEN_API_KEY) to "
-                    "route this through the real video agent; in the demo, generation is stubbed"}
+    base = {"prompt": prompt, "kind": kind}
+    if not _LIVE:
+        return {**base, "source": "demo", "status": "not_connected",
+                "note": "nothing was queued or rendered: connect vibexgen (VIBEXGEN_API_URL + an authenticated "
+                        "VIBEXGEN_API_KEY) to route this through the real video agent"}
+    base["source"] = "vibexgen"
+    try:
+        r = httpx.post(f"{VIBEXGEN_API_URL}/chat", headers=_headers(), json={"message": prompt}, timeout=30.0)
+    except httpx.ConnectError as e:
+        return {**base, "status": "failed", "error": f"vibexgen could not be reached ({type(e).__name__}): nothing was started"}
+    except Exception as e:  # noqa: BLE001  (a timeout or broken connection AFTER the request may have started work)
+        return {**base, "status": "unknown", "error": f"no answer from vibexgen ({type(e).__name__}): whether it started this is not known"}
+    if r.status_code >= 400:
+        return {**base, "status": "failed", "error": f"vibexgen answered HTTP {r.status_code}"}
+    try:
+        d = r.json()
+        success, op, task = d.get("success"), d.get("operation") or {}, d.get("task_id")
+        out = {**base, "response": d.get("response"), "operation": op.get("tool"), "task_id": task}
+    except Exception as e:  # noqa: BLE001
+        return {**base, "status": "unknown", "error": f"vibexgen's answer could not be read ({type(e).__name__})"}
+    if success is not True:
+        return {**out, "status": "failed", "error": str(d.get("error") or d.get("response") or "vibexgen reported that it did not succeed")[:500]}
+    return {**out, "status": "submitted" if task else "processed"}

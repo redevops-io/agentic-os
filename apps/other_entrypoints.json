@@ -39,7 +39,7 @@
       "kind": "background_thread_or_task",
       "name": "threading.Thread",
       "classification": "reviewed",
-      "rationale": "Runs one scan profile (an allowlisted nmap/k8s scanner module) after server.py's handler has already called is_allowed(profile, target) against the operator-configured allowlist; the thread only ever scans a target and profile the operator already permitted, and its result lands in an in-memory JobStore the client polls - no further effect, no external write."
+      "rationale": "Runs one already-started, already-SCAN_ALLOWLIST-checked scan profile (nmap or a read-only kubectl query) to completion off the request thread, so scan_start can return a job_id immediately; scan_status/scan_results poll it. The allowlist check happens in server.py before the thread is ever started, not here, so this thread itself performs no new authorization decision."
     },
     {
       "app": "edge-sentinel",
@@ -56,6 +56,30 @@
       "name": "threading.Thread",
       "classification": "reviewed",
       "rationale": "Detached job started by the public /api/chat route to run an in-app content-generation action chosen by the chat model. It passes no approval marker, so the core stages any consequential action (push_assets); the result lands in an in-memory job table."
+    },
+    {
+      "app": "edge-sentinel",
+      "file": "app.py",
+      "kind": "lifecycle_hook",
+      "name": "_start_case_sync",
+      "classification": "reviewed",
+      "rationale": "Starts the case-sync loop at startup. The loop only calls live.sync_cases(), the same idempotent ingestion that used to run inside a GET; it takes no request, decides nothing, executes nothing and every action it creates stays AWAITING_APPROVAL. SENTINEL_SYNC_INTERVAL_S=0 turns it off."
+    },
+    {
+      "app": "edge-sentinel",
+      "file": "app.py",
+      "kind": "lifecycle_hook",
+      "name": "_stop_case_sync",
+      "classification": "reviewed",
+      "rationale": "Stops the case-sync loop at shutdown; it has no other effect."
+    },
+    {
+      "app": "edge-sentinel",
+      "file": "live.py",
+      "kind": "background_thread_or_task",
+      "name": "threading.Thread",
+      "classification": "reviewed",
+      "rationale": "The case-sync loop thread (daemon). It ingests CrowdSec alerts into cases on a timer so that no read has to. It proposes at most the approval-gated block_ip action a case already carries; it never approves or executes, and a failed tick is retried on the next one."
     }
   ]
 }

@@ -181,7 +181,8 @@ class TransmitDecision:
 
 def transmit_inputs(tenant: str, doc_id: str, doc_sha256: str, backend: str) -> dict:
     """The inputs an approver's token is bound to. Mint with ``mint_approval_token(operator='document-editor',
-    capability='document.transmit', inputs=transmit_inputs(...), marker={...})``."""
+    capability='document.transmit', inputs=transmit_inputs(...), marker={"approved": True, "by": <approver>},
+    tenant=<the document's tenant>)``."""
     return {"tenant": tenant, "doc_id": doc_id, "doc_sha256": doc_sha256, "backend": backend}
 
 

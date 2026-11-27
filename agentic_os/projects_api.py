@@ -16,6 +16,8 @@ use, and are they connected?" reflects the real Integration Plane when it's pres
 """
 from __future__ import annotations
 
+import re
+
 import html as _html
 
 import re
@@ -450,7 +452,16 @@ class SampleProjectionProvider:
             raise err
         return {**hit, "why": hit["reason"], "evidence": [], "action": None, "history": [], "receipt": None}
 
+    def _require_decider(self) -> None:
+        """A requester whose tenant has an approver is identified and keeps its access, but does not decide."""
+        from agentic_os.products.principal import SEPARATED, may_decide
+        actor = self._caller()[0]
+        if actor and not may_decide(actor):
+            from agentic_os.today import TodayError
+            raise TodayError(403, "separation_of_duties", SEPARATED)
+
     def today_approve(self, pid: str, item_id: str, session: str = "", **kw) -> dict:
+        self._require_decider()
         actor = self._caller()[0]
         if actor and kw.get("approver", "user:operator") == "user:operator":
             kw["approver"] = actor                # the decision record names who the server authenticated, never the built-in label
@@ -458,6 +469,8 @@ class SampleProjectionProvider:
 
     def today_reconcile(self, pid: str, item_id: str, session: str = "", manual: Optional[str] = None,
                         by: str = "user:operator") -> dict:
+        if manual is not None:
+            self._require_decider()                              # a person's own statement closes the question: a decision
         actor = self._caller()[0]
         if actor and by == "user:operator":
             by = actor
@@ -1455,6 +1468,76 @@ class _ConfirmSourcesReq(BaseModel):
     confirmed_by: str = ""
 
 
+def _mount_mcp_server(app: "FastAPI", gateway: Any, verifier: Any) -> None:
+    """A real MCP server over the gateway, mounted beside the REST routes: same registry, same governed path, same
+    tokens. Asked for and unavailable stops startup: a deployment that believes it serves MCP must not silently not."""
+    import contextlib
+    import os
+    from agentic_os.agent_gateway import build_fastmcp_server
+    try:
+        server = build_fastmcp_server(gateway, verifier)
+    except ImportError as exc:
+        raise RuntimeError("AGENT_GATEWAY_MCP is set but the optional MCP server is not installed: pip install 'agentic-os[mcp]'") from exc
+    options: Dict[str, Any] = {"path": "/"}
+    hosts = [h.strip() for h in os.environ.get("AGENT_GATEWAY_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    if hosts:                                              # the names this server is reached by (DNS-rebinding protection)
+        options["allowed_hosts"] = hosts
+    mcp_app = server.http_app(**options)
+    app.mount("/api/agent-gateway/mcp-server", mcp_app)
+    outer = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(a):
+        async with mcp_app.lifespan(a):                    # the MCP session manager runs for as long as the app does
+            async with outer(a) as state:
+                yield state
+    app.router.lifespan_context = _lifespan
+    app.state.agent_gateway_mcp_server = True
+
+
+def _approvals_public_base() -> str:
+    """The address a person opens this Projects at: ``PROJECTS_PUBLIC_URL``, else the OAuth issuer (the same public base)."""
+    import os
+    return (os.environ.get("PROJECTS_PUBLIC_URL", "").strip() or os.environ.get("AGENTIC_OS_OAUTH_ISSUER", "").strip()).rstrip("/")
+
+
+def _approval_link(source: str, record_id: str) -> str:
+    """The deep link to one approval card. Without a public address it is the path under this deployment."""
+    import os
+    from agentic_os.projects.approval_pages import link
+    return link(_approvals_public_base() or os.environ.get("PROJECTS_BASE_PATH", "").strip().rstrip("/"), source, record_id)
+
+
+def _proposals(app: "FastAPI") -> Any:
+    """Who proposed each product record, kept beside the governed writes when those have a state directory."""
+    import os
+    if getattr(app.state, "approval_proposals", None) is None:
+        from agentic_os.projects.approval_center import Proposals
+        directory = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
+        app.state.approval_proposals = Proposals(os.path.join(directory, "proposals.sqlite") if directory else None)
+    return app.state.approval_proposals
+
+
+def mount_approvals(app: "FastAPI", prov: "ProjectionProvider") -> Dict[str, Any]:
+    """The sign-in and approval pages, wherever something here can await a person: governed writes, a registered product,
+    or an agent asking for access (OAuth consent). Returns their route policies ({} when there is nothing to decide here)."""
+    writes, hub = getattr(app.state, "governed_writes", None), getattr(prov, "products_hub", None)
+    if writes is None and hub is None and getattr(app.state, "oauth_gateway", None) is None:
+        return {}
+    from agentic_os.projects.approval_center import ApprovalCenter
+    from agentic_os.projects.approval_pages import ApprovalPages
+    labels = getattr(app.state, "agent_label", None)
+    center = ApprovalCenter(writes=writes, hub=hub, proposals=_proposals(app), agent_label=labels or (lambda principal: ""))
+    extensions = []
+    store = getattr(app.state, "app_store", None)
+    if store is not None and writes is not None:
+        from agentic_os.projects import app_pages
+        extensions.append(lambda pages_, app_: app_pages.mount(pages_, app_, store, writes))
+    pages = ApprovalPages(center, public_base=_approvals_public_base(), extensions=extensions)
+    app.state.approval_pages = pages
+    return pages.mount(app)
+
+
 class _RemoveSourceReq(BaseModel):
     project_id: str = "customer-ops"
     source_id: str = ""
@@ -1471,11 +1554,26 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     ``AGENT_GATEWAY_AUDIT_PATH`` names a file: then each call is appended to that hash-chained JSONL event
     log (``EventStoreAuditSink``), and a path that cannot be written stops startup.
 
-    Only READ capabilities are wired (projects/missions/sources), each running the one governed path
-    with PolicyEgressEngine on the way out, so PII/secrets are redacted/denied and every call audits.
-    Writes, mission delegation and the sandbox are intentionally NOT exposed on this surface.
+    PER-AGENT TOKENS (``AGENT_GATEWAY_AGENTS_FILE``, see ``agent_gateway/agent_tokens.py``): each agent has its own
+    token, read grants, expiry and revocation, and the audit names it. With the file set the gateway is mounted even
+    without the shared bearer. Prefer it; the shared bearer remains for the single-agent, sample-data case.
+
+    ``POST /api/agent-gateway/mcp`` below is MCP-SHAPED, not the MCP protocol (no ``initialize``, no JSON-RPC). With
+    ``AGENT_GATEWAY_MCP=1`` and the ``mcp`` extra installed, a real MCP Streamable-HTTP server over the SAME gateway is
+    served at ``/api/agent-gateway/mcp-server/`` for standard MCP clients.
+
+    On a deployment with tenants (``AGENTIC_OS_TENANT_LIMITS``) every read is limited to what the caller's tenant is
+    granted (``agent_gateway/scope.py``). ``dashboards.read`` belongs to per-agent tokens that name it; the shared bearer
+    never has it.
+
+    Wired: the reads (projects/missions/sources/dashboards, application records) and, for agents with their own identity
+    and a named grant, product tools and PROPOSALS (Edge Sentinel, test runs, ERP/support/CRM writes). Every call runs the
+    one governed path with PolicyEgressEngine on the way out. Nothing here decides: a person approves in Projects or in the
+    product. Mission delegation and the sandbox are intentionally NOT exposed on this surface.
     """
     import hmac
+    import json
+    import logging
     import os
     from agentic_os.local_agents import LocalAgentStore
     token = os.environ.get("AGENT_GATEWAY_TOKEN", "").strip()
@@ -1483,9 +1581,14 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     # token and its own grants, read from the store on every call, so a revocation holds from the next request. With no agent
     # connected the routes exist and admit nobody.
     local_agents = LocalAgentStore.from_env()
-    if not token and local_agents is None:
+    agents_file = os.environ.get("AGENT_GATEWAY_AGENTS_FILE", "").strip()
+    from agentic_os.agent_gateway import oauth_http
+    oauth = oauth_http.from_env(audit=lambda event: logging.getLogger("agentic_os.agent_gateway.oauth").info("%s", json.dumps(event, default=str)))
+    if not token and not agents_file and oauth is None and local_agents is None:
         return False
     token_bytes = token.encode("utf-8")
+    from agentic_os.agent_gateway.agent_tokens import AgentTokenStore
+    agents = AgentTokenStore(agents_file) if agents_file else None
     from fastapi import Body, Header, HTTPException
     from agentic_os.overlays import Principal
     from agentic_os.agent_gateway import (
@@ -1495,6 +1598,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
 
     default_pid = (prov.projects() or [{"id": "customer-ops"}])[0].get("id", "customer-ops")
     _GRANTS = {"projects.read", "missions.read", "sources.read"} | ({"dashboards.read"} if local_agents is not None else set())
+    _SHARED_GRANTS = _GRANTS - {"dashboards.read"}          # the shared bearer never reads the dashboards
 
     class _Projections:
         def projects(self): return prov.projects()
@@ -1513,10 +1617,18 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         """Maps the configured bearer to a read-only principal, or a connected local agent's token to that agent; anything else →
         None (deny)."""
         def verify(self, t):
+            if agents is not None:
+                own = agents.verify(t)
+                if own is not None:
+                    return own
+            if oauth is not None:
+                connected = oauth.verify(t)
+                if connected is not None:
+                    return connected
             if token and t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
                 return GatewayPrincipal(Principal("external-agent", "service", (), "demo"),
                                         client_id="external-agent", workspace="demo",
-                                        scopes=tuple(_GRANTS))
+                                        scopes=tuple(_SHARED_GRANTS))
             if local_agents is not None and t:
                 rec = local_agents.verify(t)
                 if rec is not None:
@@ -1524,69 +1636,218 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                                             scopes=tuple(g for g in rec.grants if g in _GRANTS))
             return None
 
-    def _authorize(principal, perm):
-        if perm not in _GRANTS:
-            return False
-        if principal.id == "external-agent":
-            return True
-        return local_agents is not None and perm in local_agents.grants_of(principal.id)
+    def _is_local_agent(pid: str) -> bool:
+        return local_agents is not None and any(r.id == pid and r.active for r in local_agents.list())
 
     class _Dashboards:
-        """The dashboards the app builds, read for an agent that was granted dashboards.read (installed apps only). The figures and
-        their sources, not the records behind a number: the drill-down stays in the app."""
+        """The dashboards the app builds, read for an agent that was granted ``dashboards.read`` by name: the figures and their
+        sources, never the records behind a number. They are built with the access of the AGENT'S TENANT, exactly as for that
+        tenant's own sign-in, so one tenant's agent cannot count another's records. Money needs the financial-data grant on
+        BOTH the agent and its tenant (``agentic_os/financial_access.py``)."""
         @staticmethod
-        def _svc():
-            return getattr(prov, "dashboards_service", None)
+        def _access(svc, principal):
+            from agentic_os.agent_gateway.scope import tenant_is_current
+            if _is_local_agent(principal.principal.id):
+                # an agent the user connected in the installed app, granted dashboards.read by name: the installation's owner is
+                # the person it reads for. Money still needs the financial grant, which a local agent is never given.
+                if "dashboards.read" not in local_agents.grants_of(principal.principal.id):
+                    return None
+                acc = svc.access("local-owner")
+            else:
+                if not (principal.principal.id.startswith("agent:") and tenant_is_current(principal.tenant)):
+                    return None
+                acc = svc.access(f"requester:{principal.tenant}")
+                if acc.basis == "deployment":
+                    return None                                        # never the unscoped fallback
+            from dataclasses import replace
+            from agentic_os import financial_access as fa
+            tenant_holds = None if acc.grant.financial is None else frozenset(fa.name_of(s) for s in acc.grant.financial)
+            held = fa.both(tenant_holds, fa.covered(principal.scopes, svc.config.synthetic_sources()))
+            return replace(acc, grant=replace(acc.grant, financial=None if held is None else tuple(sorted(held))))
 
-        def catalog(self):
-            svc = self._svc()
-            if svc is None:
-                return {"dashboards": [], "not_connected": []}
-            c = svc.catalog(svc.access("local-owner"))
-            return {"dashboards": c["dashboards"], "not_connected": [{k: d.get(k) for k in ("id", "title", "why")} for d in c["not_connected"]],
-                    "projects": c.get("projects", [])}
+        def catalog(self, principal):
+            svc = getattr(prov, "dashboards_service", None)
+            acc = self._access(svc, principal) if svc is not None else None
+            if acc is None:
+                return {"dashboards": [], "not_connected": [], "projects": []}
+            c = svc.catalog(acc)
+            return {"dashboards": c["dashboards"], "projects": c.get("projects", []),
+                    "needs_financial_grant": c.get("needs_financial_grant", []),
+                    "not_connected": [{k: d.get(k) for k in ("id", "title", "why")} for d in c["not_connected"]]}
 
-        def get(self, dashboard_id, days=30, project=""):
+        def get(self, principal, dashboard_id, days=30, project=""):
             from agentic_os.dashboards.contracts import Filters
-            from agentic_os.dashboards.service import Forbidden, NotFound
-            svc = self._svc()
+            from agentic_os.dashboards.service import Forbidden, NeedsFinancialGrant, NotFound
+            svc = getattr(prov, "dashboards_service", None)
             if svc is None:
                 return {"error": "the dashboards are not available in this build"}
+            acc = self._access(svc, principal)
+            if acc is None or (acc.grant.sources is not None and not acc.grant.sources):
+                return {"error": "not permitted"}
             try:
-                from agentic_os.agent_gateway.capabilities import bound_rows
-                return bound_rows(svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), svc.access("local-owner")).to_dict())
+                return svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), acc).to_dict()
             except NotFound:
                 return {"error": "no such dashboard or project"}
+            except NeedsFinancialGrant as e:
+                return {"error": str(e)}
             except Forbidden:
                 return {"error": "not permitted"}
 
+    from agentic_os.agent_gateway.scope import tenant_project_scope
     registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources(),
-                                   dashboards=_Dashboards() if local_agents is not None else None)
+                                   dashboards=_Dashboards() if (agents is not None or oauth is not None or local_agents is not None) else None,
+                                   scope=tenant_project_scope)
+    hub = getattr(prov, "products_hub", None)
+    if hub is not None and (agents is not None or oauth is not None):
+        # the integrated products' tools, for agents with their own identity only; each behind a named grant
+        from agentic_os.agent_gateway import product_capabilities
+        from agentic_os.products.tools import ProductTools
+        product_capabilities.register(registry, ProductTools(hub), proposals=_proposals(app),
+                                      approval_url=_approval_link)
+    app_writers, app_writes = {}, None
+    if agents is not None or oauth is not None:
+        # ERP, support and CRM: lookups behind named grants; proposals only where a state directory is configured, and each
+        # one waits in the Mission Runtime's gate for a person (agentic_os.governed_writes)
+        from agentic_os.agent_gateway import app_record_capabilities
+        from agentic_os.governed_writes.apps import writers_from_env
+        app_writers = writers_from_env()
+        # portable application definitions (agentic_os.app_definitions): off unless asked for, and their state lives with
+        # the governed writes, which is also where installing one is decided
+        app_store = None
+        _apps_dir = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
+        if _apps_dir and os.environ.get("AGENTIC_OS_APPS", "").strip() == "1":
+            from agentic_os.app_definitions import AppStore
+            app_store = AppStore(_apps_dir, catalog=lambda: {m.name: m for m in registry.all()})
+            app_writers = {**app_writers, "apps": app_store}
+        app.state.app_store = app_store
+        from agentic_os import app_gate as _app_gate
+        if app_writers and _app_gate.permissions_requested():
+            # permissions were requested: this plane joins them like an app (it refuses to start if the gate cannot be
+            # installed), and the request is made visible so enterprise permissions judge the person who approves
+            from agentic_os.governed_writes.authorization import APP as _WRITES_APP
+            _app_gate.install_gate(_WRITES_APP)
+            app.add_middleware(_app_gate.RequestContext)
+        writes_dir = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
+        if writes_dir and app_writers:
+            from agentic_os.governed_writes.routes import WRITE_ROUTE_POLICIES, make_router
+            from agentic_os.governed_writes.service import GovernedWrites
+            from agentic_os.products.principal import current_principal
+            def _single_owner() -> bool:
+                hub_ = getattr(prov, "products_hub", None)
+                return bool(hub_ is not None and hub_.registry.single_owner)
+            app_writes = GovernedWrites(writes_dir, app_writers, single_owner=_single_owner,
+                                        retention_s=float(os.environ.get("AGENTIC_OS_WRITES_RETENTION_S", "") or 7 * 86400),
+                                        ttl_s=max(60.0, float(os.environ.get("AGENTIC_OS_WRITES_TTL_S", "") or 86400)))
+
+            def _person():
+                hub_ = getattr(prov, "products_hub", None)
+                return current_principal(hub_.registry.single_owner if hub_ is not None else "")
+            app.include_router(make_router(app_writes, _person))
+            app.state.governed_writes = app_writes
+        app_record_capabilities.register(registry, app_writers, app_writes,
+                                         approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+        if "vibexgen" in app_writers or "postiz" in app_writers:
+            from agentic_os.agent_gateway import media_capabilities
+            media_capabilities.register(registry, app_writers, app_writes,
+                                        approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+        if "market-radar" in app_writers:
+            from agentic_os.agent_gateway import market_capabilities
+            market_capabilities.register(registry, app_writers, app_writes,
+                                         approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+        if app_store is not None:
+            from agentic_os.agent_gateway import app_definition_capabilities
+            app_definition_capabilities.register(registry, app_store, app_writes,
+                                                 approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+        if "erpnext" in app_writers:
+            from agentic_os.agent_gateway import economics_capabilities
+            from agentic_os.integrations.chatwoot import chatwoot_from_env
+            from agentic_os.integrations.twenty import twenty_from_env
+            from agentic_os.agent_gateway import economics_sources
+            readers = {k: v for k, v in (("chatwoot", chatwoot_from_env()), ("twenty", twenty_from_env())) if v is not None}
+            readers.update(economics_sources.from_env())
+            app.state.economics_readers = readers
+            economics_capabilities.register(registry, app_writers, readers=readers, writes=app_writes,
+                                            approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+
+    def _agent_label(principal: str) -> str:
+        """What an agent calls itself (a connection's client name) or what the operator labelled its token: for a card."""
+        ident = principal.split("projects:", 1)[-1]
+        if not ident.startswith("agent:"):
+            return ""
+        name = ident[len("agent:"):]
+        try:
+            if oauth is not None:
+                made = oauth.server.store.get_connection(name)
+                if made is not None:
+                    return str((oauth.server.store.get_client(made.get("client_id", "")) or {}).get("name", ""))
+            if agents is not None:
+                return agents.label_of(name)
+        except Exception:  # noqa: BLE001 - a label is decoration; its store failing must not hide a card
+            return ""
+        return ""
+    app.state.agent_label = _agent_label
     audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
     if audit_path:
         from agentic_os.agent_gateway.audit_store import EventStoreAuditSink
         audit = EventStoreAuditSink.from_path(audit_path)
     else:
         audit = InMemoryAuditSink()
-    # A local agent acts inside its own authority envelope (issued when the user connected it: read grants at tier 0, an action budget,
-    # an expiry). The guard is the installation's durable one; with it the gateway is fail-closed, so an agent whose envelope is
-    # missing, expired or revoked is denied even with a valid token.
-    authority = None
-    if local_agents is not None:
+    def _is_connection(p) -> bool:
+        return (oauth is not None and p.id.startswith(oauth_http.PREFIX)
+                and oauth.server.store.get_connection(p.id[len("agent:"):]) is not None)
+
+    def _authorize(p, perm):
+        if _is_local_agent(p.id):                          # connected in the installed app: its grants as they are now
+            return perm in _GRANTS and perm in local_agents.grants_of(p.id)
+        if p.id.startswith("agent:"):                      # a per-agent principal has exactly its own grants
+            if _is_connection(p):
+                return oauth.authorize(p, perm)
+            return agents is not None and agents.authorize(p, perm)
+        return perm in _SHARED_GRANTS
+
+    class _Rates:
+        """Calls a minute: a connected (OAuth) agent has the default; a file token has what its entry sets."""
+        @staticmethod
+        def rate_of(p):
+            if _is_connection(p):
+                return oauth.rate_of(p)
+            return agents.rate_of(p) if agents is not None else None
+    limits = {}
+    if agents is not None or oauth is not None:
+        from agentic_os.agent_gateway.agent_tokens import AgentRateLimit
+        limits["budget"] = AgentRateLimit(_Rates())
+    from agentic_os.mission.profile import is_production
+    # The production profile refuses a gateway without durable authority; an installation with locally connected agents is
+    # fail-closed in every profile: an agent whose envelope is missing, expired or revoked is denied even with a valid token.
+    if is_production() or local_agents is not None:
+        # The production profile refuses a gateway without durable authority (and with none configured it still does).
+        # Each per-agent token needs its stored record (agent_tokens issue --authority-db); the shared bearer has none.
+        from agentic_os.agent_gateway.agent_tokens import envelope_key_of
         from agentic_os.mission.authority import authority_from_env
-        authority = authority_from_env()
-    gateway = AgentGateway(registry=registry, authorize=_authorize,
-                           egress=PolicyEgressEngine(), audit=audit, authority=authority)
+        limits["authority"] = authority_from_env()
+        def _authority_key(gp):
+            if _is_local_agent(gp.subject):
+                from agentic_os.local_agents import envelope_key as local_envelope_key
+                return local_envelope_key(gp.subject)
+            return envelope_key_of(gp)
+        limits["authority_key"] = _authority_key
+    gateway = AgentGateway(registry=registry, authorize=_authorize, egress=PolicyEgressEngine(), audit=audit, **limits)
     verifier = _StaticVerifier()
     rest = RestGatewayAdapter(gateway, verifier)
     endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))
+
+    # an MCP client learns where to get a token from this challenge (RFC 9728)
+    challenge = f'Bearer resource_metadata="{oauth.issuer}/.well-known/oauth-protected-resource"' if oauth is not None else ""
+
+    def _unauthorized() -> HTTPException:
+        return HTTPException(status_code=401, detail="unauthorized", headers={"WWW-Authenticate": challenge} if challenge else None)
 
     @app.get("/api/agent-gateway/capabilities")
     def _agw_caps(authorization: str = Header(default="")):
         try:
             return rest.list_capabilities(authorization)
         except GatewayAuthError:
-            raise HTTPException(status_code=401, detail="unauthorized")
+            raise _unauthorized()
 
     @app.post("/api/agent-gateway/capabilities/{name}/invoke")
     def _agw_invoke(name: str, body: Dict[str, Any] = Body(default={}),
@@ -1594,7 +1855,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         try:
             return rest.invoke(authorization, name, body or {})
         except GatewayAuthError:
-            raise HTTPException(status_code=401, detail="unauthorized")
+            raise _unauthorized()
 
     @app.post("/api/agent-gateway/mcp")
     def _agw_mcp(body: Dict[str, Any] = Body(default={}), authorization: str = Header(default="")):
@@ -1602,8 +1863,117 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             return endpoint.handle(authorization, str((body or {}).get("method", "")),
                                    (body or {}).get("params") or {})
         except GatewayAuthError:
-            raise HTTPException(status_code=401, detail="unauthorized")
+            raise _unauthorized()
 
+    if os.environ.get("AGENT_GATEWAY_MCP", "").strip().lower() in ("1", "true", "yes", "on"):
+        _mount_mcp_server(app, gateway, verifier)
+
+    # The route layer refuses a write METHOD that has no declared policy - on any real network request, in every profile -
+    # and these had none, so over a socket both ways of invoking a capability answered 403 (only the in-process tests,
+    # which the layer treats as advisory, ever reached them). They are queries: this surface registers read capabilities
+    # only (held by a test), and the gateway authenticates and authorizes every call itself.
+    from agentic_os.app_kit.route_authz import RoutePolicy
+    # "operator_boundary": the gateway is the authorizing boundary. It authenticates the agent's bearer and authorizes
+    # every call by grant, tenant, authority record and rate. Most capabilities only read; the product tools can stage a
+    # proposal or start a test run (held to a pinned list by a test), and nothing here can decide or execute.
+    query = RoutePolicy("projects.agent_gateway_invoke", "operator_boundary",
+                        rationale="the gateway authenticates the agent and authorizes each capability call")
+    policies = {"POST /api/agent-gateway/capabilities/{name}/invoke": query, "POST /api/agent-gateway/mcp": query}
+    if app_writes is not None:
+        policies.update(WRITE_ROUTE_POLICIES)
+    if getattr(app.state, "agent_gateway_mcp_server", False):
+        for method in ("POST", "DELETE"):                  # DELETE ends the client's own MCP session
+            policies[f"{method} /api/agent-gateway/mcp-server/{{rest:path}}"] = query
+    if oauth is not None:
+        hub = getattr(prov, "products_hub", None)
+        def _cannot_grant(tenant: str) -> Dict[str, str]:
+            from agentic_os.agent_gateway.scope import tenant_is_current
+            svc = getattr(prov, "dashboards_service", None)
+            acc = svc.access(f"requester:{tenant}") if svc is not None and tenant_is_current(tenant) else None
+            cannot: Dict[str, str] = {}
+            if not (acc is not None and acc.basis != "deployment" and (acc.grant.sources is None or acc.grant.sources)):
+                cannot["dashboards.read"] = f"the tenant {tenant} is not granted any dashboard source here (AGENTIC_OS_TENANT_LIMITS)"
+            from agentic_os.agent_gateway.contracts import GatewayPrincipal as _GP
+            from agentic_os.agent_gateway.product_capabilities import GRANTS, tenant_may_use
+            probe = _GP(Principal("consent", "service", (), tenant), client_id="consent", workspace=tenant)
+            specs = hub.specs() if hub is not None else []
+            for grant in GRANTS:
+                kind = grant.split(".", 1)[0]
+                mine = [s for s in specs if s.kind == kind]
+                if not mine:
+                    cannot[grant] = f"no {kind} product is registered on this deployment"
+                elif not any(tenant_may_use(probe, s.id) for s in mine):
+                    cannot[grant] = f"the tenant {tenant} is not granted that product here (products:<id> in AGENTIC_OS_TENANT_LIMITS)"
+            from agentic_os.agent_gateway import app_record_capabilities as records
+            from agentic_os import financial_access as fa
+            for grant in (fa.GRANT, fa.DEMO_GRANT):
+                reaches = acc is not None and acc.basis != "deployment" and (acc.grant.financial is None or acc.grant.financial)
+                if not reaches and not records.tenant_holds_financial(probe, "erpnext"):
+                    cannot[grant] = f"the tenant {tenant} is not granted any financial data here (egress:financial in AGENTIC_OS_TENANT_LIMITS)"
+            from agentic_os.agent_gateway import economics_capabilities as economics
+            from agentic_os.governed_writes import payment_correction
+            for grant in economics.GRANTS:
+                if "erpnext" not in app_writers:
+                    cannot[grant] = "ERPNext is not connected on this deployment"
+                elif grant == economics.PROPOSE and not (app_writes is not None and payment_correction.enabled()):
+                    cannot[grant] = (f"payment corrections are not enabled on this deployment (AGENTIC_OS_WRITES_DIR, "
+                                     f"{payment_correction.ENV_ENABLED}=1 and {payment_correction.ENV_STATEMENTS})")
+                elif not records.tenant_may_use_app(probe, "erpnext") or not records.tenant_holds_financial(probe, "erpnext"):
+                    cannot[grant] = f"the tenant {tenant} is not granted ERPNext and its financial data here (app:erpnext, egress:financial)"
+            for source in sorted(economics.OWN_SCOPES):             # a mailbox or channels: connected, granted, and this tenant's
+                app_name, grant = economics.SOURCES[source]
+                reader = getattr(app.state, "economics_readers", {}).get(source)
+                if grant in cannot:
+                    continue
+                if reader is None:
+                    cannot[grant] = f"no {source} source is connected on this deployment"
+                elif not records.tenant_may_use_app(probe, app_name) or not reader.serves(tenant):
+                    cannot[grant] = f"the {source} source here is not the tenant {tenant}'s (app:{app_name}, and the source names its tenant)"
+            from agentic_os.agent_gateway import app_definition_capabilities as app_tools
+            for grant in app_tools.GRANTS:
+                if "apps" not in app_writers or app_writes is None:
+                    cannot[grant] = "applications are not enabled on this deployment (AGENTIC_OS_APPS=1 with AGENTIC_OS_WRITES_DIR)"
+                elif not records.tenant_may_use_app(probe, "apps"):
+                    cannot[grant] = f"the tenant {tenant} is not granted applications here (app:apps in AGENTIC_OS_TENANT_LIMITS)"
+            from agentic_os.agent_gateway import market_capabilities as market_tools
+            from agentic_os.agent_gateway import media_capabilities as media_tools
+            for grant, app_name in {**media_tools.GRANT_APP, **market_tools.GRANT_APP}.items():
+                if app_name not in app_writers:
+                    named = {"vibexgen": "VibeXGen", "postiz": "Postiz", "market-radar": "Market Radar"}[app_name]
+                    cannot[grant] = f"{named} is not connected on this deployment"
+                elif app_writes is None:
+                    cannot[grant] = "governed writes are not enabled on this deployment (AGENTIC_OS_WRITES_DIR)"
+                elif not records.tenant_may_use_app(probe, app_name):
+                    cannot[grant] = f"the tenant {tenant} is not granted that application here (app:{app_name} in AGENTIC_OS_TENANT_LIMITS)"
+            for grant, app_name in records.GRANT_APP.items():
+                if app_name not in app_writers:
+                    cannot[grant] = f"{records.APP_NAMES[app_name]} is not connected on this deployment"
+                elif grant.endswith(".propose") and app_writes is None:
+                    cannot[grant] = "governed writes are not enabled on this deployment (AGENTIC_OS_WRITES_DIR)"
+                elif not records.tenant_may_use_app(probe, app_name):
+                    cannot[grant] = f"the tenant {tenant} is not granted that application here (app:{app_name} in AGENTIC_OS_TENANT_LIMITS)"
+            return cannot
+
+        def _signed_in(request):
+            pages = getattr(app.state, "approval_pages", None)       # mounted after the gateway: looked up per request
+            return pages.signed_in(request) if pages is not None else None
+
+        def _sign_in(request, then):
+            pages = getattr(app.state, "approval_pages", None)
+            return pages.sign_in_url(request, then) if pages is not None else None
+
+        policies.update(oauth_http.mount(app, oauth, single_owner=lambda: hub.registry.single_owner if hub is not None else "",
+                                         unavailable=_cannot_grant, session_person=_signed_in, sign_in=_sign_in))
+        app.state.agent_gateway_open_routes = oauth_http.OPEN_ROUTES
+        app.state.agent_gateway_challenge = challenge
+        app.state.oauth_gateway = oauth
+    app.state.agent_gateway_policies = policies
+    app.state.agent_gateway_registry = registry
+
+    # what the sign-in gate may let through to this surface: a PER-AGENT credential only, never the shared bearer
+    app.state.agent_gateway_gate_check = ((lambda t: (agents is not None and agents.verify(t) is not None)
+                                           or (oauth is not None and oauth.verify(t) is not None))
+                                          if (agents is not None or oauth is not None) else None)
     return True
 
 
@@ -1724,8 +2094,44 @@ class LiveProjectionProvider(RegisteredProducersProvider):
     def workflows(self, _pid: str) -> List[dict]:
         return []
 
+    #: A host check that has not reported for this long is itself a finding: silence must not read as health.
+    HOST_STATUS_MAX_AGE_S = 1800.0
+
+    def _host_status(self) -> List[dict]:
+        """What the deployment's own host checks last reported (``PROJECTS_STATUS_DIR``: one small JSON file per check, written
+        by the operator's timers, e.g. the Vault seal check). Read-only, bounded, and never trusted for more than display:
+        ``{"name", "state": ok|warn|bad, "detail", "observed_at": <epoch>, "remedy"?}``. A file that is unreadable, or whose
+        check has gone quiet, is reported as such."""
+        import json as _json
+        import os as _os
+        import time as _time
+        d = _os.environ.get("PROJECTS_STATUS_DIR", "").strip()
+        if not d or not _os.path.isdir(d):
+            return []
+        out, now = [], _time.time()
+        for fn in sorted(_os.listdir(d))[:50]:
+            if not fn.endswith(".json"):
+                continue
+            name = fn[:-5]
+            try:
+                with open(_os.path.join(d, fn), "rb") as fh:
+                    doc = _json.loads(fh.read(8192))
+                state = doc.get("state") if doc.get("state") in ("ok", "warn", "bad") else "bad"
+                at = float(doc.get("observed_at") or 0)
+                row = {"id": name, "name": str(doc.get("name") or name)[:80], "state": state, "detail": str(doc.get("detail") or "")[:300],
+                       "observed_at": at, "remedy": str(doc.get("remedy") or "")[:300]}
+                if now - at > self.HOST_STATUS_MAX_AGE_S:
+                    row.update(state="bad", detail=f"this check has not reported since {_time.strftime('%Y-%m-%d %H:%M UTC', _time.gmtime(at))}; "
+                                                   f"its last word was: {row['detail'] or state}")
+            except Exception:  # noqa: BLE001  (a broken status file is a finding, not a crash)
+                row = {"id": name, "name": name, "state": "bad", "detail": "the status file could not be read", "observed_at": 0.0, "remedy": ""}
+            out.append(row)
+        return out
+
     def attention(self, _pid: str) -> List[dict]:
-        return []
+        return [{"id": f"host:{r['id']}", "kind": "reconnect", "title": f"{r['name']}: {r['detail']}"[:200], "reason": "reported by this deployment's host check",
+                 "consequence": r["remedy"] or "this part of the deployment is not working until someone acts", "available_actions": ["Review"], "priority": 95,
+                 **_prov("project", f"host-status:{r['id']}")} for r in self._host_status() if r["state"] == "bad"]
 
     def discovery(self, _pid: str) -> List[dict]:
         return []
@@ -1777,6 +2183,8 @@ class LiveProjectionProvider(RegisteredProducersProvider):
         name = _os.environ.get("SIDEKICK_MODEL_NAME", "").strip()
         if name and _os.environ.get("SIDEKICK_MODEL_BASE_URL", "").strip():
             models.append({"name": name, "role": "primary", "state": "mut"})
+        for r in self._host_status():
+            units.append({"name": r["name"], "state": r["state"], "detail": r["detail"]})
         return {"runtimes": units, "models": models, "security": {}, "apps": [], "sources": [], **_prov("project", "runtime:health")}
 
     def overview(self, project_id: str) -> dict:
@@ -2405,6 +2813,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # AGENT_GATEWAY_TOKEN is set. Every call runs the one governed path (permissions → egress →
     # audit); writes/mission-delegation are NOT exposed here (read-only surface).
     gateway_mounted = mount_agent_gateway(app, prov)
+    _approval_policies = mount_approvals(app, prov)
 
     # Serve the bundled Projects UI at the SAME origin as the API (no CORS) — mounted LAST so
     # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
@@ -2420,7 +2829,27 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             from .about_ui import install_about
             install_about(app, base_path)
         from fastapi.staticfiles import StaticFiles
-        app.mount("/", StaticFiles(directory=str(ui), html=True), name="projects-ui")
+
+        from agentic_os.projects.operator_gate import gate_enabled as _gate_enabled
+        _gated = _gate_enabled()
+
+        class _UiFiles(StaticFiles):
+            """The UI bundle with the cache lifetimes its files can honestly have. A build names its scripts and styles by content
+            hash (``assets/index-<hash>.js``): the same name is the same bytes forever, so a browser and an edge keep them for a
+            year without asking. The page itself names those files, so it is revalidated on every visit and a new build shows at
+            once. Without this every visit re-asked for each file through the whole network path before drawing anything."""
+
+            async def get_response(self, path, scope):
+                resp = await super().get_response(path, scope)
+                if resp.status_code == 200:
+                    hashed = path.replace("\\", "/").startswith("assets/") and re.search(r"-[A-Za-z0-9_-]{8,}\.(?:js|css|woff2?|png|jpg|svg)$", path)
+                    # Behind the sign-in gate NOTHING may be kept by a shared cache: an edge that stored a "public" file would hand
+                    # it to the next caller without asking this server, i.e. without the gate. There the files are cacheable by the
+                    # signed-in person's own browser only.
+                    scope_ = "private" if _gated else "public"
+                    resp.headers["Cache-Control"] = f"{scope_}, max-age=31536000, immutable" if hashed else "no-cache"
+                return resp
+        app.mount("/", _UiFiles(directory=str(ui), html=True), name="projects-ui")
     if capability is not None:
         app.state.local_public_paths = public
 
@@ -2428,7 +2857,9 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
     from agentic_os.app_kit import route_authz as _route_authz
     from agentic_os.projects_route_policy import AGENT_GATEWAY_ROUTE_POLICIES, APP as _APP, PROJECTS_ROUTE_POLICIES
-    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **(AGENT_GATEWAY_ROUTE_POLICIES if gateway_mounted else {}), **_product_policies, **_dashboard_policies})
+    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **(AGENT_GATEWAY_ROUTE_POLICIES if gateway_mounted else {}),
+                                     **_product_policies, **_dashboard_policies, **_approval_policies,
+                                     **getattr(app.state, "agent_gateway_policies", {})})
 
     # The local capability gate is installed LAST so it is the OUTERMOST middleware (Starlette runs the last-added first):
     # an unauthenticated desktop caller is refused before route authorization runs. With a base path, mounted_app gates
@@ -2441,7 +2872,14 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # refused request reaches no route, no static file and no other middleware. See agentic_os/projects/operator_gate.py.
     from agentic_os.projects.operator_gate import OperatorGateMiddleware as _OperatorGate, gate_enabled as _gate_enabled
     if _gate_enabled():
-        app.add_middleware(_OperatorGate)
+        _pages = getattr(app.state, "approval_pages", None)
+        _open = frozenset(getattr(app.state, "agent_gateway_open_routes", frozenset()))
+        if _pages is not None:
+            from agentic_os.projects.approval_pages import OPEN_ROUTES as _APPROVAL_OPEN
+            _open |= _APPROVAL_OPEN
+        app.add_middleware(_OperatorGate, agent_check=getattr(app.state, "agent_gateway_gate_check", None),
+                           open_routes=_open, session_check=_pages.gate_admits if _pages is not None else None,
+                           agent_challenge=getattr(app.state, "agent_gateway_challenge", ""))
 
     return app
 
@@ -2471,7 +2909,15 @@ def mounted_app(base_path: str = "", provider: Optional[ProjectionProvider] = No
     inner = create_app(provider, base_path=base, **kw)
     if not base:
         return inner
-    outer = FastAPI(title="ReDevOps Projects", version="0.1.0")
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(_outer):
+        # a parent never runs a mounted application's own lifespan, and the app's lives there (the MCP session manager)
+        async with inner.router.lifespan_context(inner) as state:
+            yield state
+
+    outer = FastAPI(title="ReDevOps Projects", version="0.1.0", lifespan=_lifespan)
     outer.mount(base, inner)   # Starlette strips the prefix before the inner app sees it
     if getattr(inner.state, "desktop_sources", None) is not None:      # a mounted app's own lifespan is not run: the outer one closes it
         from .desktop_sources import close_on_shutdown

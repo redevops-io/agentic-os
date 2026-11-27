@@ -1,0 +1,67 @@
+{
+ "app": "deploy-scan",
+ "digest": "sha256:3784f569bd2fc69d0af17f615733eb17c9be7ba048d6933b7ee6818388542be3",
+ "operations": [
+  {
+   "action": "unclassified",
+   "action_source": "none",
+   "declared_by": [
+    "service"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "scan_results",
+   "typed": false
+  },
+  {
+   "action": "unclassified",
+   "action_source": "none",
+   "declared_by": [
+    "service"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "scan_start",
+   "typed": false
+  },
+  {
+   "action": "unclassified",
+   "action_source": "none",
+   "declared_by": [
+    "service"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "scan_status",
+   "typed": false
+  }
+ ],
+ "problems": [],
+ "routes": [],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "gateway_candidates": 0,
+  "operations": 3,
+  "reachable_by_external_agents": 0,
+  "routes": 0,
+  "routes_without_a_gate_decision": 0,
+  "typed": 0,
+  "ui_calls": 0,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 0
+ },
+ "ui_calls": []
+}

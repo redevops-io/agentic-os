@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import calendar
 import os
+from pathlib import Path
 import re
 import threading
 import time
@@ -26,6 +27,10 @@ from .contracts import GATED, NOT_CONNECTED, OK, STALE, UNAVAILABLE, Record, Sou
 from .store import DAY, DashboardStore
 
 CACHE_TTL_S = 20.0
+#: runs of each (project, suite, platform) whose individual results are loaded; older runs contribute counts only
+QA_RUNS_IN_FULL = 8
+#: how old a read may be and still be SERVED (with its age shown) while a background read replaces it
+STALE_OK_S = 300.0
 #: sources whose application rate-limits its API are read less often
 SOURCE_TTL_S = {"postiz": 300.0}
 EVIDENCE_TTL_S = 3600.0          # a finished run's evidence does not change
@@ -44,12 +49,14 @@ SOURCE_META: Dict[str, Tuple[str, str, str]] = {
     "sentinel": ("Edge Sentinel", "edge-sentinel", ""),
     "twenty": ("Twenty CRM", "twenty", "twenty"),
     "erpnext": ("ERPNext", "erpnext", "erpnext"),
+    "economics": ("Economic events (ERPNext)", "erpnext", "erpnext"),
     "chatwoot": ("Chatwoot", "chatwoot", "chatwoot"),
     "lago": ("Lago billing", "lago", "lago"),
     "umami": ("Umami analytics", "umami", "umami"),
     "postiz": ("Postiz", "postiz", "postiz"),
     "listmonk": ("Listmonk", "listmonk", "listmonk"),
     "metabase": ("Control Tower (Metabase)", "metabase", "metabase"),
+    "sim_runs": ("Self-improvement run records", "", "sim_runs"),
 }
 
 
@@ -94,6 +101,18 @@ def _status(sid: str, state: str = OK, *, detail: str = "", at: float = 0.0, n: 
             remedy: str = "") -> SourceStatus:
     label, app, _ = SOURCE_META[sid]
     return SourceStatus(id=sid, label=label, app=app, state=state, detail=detail, observed_at=at, records=n, basis=basis, remedy=remedy)
+
+
+#: The most records one collector reads of one kind. A source that holds more is NOT summarised as if this were all of it:
+#: the source is then reported as partial and says so (``_partial``).
+READ_CAP = 5000
+
+
+def _partial(sid: str, what: Sequence[str], *, at: float, n: int) -> SourceStatus:
+    """A source that holds more than the collector read. Counts and sums built on it are a LOWER BOUND, so the status says
+    exactly that instead of letting a truncated read look like the whole application."""
+    return _status(sid, STALE, at=at, n=n, detail=f"only the first {READ_CAP} {', '.join(what)} were read: counts and sums here are a lower bound",
+                   remedy="narrow what this deployment reads, or raise the read limit")
 
 
 class RemoteMissionPlane:
@@ -453,11 +472,33 @@ def qa_ingest(ctx: Context) -> SourceResult:
     if not runs:
         return SourceResult(_status("qa_ingest", NOT_CONNECTED, detail="no test results have been reported to this deployment",
                                     remedy="report a run with POST /api/dashboards/qa/results (see docs/DASHBOARDS.md)", basis="ingested"))
-    keys = [(r["project"], r["suite"], r["platform"], r["run_id"]) for r in runs]
-    results = ctx.store.qa_results(keys)
+    # Every result of the latest runs of each lane (what the current state, regressions and flakiness are read from); of older
+    # runs only the counts per status, taken by the database. A lane that reports a 9,000-test run on every merge would otherwise
+    # put millions of rows through every dashboard build within weeks.
+    by_lane: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+    for r in runs:
+        by_lane.setdefault((r["project"], r["suite"], r["platform"]), []).append(r)
+    full = set()
+    for lane in by_lane.values():
+        for r in sorted(lane, key=lambda x: -x["at"])[:QA_RUNS_IN_FULL]:
+            full.add((r["project"], r["suite"], r["platform"], r["run_id"]))
+    results = ctx.store.qa_results(sorted(full))
+    counts = ctx.store.qa_run_counts(since=now - max(ctx.config.inventory_days, 90) * DAY) if len(full) < len(runs) else {}
     rows: List[Record] = []
     for r in runs:
         key = (r["project"], r["suite"], r["platform"], r["run_id"])
+        if key not in full:
+            c = counts.get(key, {})
+            spec = ctx.config.suites.get(r["suite"])
+            rows.append(Record(source="qa_ingest", kind="qa_run", id=f"{r['suite']}/{r['platform']}/{r['run_id']}", title=f"{r['suite']} on {r['platform']}",
+                               at=r["at"], project=r["project"], status="failed" if c.get("failed") else "passed" if c.get("passed") else "blocked",
+                               fields={"suite": r["suite"], "suite_name": spec.name if spec else r["suite"], "environment": r["environment"] or (spec.environment if spec else ""),
+                                       "product": r["product"] or (spec.product if spec else ""), "platform": r["platform"], "origin": r["origin"],
+                                       "evidence_verified": None if r["evidence_verified"] is None else bool(r["evidence_verified"]),
+                                       "release": r["release"] if "release" in r.keys() else "", "run_id": r["run_id"], "platforms": [r["platform"]],
+                                       "counts": dict(c), "results_loaded": False},
+                               ref=r["ref"] or f"{r['origin']}:{r['run_id']}", url=r["url"]))
+            continue
         spec = ctx.config.suites.get(r["suite"])
         base = {"suite": r["suite"], "suite_name": spec.name if spec else r["suite"], "environment": r["environment"] or (spec.environment if spec else ""),
                 "product": r["product"] or (spec.product if spec else ""), "platform": r["platform"], "origin": r["origin"],
@@ -559,8 +600,8 @@ def twenty(ctx: Context) -> SourceResult:
     if bad:
         return SourceResult(bad)
     now, project = ctx.now(), ctx.config.source_project("twenty")
-    opps = c.opportunities(limit=200)
-    companies = c.companies(limit=200)
+    opps, more_o = _twenty_all(c, "opportunities")
+    companies, more_c = _twenty_all(c, "companies")
     if not opps and not companies and not getattr(c, "connected", None):
         # this client swallows transport errors; one cheap probe tells an empty CRM from an unreachable one
         import httpx  # noqa: PLC0415
@@ -587,7 +628,35 @@ def twenty(ctx: Context) -> SourceResult:
         rows.append(Record(source="twenty", kind="account", id=str(co.get("id", "")), title=str(co.get("name") or ""), status="account", project=project,
                            at=parse_ts(co.get("createdAt")), fields={"employees": co.get("employees")},
                            ref=f"twenty:{co.get('id', '')}", url=f"{c.base_url}/object/company/{co.get('id', '')}"))
-    return SourceResult(_status("twenty", at=now, n=len(rows)), rows)
+    cut = [w for w, m in (("opportunities", more_o), ("companies", more_c)) if m]
+    return SourceResult(_partial("twenty", cut, at=now, n=len(rows)) if cut else _status("twenty", at=now, n=len(rows)), rows)
+
+
+def _twenty_all(c: Any, obj: str) -> Tuple[List[Dict[str, Any]], bool]:
+    """Every record of one Twenty object, following the REST cursor (the first page alone is 60-200 records, which made a CRM
+    with 599 companies read as 200). Returns ``(rows, truncated)``; a transport failure returns what the client's own
+    single-page read gives, so an unreachable CRM is still told apart from an empty one by the caller's probe."""
+    import httpx  # noqa: PLC0415
+    rows: List[Dict[str, Any]] = []
+    cursor = None
+    try:
+        with httpx.Client(timeout=getattr(c, "timeout", 10.0)) as client:
+            while len(rows) < READ_CAP:
+                r = client.get(f"{c.base_url}/rest/{obj}", headers={"Authorization": f"Bearer {c.api_key}"},
+                               params={"limit": 200, **({"starting_after": cursor} if cursor else {})})
+                if r.status_code >= 400:
+                    return (rows, False) if rows else (getattr(c, obj)(limit=200), False)
+                body = r.json()
+                data = body.get("data") or {}
+                page = (data.get(obj) if isinstance(data, Mapping) else data) or []
+                rows.extend(x for x in page if isinstance(x, Mapping))
+                info = body.get("pageInfo") or {}
+                cursor = info.get("endCursor")
+                if not page or not info.get("hasNextPage") or not cursor:
+                    return rows, False
+    except Exception:  # noqa: BLE001
+        return (rows, False) if rows else (getattr(c, obj)(limit=200), False)
+    return rows[:READ_CAP], True
 
 
 def erpnext(ctx: Context) -> SourceResult:
@@ -603,29 +672,81 @@ def erpnext(ctx: Context) -> SourceResult:
             return float(v)
         except (TypeError, ValueError):
             return None
-    for d in c.get_list("Sales Invoice", ["name", "customer", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=500):
+    for d in c.get_list("Sales Invoice", ["name", "customer", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="invoice", id=str(d.get("name")), title=f"{d.get('name')} · {d.get('customer') or ''}", status=str(d.get("status") or ""),
                            project=project, at=parse_ts(d.get("posting_date")),
                            fields={"amount": money(d.get("grand_total")), "outstanding": money(d.get("outstanding_amount")), "due": parse_ts(d.get("due_date")),
                                    "customer": str(d.get("customer") or ""), "currency": str(d.get("currency") or "")},
                            ref=f"erpnext:Sales Invoice/{d.get('name')}", url=f"{base}/app/sales-invoice/{d.get('name')}"))
-    for d in c.get_list("Purchase Invoice", ["name", "supplier", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=500):
+    for d in c.get_list("Purchase Invoice", ["name", "supplier", "grand_total", "outstanding_amount", "due_date", "status", "posting_date", "currency"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="bill", id=str(d.get("name")), title=f"{d.get('name')} · {d.get('supplier') or ''}", status=str(d.get("status") or ""),
                            project=project, at=parse_ts(d.get("posting_date")),
                            fields={"amount": money(d.get("grand_total")), "outstanding": money(d.get("outstanding_amount")), "due": parse_ts(d.get("due_date")),
                                    "supplier": str(d.get("supplier") or ""), "currency": str(d.get("currency") or "")},
                            ref=f"erpnext:Purchase Invoice/{d.get('name')}", url=f"{base}/app/purchase-invoice/{d.get('name')}"))
-    for d in c.get_list("Purchase Order", ["name", "supplier", "grand_total", "status", "transaction_date", "schedule_date", "per_received", "currency"], limit=500):
+    for d in c.get_list("Purchase Order", ["name", "supplier", "grand_total", "status", "transaction_date", "schedule_date", "per_received", "currency"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="purchase_order", id=str(d.get("name")), title=f"{d.get('name')} · {d.get('supplier') or ''}", status=str(d.get("status") or ""),
                            project=project, at=parse_ts(d.get("transaction_date")),
                            fields={"amount": money(d.get("grand_total")), "supplier": str(d.get("supplier") or ""), "expected": parse_ts(d.get("schedule_date")),
                                    "received_pct": money(d.get("per_received")), "currency": str(d.get("currency") or "")},
                            ref=f"erpnext:Purchase Order/{d.get('name')}", url=f"{base}/app/purchase-order/{d.get('name')}"))
-    for d in c.get_list("Supplier", ["name", "supplier_group", "disabled", "on_hold"], limit=500):
+    for d in c.get_list("Supplier", ["name", "supplier_group", "disabled", "on_hold"], limit=READ_CAP + 1)[:READ_CAP + 1]:
         rows.append(Record(source="erpnext", kind="supplier", id=str(d.get("name")), title=str(d.get("name")), project=project, at=0.0,
                            status="on_hold" if d.get("on_hold") else "disabled" if d.get("disabled") else "active",
                            fields={"group": str(d.get("supplier_group") or "")}, ref=f"erpnext:Supplier/{d.get('name')}", url=f"{base}/app/supplier/{d.get('name')}"))
+    kinds = {"invoice": "sales invoices", "bill": "supplier bills", "purchase_order": "purchase orders", "supplier": "suppliers"}
+    cut = [label for k, label in kinds.items() if sum(1 for r in rows if r.kind == k) > READ_CAP]
+    if cut:                                             # keep the cap, and say the read was cut
+        seen: Dict[str, int] = {}
+        kept = []
+        for r in rows:
+            seen[r.kind] = seen.get(r.kind, 0) + 1
+            if seen[r.kind] <= READ_CAP:
+                kept.append(r)
+        return SourceResult(_partial("erpnext", cut, at=now, n=len(kept)), kept)
     return SourceResult(_status("erpnext", at=now, n=len(rows)), rows)
+
+
+#: Chatwoot lists 25 conversations a page; five pages (125) silently cut a busy desk short.
+CHATWOOT_PAGES = 80
+
+
+def economics(ctx: Context) -> SourceResult:
+    """Money events projected from ERPNext's own documents (sales, discounts and their approval references, credit notes, cancellations,
+    supplier bills, time logged as support or rework) and payment-against-bank discrepancies. Enabled with ``erpnext``."""
+    from agentic_os.economics import reconcile as _rec  # noqa: PLC0415
+    from agentic_os.economics.erpnext_events import extract  # noqa: PLC0415
+    from agentic_os.integrations.erpnext import erpnext_from_env  # noqa: PLC0415
+    c, bad = _client(ctx, "economics", erpnext_from_env, "ERPNEXT_URL, ERPNEXT_API_KEY and ERPNEXT_API_SECRET")
+    if bad:
+        return SourceResult(bad)
+    now, project, rows = ctx.now(), ctx.config.source_project("erpnext"), []
+    ex = extract(c)
+    for e in ex.events:
+        rows.append(Record(source="economics", kind="event", id=e.id, title=f"{e.kind.value} · {e.subjects.get('customer') or e.subjects.get('supplier') or ''}",
+                           status=e.basis.value, project=project, at=parse_ts(e.at),
+                           fields={"kind": e.kind.value, "basis": e.basis.value, "amount": float(e.amount), "currency": e.currency,
+                                   "customer": e.subjects.get("customer", ""), "supplier": e.subjects.get("supplier", ""), "invoice": e.subjects.get("invoice", ""),
+                                   "approval": e.approval.id if e.approval else "", "approver": e.approval.approver if e.approval else "", "approval_verified": False, "note": e.note},
+                           ref=e.sources[0] if e.sources else ""))
+    rec = _rec.find(c)
+    for d in rec.events:
+        rows.append(Record(source="economics", kind="discrepancy", id=d.reference, title=f"{d.reference} · {d.customer}", status="ambiguous" if d.ambiguous else "open", project=project, at=now,
+                           fields={"posted": float(d.posted), "bank": float(d.bank), "difference": float(d.difference), "payment": d.payment, "payments": ", ".join(d.payments),
+                                   "ambiguous": d.ambiguous, "invoices": ", ".join(d.invoices), "customer": d.customer}, ref=d.sources[0] if d.sources else ""))
+    fixed = _rec.corrections(c)
+    for k in fixed.events:
+        rows.append(Record(source="economics", kind="payment_correction", id=f"{k.reference}:{k.replacement_payment}", title=f"{k.reference} · {k.customer}", status="reconciled" if k.reconciled else "not reconciled",
+                           project=project, at=now, fields={"cancelled": k.cancelled_payment, "cancelled_amount": float(k.cancelled_amount), "replacement": k.replacement_payment,
+                                                            "replacement_amount": float(k.replacement_amount), "bank": float(k.bank_amount) if k.bank_amount is not None else None,
+                                                            "invoices": ", ".join(k.invoices), "customer": k.customer}, ref=k.sources[0] if k.sources else ""))
+    gaps = ex.gaps + rec.gaps + fixed.gaps
+    if gaps:
+        return SourceResult(_status("economics", STALE, at=now, n=len(rows),
+                                    detail="; ".join(f"{g['source']}: {g['what']} ({g['effect']})" for g in gaps[:4]) + ": the figures built on this are incomplete",
+                                    remedy="fix what is named, then reload"), rows)
+    optional = "; ".join(f"{g['source']}: {g['what']} ({g['effect']})" for g in ex.notes[:3])
+    return SourceResult(_status("economics", at=now, n=len(rows), detail=(f"optional: {optional}" if optional else "")), rows)
 
 
 def chatwoot(ctx: Context) -> SourceResult:
@@ -634,8 +755,12 @@ def chatwoot(ctx: Context) -> SourceResult:
     if bad:
         return SourceResult(bad)
     now, project, rows = ctx.now(), ctx.config.source_project("chatwoot"), []
+    cut: List[str] = []
     for status in ("open", "pending", "resolved"):
-        for cv in c.conversations(status=status, max_pages=5):
+        listed = c.conversations(status=status, max_pages=CHATWOOT_PAGES)
+        if len(listed) >= CHATWOOT_PAGES * 25:
+            cut.append(f"{status} conversations")
+        for cv in listed:
             cid = str(cv.get("id", ""))
             created, first = parse_ts(cv.get("created_at")), parse_ts(cv.get("first_reply_created_at"))
             sender = (cv.get("meta") or {}).get("sender") or {}
@@ -646,6 +771,8 @@ def chatwoot(ctx: Context) -> SourceResult:
                                        "channel": str((cv.get("meta") or {}).get("channel") or ""), "assigned": bool((cv.get("meta") or {}).get("assignee")),
                                        "last_activity": parse_ts(cv.get("last_activity_at"))},
                                ref=f"chatwoot:{cid}", url=f"{c.base_url}/app/accounts/{c.account_id}/conversations/{cid}"))
+    if cut:
+        return SourceResult(_status("chatwoot", STALE, at=now, n=len(rows), detail=f"only the first {CHATWOOT_PAGES * 25} {', '.join(cut)} were read: counts here are a lower bound"), rows)
     return SourceResult(_status("chatwoot", at=now, n=len(rows)), rows)
 
 
@@ -841,22 +968,59 @@ def metabase(ctx: Context) -> SourceResult:
     return SourceResult(_status("metabase", at=now, n=len(rows)), rows)
 
 
+def sim_runs(ctx: Context) -> SourceResult:
+    """Records an optimizer wrote under the directory the operator named (``sources.sim_runs.dir`` or ``SIM_RUNS_DIR``)."""
+    from . import sim_source  # noqa: PLC0415
+    where = str((ctx.config.sources.get("sim_runs") or {}).get("dir") or os.environ.get("SIM_RUNS_DIR", "")).strip()
+    if not where:
+        return SourceResult(_status("sim_runs", NOT_CONNECTED, detail="no directory of optimizer runs is named",
+                                    remedy="set `sources.sim_runs.dir` in the dashboards file, or SIM_RUNS_DIR, to the directory the runs are written to"))
+    base = Path(where)
+    if not base.is_dir():
+        return SourceResult(_status("sim_runs", UNAVAILABLE, detail="the directory of optimizer runs does not exist or cannot be read"))
+    base = base.resolve()
+    rows: List[Record] = []
+    bad: List[str] = []
+    found, cut = sim_source.run_directories(base)
+    for path in found:
+        try:
+            rows.extend(sim_source.read_run(path, base, project=ctx.config.source_project("sim_runs") or ctx.default_project))
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            bad.append(f"{path.name}: {exc if isinstance(exc, sim_source.UnreadableRun) else type(exc).__name__}")
+    if bad and not rows:
+        return SourceResult(_status("sim_runs", UNAVAILABLE, detail=f"no run could be read ({'; '.join(bad)[:200]})"))
+    if bad or cut:
+        what = ([f"{len(bad)} run(s) could not be read ({'; '.join(bad)[:160]})"] if bad else []) + ([f"only the first {sim_source.MAX_RUNS} runs were read"] if cut else [])
+        return SourceResult(_status("sim_runs", STALE, at=ctx.now(), n=len(rows), basis="records", detail="; ".join(what) + ": counts here are a lower bound"), rows)
+    return SourceResult(_status("sim_runs", at=ctx.now(), n=len(rows), basis="records"), rows)
+
+
 COLLECTORS: Dict[str, Callable[[Context], SourceResult]] = {
     "missions": missions, "attention": attention, "runtime": runtime, "context_sources": context_sources,
-    "deployment": deployment, "ai_usage": ai_usage, "qa": qa, "qa_ingest": qa_ingest, "sentinel": sentinel,
-    "twenty": twenty, "erpnext": erpnext, "chatwoot": chatwoot, "lago": lago, "umami": umami, "postiz": postiz,
+    "deployment": deployment, "ai_usage": ai_usage, "qa": qa, "qa_ingest": qa_ingest, "sentinel": sentinel, "sim_runs": sim_runs,
+    "twenty": twenty, "erpnext": erpnext, "economics": economics, "chatwoot": chatwoot, "lago": lago, "umami": umami, "postiz": postiz,
     "listmonk": listmonk, "metabase": metabase,
 }
 
 
 class SourceCache:
     """One read of each source per ``CACHE_TTL_S``, shared by every dashboard and drill-down that needs it, so a number
-    and the records behind it come from the same read."""
+    and the records behind it come from the same read.
 
-    def __init__(self, ctx: Context, ttl: float = CACHE_TTL_S) -> None:
-        self.ctx, self.ttl = ctx, ttl
+    A page load never waits for the connected applications when a recent read exists: a read older than the TTL but younger
+    than ``STALE_OK_S`` is SERVED as it is (its status carries when it was observed, and the page says so) while one
+    background read replaces it. Only a first read, a read older than that, or an explicit ``fresh`` waits for the source.
+    Before this, every page opened after 20 idle seconds waited for all of them (about half a second on a LAN, more when one
+    application is slow), in front of the first number on the page."""
+
+    def __init__(self, ctx: Context, ttl: float = CACHE_TTL_S, stale_ok: float = STALE_OK_S) -> None:
+        self.ctx, self.ttl, self.stale_ok = ctx, ttl, stale_ok
         self._lock = threading.Lock()
         self._hit: Dict[str, Tuple[float, SourceResult]] = {}
+        self._refreshing: set = set()
+        #: bumped whenever a read is replaced or forgotten: "nothing a dashboard is built from has changed since N"
+        self.generation = 0
+        self.epoch = 0                       # counts explicit invalidations (a write, a forced refresh): nothing older may be served after one
 
     def enabled(self, sid: str) -> bool:
         key = SOURCE_META[sid][2]
@@ -875,33 +1039,79 @@ class SourceCache:
                     "application's address and credential in the environment the app starts from, and restart the app")
         return f"set AGENTIC_OS_DASHBOARDS to a dashboards file that lists `{key}` under `sources`, and restart"
 
-    def get(self, sid: str, *, fresh: bool = False) -> SourceResult:
-        if not self.enabled(sid):
-            return SourceResult(_status(sid, NOT_CONNECTED, detail="this source is not enabled on this deployment", remedy=self.enable_hint(sid)))
+    def _ttl(self, sid: str) -> float:
+        return max(self.ttl, SOURCE_TTL_S.get(sid, 0.0))
+
+    def _read(self, sid: str) -> SourceResult:
         now = time.monotonic()
-        with self._lock:
-            hit = self._hit.get(sid)
-            if hit and not fresh and now - hit[0] < max(self.ttl, SOURCE_TTL_S.get(sid, 0.0)):
-                return hit[1]
         try:
             res = COLLECTORS[sid](self.ctx)
         except Exception as e:  # noqa: BLE001  (a source must never take the dashboards down with it)
             res = SourceResult(_status(sid, UNAVAILABLE, detail=f"reading this source failed ({type(e).__name__})"))
         with self._lock:
             self._hit[sid] = (now, res)
+            self.generation += 1
         return res
 
-    def warm(self, sids: Sequence[str]) -> None:
-        """Read several sources at once. A person waits for the slowest application, not for the sum of them."""
-        todo = [sid for sid in dict.fromkeys(sids) if sid in COLLECTORS and self.enabled(sid)]
+    def _refresh_behind(self, sid: str) -> None:
+        """Replace a served-but-old read without making anybody wait. One refresh per source at a time."""
+        with self._lock:
+            if sid in self._refreshing:
+                return
+            self._refreshing.add(sid)
+
+        def run() -> None:
+            try:
+                self._read(sid)
+            finally:
+                with self._lock:
+                    self._refreshing.discard(sid)
+        try:
+            threading.Thread(target=run, name=f"dash-src-{sid}", daemon=True).start()
+        except RuntimeError:
+            # No threads here (WebAssembly Python in a browser): refresh in the caller's own time instead. Slower, never wrong.
+            run()
+
+    def get(self, sid: str, *, fresh: bool = False) -> SourceResult:
+        if not self.enabled(sid):
+            return SourceResult(_status(sid, NOT_CONNECTED, detail="this source is not enabled on this deployment", remedy=self.enable_hint(sid)))
         now = time.monotonic()
         with self._lock:
-            todo = [sid for sid in todo if not (self._hit.get(sid) and now - self._hit[sid][0] < max(self.ttl, SOURCE_TTL_S.get(sid, 0.0)))]
-        if len(todo) < 2:
+            hit = self._hit.get(sid)
+        if hit and not fresh:
+            age = now - hit[0]
+            if age < self._ttl(sid):
+                return hit[1]
+            if age < max(self.stale_ok, self._ttl(sid)):
+                self._refresh_behind(sid)
+                return hit[1]
+        return self._read(sid)
+
+    def warm(self, sids: Sequence[str]) -> None:
+        """Read several sources at once. A person waits for the slowest application, not for the sum of them, and only for
+        sources that have no recent read at all: the others are served and refreshed behind the response."""
+        todo = [sid for sid in dict.fromkeys(sids) if sid in COLLECTORS and self.enabled(sid)]
+        now = time.monotonic()
+        wait, behind = [], []
+        with self._lock:
+            for sid in todo:
+                hit = self._hit.get(sid)
+                age = (now - hit[0]) if hit else None
+                if age is None or age >= max(self.stale_ok, self._ttl(sid)):
+                    wait.append(sid)
+                elif age >= self._ttl(sid):
+                    behind.append(sid)
+        for sid in behind:
+            self._refresh_behind(sid)
+        if len(wait) < 2:
             return
         from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
-        with ThreadPoolExecutor(max_workers=min(8, len(todo)), thread_name_prefix="dash-src") as pool:
-            list(pool.map(self.get, todo))
+        try:
+            with ThreadPoolExecutor(max_workers=min(8, len(wait)), thread_name_prefix="dash-src") as pool:
+                list(pool.map(self._read, wait))
+        except RuntimeError:                              # a runtime without threads: one after the other (get() reads what is still missing)
+            for sid in wait:
+                self.get(sid)
 
     def invalidate(self) -> None:
         """Forget what was read, except from a rate-limited source: a forced refresh must not spend its quota."""
@@ -909,6 +1119,8 @@ class SourceCache:
         with self._lock:
             # kept whether it answered or refused: asking a rate-limited API again straight away only extends the refusal
             self._hit = {sid: h for sid, h in self._hit.items() if sid in SOURCE_TTL_S and now - h[0] < SOURCE_TTL_S[sid]}
+            self.generation += 1
+            self.epoch += 1
 
 
-__all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S"]
+__all__ = ["SOURCE_META", "COLLECTORS", "Context", "SourceResult", "SourceCache", "parse_ts", "qa_cell_status", "CACHE_TTL_S", "STALE_OK_S"]

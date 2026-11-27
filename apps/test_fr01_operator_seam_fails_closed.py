@@ -45,6 +45,15 @@ def _recording_op(name="some-app"):
                            capability("x.read", lambda i: ran.append(1) or {"ok": 1})]), ran
 
 
+# Operators nothing in this repository builds or serves, and whose changing capabilities all require approval. Each entry is
+# (file, operator name): (builder, how the test builds it). Held by test_an_unmounted_operator_is_still_unmounted_...
+UNMOUNTED_SITES = {
+    ("agentic_os/integrations/twenty_operator.py", "twenty-crm"): ("build_twenty_operator", lambda build, fake: build(client=fake)),
+    ("agentic_os/intelligence/counterparty.py", "counterparty-intelligence"): ("build_counterparty_operator", lambda build, fake: build(providers=[])),
+    ("agentic_os/procurement/rfq.py", "procurement"): ("build_procurement_operator", lambda build, fake: build(fake, fake, tenant="t")),
+}
+
+
 class TestTheSeamFailsClosedWithoutAGate:
     @pytest.mark.parametrize("value", ["1", "true", "on", "enabled"])
     def test_permissions_requested_and_no_gate_denies_every_capability_with_an_actionable_message(self, monkeypatch, value):
@@ -177,7 +186,29 @@ class TestEveryOperatorSite:
             if rel.parts[0] == "apps" and rel.parts[2] == "operator.py":
                 assert rel.parts[1] in known_dirs
                 continue
-            assert path in KERNEL_PLANE_SITES or path in DEMO_OPERATOR_SITES or "self.name" in name or name == "OPERATOR_NAME", (path, name)
+            if (path, name) in UNMOUNTED_SITES:
+                continue
+            assert path in KERNEL_PLANE_SITES or path in GATED_PLANE_SITES or path in DEMO_OPERATOR_SITES or "self.name" in name or name == "OPERATOR_NAME", (path, name)
+
+    @pytest.mark.parametrize("path,name", sorted(UNMOUNTED_SITES))
+    def test_an_unmounted_operator_is_still_unmounted_and_asks_before_it_changes_anything(self, path, name):
+        """Why it may stand outside both lists, held as a test. If anything starts building it, classify it properly."""
+        from unittest.mock import MagicMock
+
+        builder, make = UNMOUNTED_SITES[(path, name)]
+        users = [str(f.relative_to(ROOT)) for base in (ROOT / "agentic_os", APPS_DIR, ROOT / "deploy", ROOT / "examples")
+                 for f in base.rglob("*.py") if "test" not in f.name and str(f.relative_to(ROOT)) != path and builder in f.read_text()]
+        assert users == [], users
+        module = importlib.import_module(path[:-3].replace("/", "."))
+        backend = MagicMock()
+        op = make(getattr(module, builder), backend)
+        caps = op.manifest.capabilities
+        assert caps and all(c.approval_required for c in caps if c.side_effecting), [(c.name, c.side_effecting, c.approval_required) for c in caps]
+        for cap in [c for c in caps if c.side_effecting]:
+            before = len(backend.method_calls)
+            out = op.invoke(cap.name, {"name": "A Person", "email": "a@example.com", "domain": "example.com", "tenant": "t", "rfq_id": "r", "offer_id": "o"})
+            assert not out.get("executed"), (cap.name, out)
+            assert not [c for c in backend.method_calls[before:] if any(w in c[0] for w in ("send", "award", "upsert", "create", "update", "delete"))], backend.method_calls
 
     def test_the_demo_operator_sites_are_denied_under_permissions_because_they_have_no_gate(self, monkeypatch):
         monkeypatch.setenv("AGENTIC_OS_PERMISSIONS", "1")
@@ -187,5 +218,8 @@ class TestEveryOperatorSite:
 
 # the three kernel plane modules that register their operator with app_gate.kernel_governed (pinned by apps/test_dr04_no_name_based_exemption.py)
 KERNEL_PLANE_SITES = {"agentic_os/interaction/operator.py", "agentic_os/agent_gateway/social/operator.py", "agentic_os/agent_gateway/external/operator.py"}
+# a kernel plane that is gated like an app: classified in tool_actions, no exemption, and Projects installs its gate
+# (tests/test_governed_writes_authorization.py)
+GATED_PLANE_SITES = {"agentic_os/governed_writes/service.py"}
 # demos and pilots that build in-memory fakes under names that match no gate: denied under permissions (no gate registered), allowed otherwise
 DEMO_OPERATOR_SITES = {"agentic_os/mission/pilots.py", "agentic_os/mission/unified_demo.py"}

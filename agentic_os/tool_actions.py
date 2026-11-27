@@ -33,6 +33,11 @@ actions (``side_effecting=True``: ``write``); ``run_scan`` returns the latest re
 ``deploy/sidekick-devops/mcp_server.py`` registers its tool through the MCP SDK, which is not the ToolRegistry
 authorizer seam, and is not covered here: it is gated at its own transport instead (stdio by default; an http listener needs a bearer token and
 refuses to start without one; the ambient AWS credentials are used only with SIDEKICK_MCP_ALLOW_AWS=1).
+
+This table is not only what the gate reads — it is what the registrations read. ``console_tool(app)`` returns the
+app's console-tool constructor with each tool's class bound from here, so a registration site never names a class
+of its own, and ``mount_actions(app, ...)`` does the same for an MCP mount. An app that passed hand-written
+classes at the call site would hold a second copy of this classification, and the copy is the one that drifts.
 """
 from __future__ import annotations
 
@@ -96,6 +101,12 @@ TOOL_ACTIONS: dict[str, dict[str, str]] = {
         "recent_changes": "read",
         "list_watches": "read",
         "add_watch": "write",
+        # The mounted MCP tool (``AgentConsole.mount_mcp``, no prefix → the server's own name). Its server
+        # (``context_runtime.tools.mcp_servers.web_search``) makes two anonymous HTTPS GETs — the Wikipedia REST
+        # search and the Hacker News Algolia search — and returns titles and URLs: no file, no job, no state.
+        # The server's ``readOnlyHint`` is why the approval policy lets it run; this row is why the plane lets it
+        # run, and the mount reads it from here (``mount_actions``) rather than trusting the announcement.
+        "web_search": "read",
     },
     # ── the apps whose consequential tools are executed through their routes and operators (basic permissions without the enterprise package).
     # Classified from what the code DOES (per-tool evidence: docs/PERMISSIONS_MIGRATION.md section 15); the enterprise fleet table is cross-checked,
@@ -118,6 +129,8 @@ TOOL_ACTIONS: dict[str, dict[str, str]] = {
     },
     "outreach-engine": {
         "outreach.refresh": "read", "outreach.pipeline_summary": "read", "outreach.draft_followup": "read", "outreach.synced": "read",
+        "outreach.enrich": "read", "outreach.draft_pitch": "read", "outreach.check_replies": "read",
+        "outreach.follow_up": "read",
         "outreach.discover": "write", "outreach.approve": "write", "outreach.send_all": "write",
     },
     "social-autopilot": {
@@ -151,8 +164,10 @@ _OPERATOR_CAPABILITIES: dict[str, dict[str, str]] = {
               "books.reverse_entry": "write"},
     "compliance": {"compliance.explain": "read", "compliance.scan": "write", "compliance.remediate": "write", "compliance.file_consent": "write"},
     "edge-sentinel": {"sentinel.triage": "read", "sentinel.block_ip": "write", "sentinel.unblock_ip": "write"},
-    "growth-engine": {"growth.analyze": "read", "growth.reallocate_budget": "write"},
-    "market-radar": {"radar.brief": "read", "radar.add_watch": "write"},
+    "growth-engine": {"growth.analyze": "read", "growth.remeasure": "read", "growth.reallocate_budget": "write"},
+    # the loop on the company's own site reads public pages and writes nothing; the approval is a person's decision and is held to "write"
+    "market-radar": {"radar.brief": "read", "radar.add_watch": "write", "radar.synthetic_study": "write", "radar.site_audit": "read",
+                     "radar.recommend": "read", "radar.approve_plan": "write", "radar.verify_change": "read", "radar.reassess": "read"},   # writes nothing, but spends model calls: held to the stricter action
 }
 for _app, _caps in _OPERATOR_CAPABILITIES.items():
     TOOL_ACTIONS[_app].update(_caps)
@@ -161,6 +176,26 @@ for _app, _caps in _OPERATOR_CAPABILITIES.items():
 # Tools that touch no controlled data and are candidates for ``make_authorizer(public_tools=...)``. A public tool is NOT exempt from
 # classification: it is listed in TOOL_ACTIONS too, as ``read`` (the gate denies an unlisted public tool, and refuses to build when a
 # public tool is registered write or delete). (app, tool) pairs.
+#: The kernel's governed-writes plane (agentic_os.governed_writes): what external agents do with ERPNext, support and CRM.
+#: A lookup or following one's own request reads; a proposal is a write (it becomes a change once a person approves it).
+TOOL_ACTIONS["governed-writes"] = {
+    "erp.find_records": "read", "erp.get_record": "read", "erp.request_status": "read",
+    "support.list_conversations": "read", "support.get_conversation": "read", "support.request_status": "read",
+    "crm.find_companies": "read", "crm.find_people": "read", "crm.request_status": "read",
+    "erp.request_comment": "write", "erp.request_draft_purchase_order": "write", "support.request_private_note": "write",
+    "crm.request_company": "write", "crm.request_person": "write",
+    "economics.discrepancies": "read", "economics.explain_adjustment": "read", "economics.evidence": "read", "economics.findings": "read", "economics.bank_reconciliation": "read",
+    "economics.request_status": "read", "economics.request_payment_correction": "write",
+    "media.library": "read", "media.assets": "read", "media.inspect": "read", "media.import": "write", "media.compose": "write",
+    "media.export": "write", "media.request_generate": "write", "media.request_status": "read",
+    "social.channels": "read", "social.posts": "read", "social.request_post": "write", "social.request_status": "read",
+    "market.sites": "read", "market.monitor": "read", "market.research": "write", "market.list_research": "read",
+    "market.get_research": "read", "market.evidence": "read", "market.request_watch": "write", "market.request_change_plan": "write",
+    "market.verify_plan": "read", "market.request_status": "read",
+    "apps.list": "read", "apps.get": "read", "apps.state.list": "read", "apps.state.add": "write", "apps.state.update": "write",
+    "apps.request_install": "write", "apps.request_status": "read",
+}
+
 PUBLIC_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("agentic-privacy", "data_map"),
     ("edge-sentinel", "list_scannable_apps"),
@@ -177,6 +212,89 @@ def tool_actions(app: str) -> dict[str, str]:
 
 class ToolActionsConflict(ValueError):
     """The kernel's table and the enterprise package's table classify the same tool of one app differently."""
+
+
+class UnclassifiedTool(ValueError):
+    """An app tried to register a tool this table does not classify. Not a warning: an unclassified tool is
+    denied at every call, so an app that ships one has shipped a capability nobody can use. It is refused at
+    import, where the developer sees it, rather than at the console, where the user does not."""
+
+
+class RegistrationConflict(ValueError):
+    """What a registration says about itself contradicts what this table says about it. Both spellings of the
+    registration (the risk class the call passes and the ``side_effecting`` approval flag) are checked, because
+    a table a registration can quietly disagree with is a table nobody can rely on."""
+
+
+def action_for(app: str, tool: str) -> str:
+    """The reviewed risk class of one bundled tool — the ONLY place an app reads its tools' classes from.
+
+    An app that hands ``tool_actions`` to its gate and then passes a hand-written class at each registration
+    has two tables and one of them is a guess. Every console registration in this repository goes through here
+    instead (``console_tool``), so a tool's class exists in exactly one reviewed place.
+
+    Raises :class:`UnclassifiedTool` when the app or the tool is not listed: the alternative is a default, and
+    a default is how an unread capability ends up classified as the cheapest thing to grant."""
+    try:
+        action = TOOL_ACTIONS[app][tool]
+    except KeyError:
+        raise UnclassifiedTool(
+            f"tool '{app}.{tool}' has no entry in agentic_os/tool_actions.py. Read what the tool ACTUALLY does "
+            f"(its launcher, not its name) and add it as read, write or delete; an unclassified tool is denied "
+            f"every call, so registering one would ship a capability nobody can use.") from None
+    return action
+
+
+def console_tool(app: str):
+    """The app's console-tool constructor: ``context_runtime``'s ``tool()`` with the class bound from THIS table.
+
+    An app replaces its import of the console's ``tool`` with::
+
+        from agentic_os.tool_actions import console_tool
+        _crtool = console_tool(_GATE_APP)
+
+    and every ``_crtool("traffic_summary", "...", fn)`` then carries the reviewed class without the call site
+    naming one — which is the point: the risk class of a tool is decided once, in the reviewed table, by
+    whoever read what the tool does. Three things are refused here, at import, rather than left to deny a user
+    later: a tool the table does not classify (:class:`UnclassifiedTool`); a call that passes its own ``action``
+    that disagrees with the table, which would be a second table; and a tool registered ``side_effecting=True``
+    but classified ``read``, which is the approval flag contradicting the authorization class (the harness
+    refuses that combination too — asking for the weakest grant the plane issues for a tool that changes
+    things is always a mistake, never a shortcut).
+
+    ``side_effecting`` stays the APPROVAL axis and is passed through untouched: authorization and approval are
+    two checks, and a class here never grants or approves anything by itself."""
+    def register(name: str, description: str, fn, *, parameters: dict | None = None,
+                 side_effecting: bool = False, action: str | None = None):
+        declared = action_for(app, name)
+        if action is not None and action != declared:
+            raise RegistrationConflict(
+                f"tool '{app}.{name}' is registered with action={action!r} but it is classified {declared!r} in "
+                f"agentic_os/tool_actions.py. Drop the argument and let the table decide — one tool, one reviewed "
+                f"class — or change the table with the evidence for what the tool does.")
+        if side_effecting and declared == "read":
+            raise RegistrationConflict(
+                f"tool '{app}.{name}' is registered side_effecting=True but classified read in "
+                f"agentic_os/tool_actions.py. A read grant cannot authorize a tool that changes state or starts "
+                f"work: classify it write (or delete), or drop the flag if it really only reads.")
+        from context_runtime.integrations.agent_console import tool as _console_tool     # late: the base install has no context-runtime
+        return _console_tool(name, description, fn, parameters=parameters,
+                             side_effecting=side_effecting, action=declared)
+
+    register.app = app
+    return register
+
+
+def mount_actions(app: str, *tools: str) -> dict[str, str]:
+    """The ``actions`` map for ``AgentConsole.mount_mcp(...)``, read from this table.
+
+    A mounted MCP server may announce ``readOnlyHint``; that is an approval hint and never an authorization
+    class, because the thing asking to be run is not allowed to grade its own risk. Whoever mounts the server
+    declares its classes — and here that declaration lives in the same reviewed table as every in-repo tool,
+    keyed by the registered name, so the mount cannot drift from it. A tool not listed is refused rather than
+    defaulted: ``mount_mcp`` would give an unlisted tool its ``default_action`` (write, the strictest), which
+    is safe but silent, and a silent default in a classification table is how a table stops being true."""
+    return {tool: action_for(app, tool) for tool in tools}
 
 
 # PUBLIC INTAKE: a distinct classification, separate from read / write grants. It belongs to ROUTES registered here by id (app, method, path), never to a tool or an operator name, and it names the ONE tool

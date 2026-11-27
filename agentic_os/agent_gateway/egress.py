@@ -39,10 +39,16 @@ _PATTERNS = (
 _MASK = "«redacted»"
 
 
+#: a record id, not a secret or a card number: without this the card pattern eats the digit runs of some of them
+_UUID = re.compile(r"(\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b)")
+
+
 def _redact_str(s: str) -> str:
-    for pat in _PATTERNS:
-        s = pat.sub(_MASK, s)
-    return s
+    parts = _UUID.split(s)                    # the odd parts are the UUIDs themselves
+    for i in range(0, len(parts), 2):
+        for pat in _PATTERNS:
+            parts[i] = pat.sub(_MASK, parts[i])
+    return "".join(parts)
 
 
 def redact(value):

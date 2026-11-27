@@ -84,14 +84,33 @@ class QaModel:
                         self.planned.setdefault((s.project, s.id, p, tid), {"declared": False})
         for h in self.history.values():
             h.sort(key=lambda r: r.at)
-        # the latest run in range per (project, suite, platform)
-        self.latest_run: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
+        # The release a suite is on: the one its newest run in range names. Runs of that release are the suite's state; a platform
+        # whose last run was for an EARLIER release has not been executed for this one, however well it did then. (Without this,
+        # "passed on Windows for 0.1.10" stood next to "passed on macOS for 0.1.11" and read as one qualified release.)
+        newest: Dict[Tuple[str, str], Tuple[float, str]] = {}
+        any_run: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
         for cell, h in self.history.items():
             for r in h:
                 if b.since <= r.at <= b.until:
+                    k2, rel = cell[:2], str(r.get("release") or "")
+                    if k2 not in newest or r.at > newest[k2][0]:
+                        newest[k2] = (r.at, rel)
+                    if cell[:3] not in any_run or r.at > any_run[cell[:3]][0]:
+                        any_run[cell[:3]] = (r.at, rel)
+        self.release: Dict[Tuple[str, str], str] = {k: v[1] for k, v in newest.items() if v[1]}
+        # the latest run in range per (project, suite, platform), of the suite's release when it has one
+        self.latest_run: Dict[Tuple[str, str, str], Tuple[float, str]] = {}
+        for cell, h in self.history.items():
+            want = self.release.get(cell[:2])
+            for r in h:
+                if b.since <= r.at <= b.until and (want is None or str(r.get("release") or "") == want):
                     k = cell[:3]
                     if k not in self.latest_run or r.at > self.latest_run[k][0]:
                         self.latest_run[k] = (r.at, str(r.get("run_id")))
+        #: platforms whose newest run is for another release than the suite's: {(project, suite, platform): that release ("" = none named)}
+        self.behind: Dict[Tuple[str, str, str], str] = {k: v[1] for k, v in any_run.items() if k[:2] in self.release and k not in self.latest_run}
+        for k2, rel in self.release.items():
+            self.suite_names[k2] = f"{self.suite_names.get(k2, k2[1])} · {rel}"
         self.status: Dict[Cell, str] = {}
         self.latest: Dict[Cell, Optional[Record]] = {}
         for cell in self.planned:
@@ -111,7 +130,8 @@ class QaModel:
         return Record(source=prev.source if prev else "qa", kind="qa_result", id="/".join(cell), title=cell[3], status="unexecuted", project=cell[0],
                       at=prev.at if prev else 0.0,
                       fields={"suite": cell[1], "suite_name": self.suite_names.get(cell[:2], cell[1]), "platform": cell[2], "test_id": cell[3],
-                              "reason": "last result is outside the selected range" if prev else "declared in the catalog; never reported",
+                              "reason": (f"not executed for release {self.release[cell[:2]]}; last executed for {self.behind[cell[:3]] or 'an unnamed release'}"
+                                         if cell[:3] in self.behind else "last result is outside the selected range") if prev else "declared in the catalog; never reported",
                               "last_status": prev.status if prev else ""},
                       ref=prev.ref if prev else f"catalog:{cell[1]}", url=prev.url if prev else "")
 
@@ -282,6 +302,20 @@ def build(b: Build) -> None:
                          "planned": k["planned"], "coverage": pct(k["executed"], k["planned"]), "passed": k["passed"], "failed": k["failed"],
                          "blocked": k["blocked"], "unexecuted": k["unexecuted"], "unsupported": k["unsupported"]},
                         tone=rd["tone"], drill=f"project:{pid}:open" if rd["state"] == "not_ready" else ""))
+    # a project id that results were reported for but that the configuration does not declare still has a readiness: it is shown,
+    # named for what it is, rather than counted in the totals above and absent from the table that explains them
+    declared = {str(p["id"]) for p in b.projects}
+    for pid in sorted({c[0] for c in m.planned} - declared):
+        if b.f.project and pid != b.f.project:
+            continue
+        rd = m.readiness(pid)
+        k = rd["counts"]
+        b.drill(f"project:{pid}:open", f"{pid} (not declared): what blocks the release",
+                [m.cell_record(x) for st in ("failed", "blocked", "unexecuted") for x in m.cells(st, pid)], columns=cols)
+        rows.append(row({"project": f"{pid} (not declared)", "readiness": rd["label"], "why": "; ".join(rd["reasons"]) or "every planned test passed",
+                         "planned": k["planned"], "coverage": pct(k["executed"], k["planned"]), "passed": k["passed"], "failed": k["failed"],
+                         "blocked": k["blocked"], "unexecuted": k["unexecuted"], "unsupported": k["unsupported"]},
+                        tone=rd["tone"], drill=f"project:{pid}:open" if rd["state"] == "not_ready" else ""))
     d.panels.append(panel("readiness", "Release readiness by project", "table", sources=SRC, span=2, rows=rows,
                           note="Ready means every planned test passed in its latest run and no evidence was rejected.",
                           columns=[col("project", "Project"), col("readiness", "Readiness"), col("why", "Why"), col("planned", "Planned", "right"),
@@ -330,10 +364,22 @@ def build(b: Build) -> None:
             dd = day_of(r.at)
             if dd in by_day and r.status in by_day[dd] and (not b.f.platform or str(r.get("platform")) == b.f.platform):
                 by_day[dd][r.status] += 1
+    # runs older than the ones loaded in full contribute their counts (taken by the database), so the chart keeps its whole range
+    older = 0
+    for r in m.runs_in_range:
+        rc = r.get("counts", None)
+        if r.get("results_loaded", True) is False and isinstance(rc, dict) and (not b.f.platform or str(r.get("platform")) == b.f.platform):
+            dd = day_of(r.at)
+            if dd in by_day:
+                older += 1
+                for st, n in rc.items():
+                    if st in by_day[dd]:
+                        by_day[dd][st] += int(n)
     any_hist = any(sum(v.values()) for v in by_day.values())
     d.panels.append(panel("history", "Regression history", "timeseries", sources=SRC, x=days, unit="results",
                           series=[{"id": s, "label": LABEL[s], "tone": TONE[s], "values": [by_day[dd][s] for dd in days]} for s in STATUSES[:4]],
-                          note="Results reported per day. A day with no run has no bar; it is not a day of passes.",
+                          note="Results reported per day. A day with no run has no bar; it is not a day of passes."
+                               + (f" {older} older run(s) are counted here in total only; regressions and flakiness are read from the latest runs of each lane." if older else ""),
                           empty="" if any_hist else "No run reported a result in this range."))
 
     # ── defects by severity, remediation ────────────────────────────────────────────────────────────

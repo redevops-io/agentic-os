@@ -1,0 +1,93 @@
+# Installs the PUBLISHED single-pull bundle (ghcr.io/redevops-io/redevops-ts:<tag>) on clean Linux hosts of both architectures (natively) with the
+# documented script, then checks it end to end: bundle-bootstrap.sh, then bundle-smoke.sh (products wired into Projects, a QA run that needs
+# approval approved through Projects, wrong and replayed approvals refused, Sentinel's boundary closed to forged tokens).
+# Manual: run it for a bundle tag after publishing it with oci-redevops-ts. Nothing is built here; this is the artifact a user pulls.
+name: bundle-install-e2e
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_tag:
+        description: "Published bundle tag to install, for example 0.1.4"
+        required: true
+permissions:
+  contents: read
+jobs:
+  install:
+    name: install (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: linux-amd64, runner: ubuntu-24.04, compose: x86_64}
+          # arm64, native, no emulation installed. From bundle 0.1.9 (redevops-qa 0.6.6) the QA lanes run here as they do on amd64, and a
+          # section reported UNSUPPORTED fails the job. Older bundles pinned an amd64-only QA image: their lanes are UNSUPPORTED here, not passed.
+          # (There was a third job that ran the amd64 image under QEMU; with native lanes it showed nothing a user would run.)
+          - {arch: linux-arm64, runner: ubuntu-24.04-arm, compose: aarch64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      BUNDLE_TAG: ${{ inputs.bundle_tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Compose CLI plugin v5.7.0 (the version the bundle was published with)
+        run: |
+          mkdir -p ~/.docker/cli-plugins
+          curl -fsSL -o ~/.docker/cli-plugins/docker-compose "https://github.com/docker/compose/releases/download/v5.7.0/docker-compose-linux-${{ matrix.compose }}"
+          chmod +x ~/.docker/cli-plugins/docker-compose
+          docker compose version
+          uname -m
+      # Which checks this bundle version has. Compared as VERSIONS: the conditions here used to be "the tag does not start with 0.1.0 ... 0.1.6",
+      # and bundle 0.1.10 starts with "0.1.1", so its finding loop and its remediation were skipped while the job reported success.
+      - name: What this bundle version supports
+        id: has
+        run: |
+          case "$BUNDLE_TAG" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "bundle_tag must look like 0.1.4"; exit 1;; esac
+          at_least() { [ "$(printf '%s\n' "$BUNDLE_TAG" "$1" | sort -V | head -1)" = "$1" ]; }
+          at_least 0.1.7 && echo "loop=true" >> "$GITHUB_OUTPUT" || echo "loop=false" >> "$GITHUB_OUTPUT"
+          at_least 0.1.8 && echo "remediation=true" >> "$GITHUB_OUTPUT" || echo "remediation=false" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+      - name: Install the bundle with the documented script
+        working-directory: deploy/combined
+        run: |
+          case "$BUNDLE_TAG" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "bundle_tag must look like 0.1.4"; exit 1;; esac
+          cp .env.bundle.example .env.bundle && chmod 600 .env.bundle
+          sed -i "s/^BUNDLE_TAG=.*/BUNDLE_TAG=${BUNDLE_TAG}/; s/^PROJECTS_IMAGE_TAG=.*/PROJECTS_IMAGE_TAG=bundle-${BUNDLE_TAG}/" .env.bundle
+          ./bundle-bootstrap.sh
+      - name: End-to-end smoke
+        working-directory: deploy/combined
+        run: |
+          set -o pipefail
+          ./bundle-smoke.sh | tee "$RUNNER_TEMP/smoke.out"
+          # from 0.1.9 every section runs on both architectures: "OK for what this platform supports" is no longer an acceptable outcome
+          if [ "$(printf '%s\n' "$BUNDLE_TAG" 0.1.9 | sort -V | head -1)" = 0.1.9 ] && grep -q '^UNSUPPORTED' "$RUNNER_TEMP/smoke.out"; then
+            echo "a section was UNSUPPORTED on ${{ matrix.arch }} with bundle $BUNDLE_TAG"; exit 1
+          fi
+      # A failed QA run -> an Edge Sentinel case -> the decision and the re-test in Projects -> the case closed on a verified pass, with
+      # every refusal on the way. Bundles before 0.1.7 do not have the whole chain (0.1.6 was published with Edge Sentinel 0.6.3, which has no resolution endpoint): the script would fail at its first check there.
+      - name: Finding loop (QA finding, Sentinel case, Projects decision, re-test, resolution)
+        id: loop
+        if: steps.has.outputs.loop == 'true'
+        working-directory: deploy/combined
+        run: ./bundle-loop.sh
+      # A REAL remediation, not a change of fixture: the same QA plan fails against the live Edge Sentinel, the edge block is proposed, approved and
+      # executed through Projects (a real CrowdSec decision, read back), and the same plan then passes. From bundle 0.1.8 (Edge Sentinel 0.6.6, redevops-qa 0.6.5).
+      - name: Real remediation (QA finding, approved edge block, the same plan re-tested against the live edge)
+        id: remediation
+        if: steps.has.outputs.remediation == 'true'
+        working-directory: deploy/combined
+        run: ./bundle-remediation.sh
+      - name: Both loops ran (a bundle that has them must not finish without them)
+        if: steps.has.outputs.loop == 'true'
+        working-directory: deploy/combined
+        run: |
+          test "${{ steps.loop.outcome }}" = success || { echo "the finding loop did not run to success: ${{ steps.loop.outcome }}"; exit 1; }
+          if [ "${{ steps.has.outputs.remediation }}" = true ]; then test "${{ steps.remediation.outcome }}" = success || { echo "the remediation did not run to success: ${{ steps.remediation.outcome }}"; exit 1; }; fi
+      - name: On failure, keep the evidence (no secret values)
+        if: failure()
+        working-directory: deploy/combined
+        run: |
+          C="docker compose -f oci://ghcr.io/redevops-io/redevops-ts:${BUNDLE_TAG} --project-directory . --env-file .env.bundle"
+          $C ps -a || true
+          for s in projects redevops-qa edge-sentinel crowdsec; do echo "== $s"; $C logs --tail 60 "$s" 2>&1 | sed -E 's/[0-9a-f]{40,}/<redacted>/g' || true; done

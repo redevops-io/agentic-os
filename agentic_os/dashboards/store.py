@@ -248,6 +248,27 @@ class DashboardStore:
         return {"run_id": run_id, "project": project, "suite": suite, "platform": platform, "results": len(rows),
                 "duplicate": replaced, "pruned_runs": pruned}
 
+    def withdraw_qa(self, project: str, suite: str, platform: str, run_id: str) -> int:
+        """Remove ONE reported run that was filed under the wrong project, suite or platform (the reporter then reports it
+        again where it belongs). Returns how many results went with it; 0 results and no run = nothing matched."""
+        key = (str(project), str(suite), str(platform), str(run_id))
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                had = self._db.execute("SELECT 1 FROM qa_runs WHERE project=? AND suite=? AND platform=? AND run_id=?", key).fetchone()
+                if had is None:
+                    self._db.execute("ROLLBACK")
+                    raise StoreError(404, "not_found", "no such reported run")
+                n = self._db.execute("DELETE FROM qa_results WHERE project=? AND suite=? AND platform=? AND run_id=?", key).rowcount
+                self._db.execute("DELETE FROM qa_runs WHERE project=? AND suite=? AND platform=? AND run_id=?", key)
+                self._db.execute("COMMIT")
+            except StoreError:
+                raise
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return int(n)
+
     def _prune_qa(self, now: float) -> int:
         """Retention: drop runs older than the window, EXCEPT the latest run of each (project, suite, platform) — the current
         state of a lane that has gone quiet stays visible (and counts as stale), it does not silently disappear."""
@@ -274,6 +295,20 @@ class DashboardStore:
                 cur = self._db.execute("SELECT * FROM qa_results WHERE project=? AND suite=? AND platform=? AND run_id=?",
                                        (project, suite, platform, run_id))
                 out[(project, suite, platform, run_id)] = [{**dict(r), "requirements": json.loads(r["requirements"])} for r in cur.fetchall()]
+        return out
+
+
+    def qa_run_counts(self, *, since: float = 0.0) -> Dict[Tuple[str, str, str, str], Dict[str, int]]:
+        """Results per status for every run since ``since``, counted by the database: what a history chart needs of an old run,
+        without loading its thousands of results."""
+        out: Dict[Tuple[str, str, str, str], Dict[str, int]] = {}
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT x.project, x.suite, x.platform, x.run_id, x.status, COUNT(*) FROM qa_results x JOIN qa_runs r "
+                "ON r.project=x.project AND r.suite=x.suite AND r.platform=x.platform AND r.run_id=x.run_id "
+                "WHERE r.at>=? GROUP BY x.project, x.suite, x.platform, x.run_id, x.status", (since,))
+            for project, suite, platform, run_id, status, n in cur.fetchall():
+                out.setdefault((project, suite, platform, run_id), {})[status] = int(n)
         return out
 
 

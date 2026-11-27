@@ -54,7 +54,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from . import core
 from .core import (  # noqa: E402
     CHATWOOT_API_URL, CHATWOOT_API_TOKEN, CHATWOOT_ACCOUNT_ID, CHATWOOT_FRONT_URL,
-    TENANT, SUBTITLE, _headers, _acct_base, chatwoot_connected, _list_conversations,
+    TENANT, NO_INVENTION, SUBTITLE, _headers, _acct_base, chatwoot_connected, _list_conversations,
     _contact_name, _first_inbound, _channel, _truncate, fetch_activity, _get_conversation,
 )
 
@@ -74,7 +74,7 @@ def _strip_approval(obj):
     return obj
 
 
-app = FastAPI(title="agentic-support (Meridian Wealth Management · core: Chatwoot)")
+app = FastAPI(title=f"agentic-support ({TENANT} · core: Chatwoot)")
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
@@ -443,17 +443,16 @@ def _t_draft_reply(a: dict) -> dict:
         contact = _contact_name(conv)
         subject = _first_inbound(conv)
         channel = _channel(conv)
-        return {"text": f"Draft a friendly, professional client-service reply for Meridian Wealth Management to "
+        return {"text": f"Draft a friendly, professional client-service reply for {TENANT} to "
                 f"{contact} on #{conv_id} ({channel}). Their message: \"{subject}\". Keep it 3-5 "
-                f"sentences, set a next step, do not invent specific returns, figures, or firm dates. This is a suggestion "
+                f"sentences, set a next step, {NO_INVENTION}. This is a suggestion "
                 f"only — a human reviews it before it reaches the customer.",
                 "data": {"conversation_id": int(conv_id), "contact": contact, "subject": _truncate(subject)}}
     topic = (a.get("topic") or "").strip()
     if not topic:
         return {"text": "What should the reply be about? Give me a topic or a conversation id.", "data": None}
-    return {"text": f"Draft a friendly, professional client-service reply for Meridian Wealth Management about: \"{topic}\". "
-            f"Keep it 3-5 sentences, warm and concrete, set a clear next step, and do not invent specific returns, "
-            f"figures, or firm dates. This is a suggested draft only — a human reviews it before it is sent.",
+    return {"text": f"Draft a friendly, professional client-service reply for {TENANT} about: \"{topic}\". "
+            f"Keep it 3-5 sentences, warm and concrete, set a clear next step, and {NO_INVENTION}. This is a suggested draft only — a human reviews it before it is sent.",
             "data": {"topic": topic}}
 
 

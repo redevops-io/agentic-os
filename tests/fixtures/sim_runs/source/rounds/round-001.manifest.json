@@ -1,0 +1,34 @@
+{
+ "candidates": [
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "predicted": [
+    "e1",
+    "e2"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "markers are missing",
+   "screened_in": true,
+   "what": "add one marker"
+  },
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "predicted": [
+    "e1"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "markers are missing",
+   "screened_in": true,
+   "what": "add a marker and break e4"
+  }
+ ],
+ "harness": "29beae470c93ac0a73ebc9636ff032995e1c8a0abdfb07420808e0c0daaf36ea",
+ "memory_condition": "full",
+ "round": 1
+}

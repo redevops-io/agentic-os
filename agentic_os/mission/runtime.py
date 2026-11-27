@@ -1585,15 +1585,34 @@ class MissionRuntime:
             self._fail(m, plan, reason=f"{node.capability}: staged_not_executed")
             return False
         self._lease_settle(m, node.id, result)   # it executed: counters now hold the confirmed consumption
+        # A READ that reports its own failure is not a success. Verification below covers consequential nodes only, so without this a
+        # read-only step answering {"status": "error", ...} was recorded as NodeSucceeded, its error dict became the world fact of its
+        # outcome, and every later step ran on it (found 2026-11-24: a recommendation step "succeeded" with no audit to read). The same
+        # shared classifier decides; the operator's own short error and summary are kept with the failure.
+        if not needs_verification(node):
+            failed, why = result_failed(result, side_effecting=False, declares_outputs=True)
+            if failed:
+                detail = {k: str(result.get(k))[:300] for k in ("error", "summary") if isinstance(result, dict) and result.get(k)}
+                self.store.append("NodeFailed", m.id, {"node_id": node.id, "capability": node.capability, "reason": "operator_reported_failure",
+                                                       "error": why, **({"operator": detail} if detail else {})})
+                self._meter(m, node, "error")
+                self.learning.record_capability(node.capability, False)
+                self._observe_routing(node, False)
+                self._saga(m, plan, world)
+                self._fail(m, plan, reason=f"{node.capability}: {detail.get('error') or why}")
+                return False
         # P7B: verify a consequential result BEFORE it becomes authoritative world state.
         if needs_verification(node) and node.id not in self._verify_ok(m.id):
             vr = self.verifier.verify(node, result, world, m)
             self.evidence.record_verification(m.id, node.id, vr)
             self.learning.record_verification(node.capability, vr.decision == VerificationDecision.ACCEPT)
             if vr.decision != VerificationDecision.ACCEPT:
+                # The operator's own refusal (its error code and one-line summary, both short strings) is recorded with the failed verification,
+                # so a reader of the log or the cockpit sees WHY (`plan_digest_mismatch`), not only that the outcome check failed.
+                why = {k: str(result.get(k))[:300] for k in ("error", "summary") if isinstance(result, dict) and result.get(k)}
                 self.store.append("VerificationFailed", m.id,
                                   {"node_id": node.id, "capability": node.capability,
-                                   "decision": vr.decision.value, "checks": vr.checks})
+                                   "decision": vr.decision.value, "checks": vr.checks, **({"operator": why} if why else {})})
                 if vr.decision == VerificationDecision.REJECT:      # malformed / lost permission
                     self.learning.record_capability(node.capability, False)
                     self._observe_routing(node, False)
@@ -1770,9 +1789,11 @@ class MissionRuntime:
         rather than returning pending forever. ``None`` when the node was never approved."""
         granted = False
         edit = None
+        approver = ""
         for e in self.store.for_mission(mission_id):
             if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
                 granted = True
+                approver = str(e.payload.get("approver") or "")
                 if e.payload.get("edit") is not None:
                     edit = e.payload.get("edit")
         if not granted:
@@ -1782,6 +1803,17 @@ class MissionRuntime:
             marker.update(edit)
         elif edit is not None:
             marker["edit"] = edit
+        return self._bind_identity(marker, mission_id, approver)
+
+    def _bind_identity(self, marker: dict, mission_id: str, approver: str) -> dict:
+        """Who approved and for which tenant come from the recorded decision and the mission, never from an edit."""
+        marker.pop("by", None)
+        marker.pop("tenant", None)
+        if approver:
+            marker["by"] = approver
+        tenant = str(getattr(self._missions.get(mission_id), "tenant", "") or "")
+        if tenant:
+            marker["tenant"] = tenant
         return marker
 
     # ── human gates ────────────────────────────────────────────────────────────

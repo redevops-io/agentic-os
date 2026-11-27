@@ -1,0 +1,20 @@
+name: rails-projects
+services:
+  projects:
+    image: rails-projects:products
+    ports: ["127.0.0.1:18787:8787"]
+    environment:
+      AGENTIC_OS_PRODUCTS: /etc/products/products.yaml
+      PROJECTS_PROVIDER: registered
+    # the operator credential the shipped server asks the browser for, read from a file at start
+    command: ["sh", "-c", "OPERATOR_BASIC_AUTH=\"$$(cat /run/products/operator_basic)\" exec agentic-os-projects"]
+    volumes:
+      - ./products.yaml:/etc/products/products.yaml:ro
+      - ./secrets/edge-sentinel.service_token:/run/products/edge-sentinel.service_token:ro
+      - ./secrets/approval_secret:/run/products/approval_secret:ro
+      - ./secrets/operator_basic:/run/products/operator_basic:ro
+    networks: [sentinel]
+networks:
+  sentinel:
+    external: true
+    name: rails-sentinel_sentinel

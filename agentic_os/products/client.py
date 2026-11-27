@@ -80,7 +80,10 @@ class ProductClient:
         self._lock = threading.Lock()
         self._http = httpx.Client(base_url=spec.api_base, follow_redirects=False, trust_env=False,
                                   timeout=httpx.Timeout(max(spec.health_timeout_s, 5.0), connect=spec.health_timeout_s + 2),
-                                  transport=transport, limits=httpx.Limits(max_connections=8, max_keepalive_connections=2))
+                                  # no connection is reused: a product route that does not read a request body leaves it on the
+                                  # wire, and the next request on that connection arrived as "{}GET /readyz" (a 501 from a healthy
+                                  # service). Products are a local hop, so a new connection costs little.
+                                  transport=transport, limits=httpx.Limits(max_connections=8, max_keepalive_connections=0))
 
     # ── credentials ──────────────────────────────────────────────────────────────────────────────
     def service_token(self) -> str:

@@ -1,0 +1,197 @@
+{
+ "app": "sky",
+ "digest": "sha256:eee0a6f6db551cfe1a4b7c0fd21327a28c3e49d26d2e0baaa105dd1754944904",
+ "operations": [
+  {
+   "action": "read",
+   "action_source": "operator",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sky.check",
+   "inputs": {},
+   "outputs": {},
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "operator",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sky.down",
+   "inputs": {},
+   "outputs": {},
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "operator",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sky.launch",
+   "inputs": {},
+   "outputs": {},
+   "reversibility": {
+    "kind": "compensable",
+    "with": "sky.down"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "operator",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sky.optimize",
+   "inputs": {},
+   "outputs": {},
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "operator",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sky.serve",
+   "inputs": {},
+   "outputs": {},
+   "reversibility": {
+    "kind": "compensable",
+    "with": "sky.serve_down"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "write",
+   "action_source": "operator",
+   "approval_required": true,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sky.serve_down",
+   "inputs": {},
+   "outputs": {},
+   "reversibility": {
+    "kind": "undeclared"
+   },
+   "side_effecting": true,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "operator",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sky.status",
+   "inputs": {},
+   "outputs": {},
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  }
+ ],
+ "problems": [],
+ "routes": [],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "gateway_candidates": 0,
+  "operations": 7,
+  "reachable_by_external_agents": 0,
+  "routes": 0,
+  "routes_without_a_gate_decision": 0,
+  "typed": 7,
+  "ui_calls": 0,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 4
+ },
+ "ui_calls": []
+}

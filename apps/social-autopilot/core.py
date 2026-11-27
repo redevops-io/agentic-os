@@ -72,6 +72,15 @@ def credentials_error() -> str | None:
 # Optional REST base — used only for the connectivity probe / future API reads.
 POSTIZ_API_URL = os.environ.get("POSTIZ_API_URL", "http://localhost:4200").rstrip("/")
 
+# Postiz's public API (`<POSTIZ_API_URL>/api/public/v1`, the organization's API key). When a key is set, a draft is
+# created THROUGH Postiz -- plain-text caption, media uploaded to Postiz's own library -- instead of by an INSERT
+# into its database. The API only answers when Postiz's backend is up, which needs its Temporal server.
+POSTIZ_API_KEY = os.environ.get("POSTIZ_API_KEY", "")
+# Where an attached Vibexgen export is fetched from (`GET <url>/api/assets/<id>/download`), and an optional bearer.
+VIBEXGEN_API_URL = os.environ.get("VIBEXGEN_API_URL", "").rstrip("/")
+VIBEXGEN_API_TOKEN = os.environ.get("VIBEXGEN_API_TOKEN", "")
+MAX_MEDIA_BYTES = int(os.environ.get("SOCIAL_MAX_MEDIA_BYTES", str(512 * 1024 * 1024)))
+
 TENANT = "Meridian Wealth Management"
 SUBTITLE = ("Create, schedule, and engage across social on a real Postiz core — "
             "with a human in the loop before anything publishes.")
@@ -305,6 +314,22 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None, media: li
     llm = copy(topic) if copy else None
     text = llm or _template_copy(topic)
 
+    if POSTIZ_API_KEY:
+        # Through Postiz itself: the caption is plain text and the media is in Postiz's library, so the draft a
+        # reviewer opens in Postiz is the post that would go out.
+        try:
+            post_id, prov, attached = _draft_via_api(text, media)
+        except DraftError as e:
+            return {"status": "error", "action": "draft", "error": f"failed to stage draft: {e}"}
+        _remember_binding(post_id, _content_hash(text))
+        network = _net_label(prov)
+        return {"status": "done", "action": "draft", "topic": topic, "copy": text, "copy_source": "llm" if llm else "template",
+                "staged_as_draft": True, "draft_staged": True, "post_id": post_id, "network": network, "media": media or [],
+                "staged_via": "postiz_api", "postiz_media": attached,
+                "summary": (f"Drafted a {network} post on “{topic}” and staged it as a DRAFT in Postiz (id {post_id})"
+                            + (f" with {len(attached)} media file(s)" if attached else "")
+                            + ". It will not publish until a human approves it.")}
+
     fetch_activity(force=True)
     channels = _psql(
         'SELECT id, "providerIdentifier" FROM "Integration" WHERE "organizationId" = '
@@ -348,6 +373,76 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None, media: li
         "summary": (f"Drafted a {network} post on “{topic}” and staged it as a DRAFT in Postiz "
                     f"(id {post_id}). It will not publish until a human approves it."),
     }
+
+
+class DraftError(RuntimeError):
+    """A draft could not be staged through Postiz's API. The message is safe to show: it never holds a key."""
+
+
+def _api(method: str, path: str, **kw) -> "httpx.Response":
+    try:
+        r = httpx.request(method, f"{POSTIZ_API_URL}/api/public/v1{path}", headers={"Authorization": POSTIZ_API_KEY},
+                          timeout=kw.pop("timeout", 60.0), **kw)
+    except httpx.HTTPError as e:
+        raise DraftError(f"Postiz API unreachable ({type(e).__name__})") from None
+    if r.status_code >= 400:
+        raise DraftError(f"Postiz API answered HTTP {r.status_code} on {method} {path}")
+    return r
+
+
+def _fetch_export(ref: dict) -> bytes:
+    """The exported file a media reference points at, fetched from Vibexgen and checked against the size and
+    sha256 the reference carries: what is uploaded is exactly what the export step validated."""
+    import hashlib
+    import re
+    aid = str(ref.get("asset_id") or "")
+    if not re.fullmatch(r"[0-9a-f]{32}", aid):
+        raise DraftError("the media reference has no valid asset id")
+    if not VIBEXGEN_API_URL:
+        raise DraftError("the draft has media but VIBEXGEN_API_URL is not set, so the file cannot be fetched")
+    want = int(ref.get("bytes") or 0)
+    if not 0 < want <= MAX_MEDIA_BYTES:
+        raise DraftError("the media reference has no size, or is larger than SOCIAL_MAX_MEDIA_BYTES")
+    headers = {"Authorization": f"Bearer {VIBEXGEN_API_TOKEN}"} if VIBEXGEN_API_TOKEN else {}
+    try:
+        r = httpx.get(f"{VIBEXGEN_API_URL}/api/assets/{aid}/download", headers=headers, timeout=120.0)
+    except httpx.HTTPError as e:
+        raise DraftError(f"Vibexgen unreachable ({type(e).__name__})") from None
+    if r.status_code != 200:
+        raise DraftError(f"Vibexgen answered HTTP {r.status_code} for the exported file")
+    data = r.content
+    if len(data) != want or hashlib.sha256(data).hexdigest() != ref.get("sha256"):
+        raise DraftError("the fetched file does not match the export's size and sha256")
+    return data
+
+
+def _draft_via_api(text: str, media: list[dict] | None) -> tuple[str, str, list[dict]]:
+    """Stage a draft through Postiz's public API. Returns (post id, channel provider, attached media).
+
+    Order matters: the channel is resolved and every file is fetched and verified BEFORE anything is sent to
+    Postiz, so a bad reference leaves nothing behind. Only then are the files uploaded and the draft created."""
+    channels = [c for c in _api("GET", "/integrations").json() if not c.get("disabled")]
+    if not channels:
+        raise DraftError("Postiz has no connected channel to draft for")
+    ch = channels[0]
+    files = [(m, _fetch_export(m)) for m in (media or [])]
+    attached = []
+    for m, data in files:
+        ext = {"video/mp4": "mp4", "image/png": "png", "image/jpeg": "jpg"}.get(str(m.get("media_type")), "bin")
+        up = _api("POST", "/upload", files={"file": (f"{m['asset_id']}.{ext}", data, m.get("media_type") or "application/octet-stream")},
+                  timeout=300.0).json()
+        if not up.get("id") or not up.get("path"):
+            raise DraftError("Postiz accepted the upload but returned no media id")
+        attached.append({"id": up["id"], "path": up["path"], "sha256": m.get("sha256"), "asset_id": m.get("asset_id")})
+    body = {"type": "draft", "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "shortLink": False, "tags": [],
+            "posts": [{"integration": {"id": ch["id"]},
+                       "value": [{"content": text, "image": [{"id": a["id"], "path": a["path"]} for a in attached]}],
+                       "settings": {"__type": ch.get("identifier") or "", **({"post_type": "post"} if ch.get("identifier") == "instagram" else {})}}]}
+    made = _api("POST", "/posts", json=body).json()
+    pid = (made[0] if isinstance(made, list) and made else {}).get("postId")
+    if not pid:
+        raise DraftError("Postiz created no draft")
+    return pid, ch.get("identifier") or "", attached
 
 
 def _visual_media(export: object) -> tuple[list[dict] | None, str]:

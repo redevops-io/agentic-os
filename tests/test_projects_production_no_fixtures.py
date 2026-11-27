@@ -128,3 +128,29 @@ def test_real_mission_plane_rows_stay_when_a_products_registry_is_configured(mon
         assert "Reconcile invoices" in titles and len(titles) >= 2            # the real mission AND the product's rows
     finally:
         fake.close()
+
+
+def test_a_failed_host_check_is_shown_as_unhealthy_and_needs_someone(monkeypatch, tmp_path):
+    """Vault sat sealed for six days after a scheduled host reboot and nothing said so. A host check's verdict is now on the
+    deployment's own screens: runtime health, the infrastructure dashboard and "needs you"; a check that goes quiet is a finding too."""
+    import time as _time
+    d = tmp_path / "status"
+    d.mkdir()
+    (d / "vault-seal.json").write_text(json.dumps({"name": "Vault", "state": "bad", "detail": "sealed since the host rebooted", "observed_at": _time.time(),
+                                                   "remedy": "unseal it: kubectl -n vault exec -it vault-0 -- vault operator unseal"}))
+    (d / "backup.json").write_text(json.dumps({"name": "Nightly backup", "state": "ok", "detail": "completed", "observed_at": _time.time() - 7200}))
+    (d / "broken.json").write_text("{not json")
+    c = _client(monkeypatch, tmp_path, PROJECTS_STATUS_DIR=str(d))
+    pid = c.get("/api/projects", headers=H).json()[0]["id"]
+    units = {u["name"]: u for u in c.get(f"/api/projects/{pid}/runtime", headers=H).json()["runtimes"]}
+    assert units["Vault"]["state"] == "bad" and "sealed" in units["Vault"]["detail"]
+    assert units["Nightly backup"]["state"] == "bad" and "has not reported since" in units["Nightly backup"]["detail"]      # silence is not health
+    assert units["broken"]["state"] == "bad"
+    att = c.get(f"/api/projects/{pid}/attention", headers=H).json()
+    vault = next(a for a in att if a["id"] == "host:vault-seal")
+    assert "Vault" in vault["title"] and "unseal" in vault["consequence"] and len(att) == 3
+    infra = c.get("/api/dashboards/infrastructure", headers=H).json()
+    assert "Vault" in json.dumps(infra["panels"])
+    monkeypatch.delenv("PROJECTS_STATUS_DIR")
+    c2 = _client(monkeypatch, tmp_path)                                    # no status directory: nothing is invented
+    assert c2.get(f"/api/projects/{pid}/attention", headers=H).json() == []

@@ -16,7 +16,8 @@ def basic(user="ops", pw="pw-123456"):
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     for k in ("AGENTIC_OS_PROFILE", "AGENTIC_OS_CONTROL_TOKEN", "AGENTIC_OS_TENANT_TOKENS", "AGENTIC_OS_APPROVER_TOKENS", "OPERATOR_BASIC_AUTH",
-              "OPERATOR_BASIC_AUTH_USER", "OPERATOR_BASIC_AUTH_PASS", "OUTREACH_BASIC_AUTH", "AGENTIC_OS_PRODUCTS", "AGENTIC_OS_DASHBOARDS", "PROJECTS_OPERATOR_GATE"):
+              "OPERATOR_BASIC_AUTH_USER", "OPERATOR_BASIC_AUTH_PASS", "OUTREACH_BASIC_AUTH", "AGENTIC_OS_PRODUCTS", "AGENTIC_OS_DASHBOARDS", "PROJECTS_OPERATOR_GATE",
+              "PROJECTS_CORS_ORIGINS"):
         monkeypatch.delenv(k, raising=False)
     ui = tmp_path / "ui"
     ui.mkdir()
@@ -96,3 +97,60 @@ def test_the_junit_reporter_can_pass_the_gate_without_weakening_the_service_iden
     monkeypatch.setenv("DASHBOARDS_AUTHORIZATION", "Bearer gate-credential")
     assert report_junit.main(argv) == 0
     assert seen[-1]["authorization"] == "Bearer gate-credential" and seen[-1]["x-service-token"] == "svc-token"
+
+
+def test_behind_the_gate_no_file_is_marked_for_a_shared_cache(monkeypatch, tmp_path):
+    """0.4.12 marked the UI's hashed files "public": the edge in front of a gated deployment then served them to anonymous
+    callers without asking the server. Behind the gate a file may be kept by the signed-in person's own browser only."""
+    import base64
+
+    from fastapi.testclient import TestClient
+    ui = tmp_path / "ui"
+    (ui / "assets").mkdir(parents=True)
+    (ui / "index.html").write_text("<html><script src='assets/index-AbCd1234.js'></script></html>")
+    (ui / "assets" / "index-AbCd1234.js").write_text("console.log(1)")
+    for k in ("AGENTIC_OS_PROFILE", "AGENTIC_OS_CONTROL_TOKEN", "AGENTIC_OS_TENANT_TOKENS", "AGENTIC_OS_APPROVER_TOKENS", "AGENTIC_OS_PRODUCTS", "AGENTIC_OS_DASHBOARDS"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("PROJECTS_UI_DIR", str(ui))
+    monkeypatch.setenv("OPERATOR_BASIC_AUTH", "operator:" + "p" * 40)
+    monkeypatch.setenv("PROJECTS_OPERATOR_GATE", "1")
+    from agentic_os.projects_api import create_app
+    c = TestClient(create_app())
+    h = {"Authorization": "Basic " + base64.b64encode(("operator:" + "p" * 40).encode()).decode()}
+    assert c.get("/assets/index-AbCd1234.js").status_code == 401                     # the gate, not a cache, answers an anonymous caller
+    cc = c.get("/assets/index-AbCd1234.js", headers=h).headers["cache-control"]
+    assert cc.startswith("private") and "public" not in cc and "immutable" in cc
+    assert "public" not in c.get("/", headers=h).headers["cache-control"]
+    monkeypatch.delenv("PROJECTS_OPERATOR_GATE")
+    open_ = TestClient(create_app())
+    assert open_.get("/assets/index-AbCd1234.js").headers["cache-control"].startswith("public")   # an open deployment may be cached by anyone
+
+
+def test_an_allowed_page_origin_can_ask_permission_and_read_a_refusal_but_gets_nothing_without_a_credential(env):
+    """A dashboards page on another origin (the portable page) connects with a bearer. The browser's preflight carries no
+    credential by specification, so from an ALLOWED origin it must be answered; nothing else changes."""
+    env.setenv("PROJECTS_OPERATOR_GATE", "1")
+    env.setenv("OPERATOR_BASIC_AUTH", "ops:pw-123456")
+    env.setenv("PROJECTS_CORS_ORIGINS", "https://dash.example")
+    c = TestClient(create_app(SampleProjectionProvider()))
+    pre = {"Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}
+    ok = c.options("/api/dashboards", headers={"Origin": "https://dash.example", **pre})
+    assert ok.status_code == 200 and ok.headers["access-control-allow-origin"] == "https://dash.example" and "dashboards" not in ok.text
+    other = c.options("/api/dashboards", headers={"Origin": "https://evil.example", **pre})
+    assert other.status_code == 401 and "access-control-allow-origin" not in other.headers        # not allowed: refused like anything else
+    assert c.options("/api/dashboards", headers={"Origin": "https://dash.example"}).status_code == 401   # OPTIONS that is not a preflight
+    # the real request is gated as before; the allowed page can read the refusal and is not shown the operator's Basic prompt
+    r = c.get("/api/dashboards", headers={"Origin": "https://dash.example"})
+    assert r.status_code == 401 and r.headers["access-control-allow-origin"] == "https://dash.example" and "www-authenticate" not in r.headers
+    r = c.get("/api/dashboards", headers={"Origin": "https://evil.example"})
+    assert r.status_code == 401 and "access-control-allow-origin" not in r.headers and "www-authenticate" in r.headers
+    good = c.get("/api/dashboards", headers={"Origin": "https://dash.example", **basic()})
+    assert good.status_code == 200 and good.headers["access-control-allow-origin"] == "https://dash.example"
+
+
+def test_without_an_allowed_origin_a_preflight_is_refused(env):
+    env.setenv("PROJECTS_OPERATOR_GATE", "1")
+    env.setenv("OPERATOR_BASIC_AUTH", "ops:pw-123456")
+    c = TestClient(create_app(SampleProjectionProvider()))
+    r = c.options("/api/dashboards", headers={"Origin": "https://dash.example", "Access-Control-Request-Method": "GET"})
+    assert r.status_code == 401

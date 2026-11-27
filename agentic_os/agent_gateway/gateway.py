@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, replace
-from typing import Protocol, Tuple
+from typing import Mapping, Protocol, Tuple
 
 from agentic_os.overlays import Principal
 
@@ -94,6 +94,27 @@ class InMemoryAuditSink:
         ref = f"audit_{len(self.events)}"
         self.events.append(event)
         return ref
+
+
+def invalid_arguments(request: GatewayRequest, manifest: CapabilityManifest) -> list:
+    """What is wrong with a call's arguments (field paths, never values), or nothing. A capability that publishes an input
+    schema is held to it: required inputs and types always, and inputs it does not name where it says
+    ``additionalProperties: false`` (every capability the mounted gateway offers does, so a misspelt or wrapped argument
+    is not silently ignored). An integrator's partial schema keeps accepting what it does not list. ``idempotency_key`` is
+    the gateway's own and always accepted. A capability that declares no schema at all is not checked."""
+    schema = dict(manifest.input_schema or {})
+    if not schema:
+        return []
+    from agentic_os.schema_check import SchemaError, validate   # noqa: PLC0415
+    arguments = request.arguments
+    if not isinstance(arguments, Mapping):
+        return ["$: expected object"]
+    declared = schema.get("properties", {})
+    try:
+        validate({k: v for k, v in arguments.items() if k != "idempotency_key" or k in declared}, schema)
+    except SchemaError as exc:
+        return exc.problems
+    return []
 
 
 # ── the gateway ────────────────────────────────────────────────────────────────────
@@ -266,6 +287,15 @@ class AgentGateway:
                 return self._finalize(request, start, GatewayResult(request.request_id, GatewayStatus.PENDING_APPROVAL, d),
                                       exposed_reason="permitted")
             standing_ok = ordinary and adec.allowed
+
+        # 1c. the arguments against the capability's published schema. AFTER authority, so a caller who may not run the
+        # call learns that and nothing else; before rate limits and dispatch, so a malformed call reaches no handler, and
+        # what authority or an idempotency key reserved for it is released (nothing was dispatched).
+        problems = invalid_arguments(request, manifest)
+        if problems:
+            decision = GatewayDecision(allowed=False, reason="invalid_arguments", risk_tier=tier)
+            return self._finalize(request, start, GatewayResult(request.request_id, GatewayStatus.ERROR, decision,
+                                                               error="invalid_arguments: " + "; ".join(problems[:6])), exposed_reason="permitted")
 
         # 2. budget / rate limit
         ok, why, budget_rules = self.budget.check(gp, manifest)

@@ -67,3 +67,7 @@ def test_approval_token_for_one_tenant_document_cannot_be_used_by_another_tenant
     r = invoke(client, GLOBEX, "document.apply_patch", inputs, approval_token=tok, mission_id="m-1", node_id="n-1",
                idempotency_key="idem-cross-tenant-1").json()["result"]
     assert r["status"] != "ok" and "apply_edit" not in env.backend.calls
+    unbound = kit.mint("document-editor", "document.apply_patch", inputs, tenant="")        # names no tenant: no tenant may use it
+    r = invoke(client, ACME, "document.apply_patch", inputs, approval_token=unbound, mission_id="m-1", node_id="n-1",
+               idempotency_key="idem-cross-tenant-2").json()["result"]
+    assert r["status"] == "pending_approval" and "apply_edit" not in env.backend.calls

@@ -1,0 +1,173 @@
+# Installs the PUBLISHED desktop artifacts of a release on real macOS, Windows and Linux machines and exercises the installed app natively
+# (packaging/acceptance/native_check.py): hash against the signed manifest, platform signature, native install, the control plane started
+# from the installed binary (no Docker), the local-session handshake, UI assets, a first workflow, clean stop, uninstall.
+# Nothing is built here. A check that cannot run on a platform is recorded as "unsupported", never as passed.
+name: published-artifacts-acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release whose assets are tested, for example v0.6.1"
+        required: true
+  # A change to the check or to this workflow is itself tested against the current release's artifacts.
+  pull_request:
+    paths:
+      - .github/workflows/published-artifacts-acceptance.yml
+      - packaging/acceptance/native_check.py
+      - packaging/acceptance/release_assets_check.py
+      - packaging/acceptance/compat_check.py
+      - deploy/compat/releases.json
+      - packaging/acceptance/ui_workflow.mjs
+permissions:
+  contents: read
+jobs:
+  # What the release page itself carries: the signed manifest, every installer listed in it, and an SBOM per platform and
+  # architecture (packaging/acceptance/release_assets_check.py). r0prime-v0.1.3..5 were published without SBOMs because no
+  # check looked at the published release; a release that drops them again fails here.
+  supply-chain:
+    name: supply chain (signed manifest, SBOMs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag || 'r0prime-v0.1.5' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Check the published release
+        run: |
+          mkdir -p rel
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release.json
+          # the patterns may match nothing on a broken release: the check then reports what is missing
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D rel -p "release-manifest.json*" -p release-signing-key.pub -p "sbom-*.cdx.json" || echo "no matching asset on the release"
+          python3 -I packaging/acceptance/release_assets_check.py --tag "$TAG" --dir rel --assets-json release.json --out release_assets_check.json
+      - name: The release is the one deploy/compat/releases.json pairs with this tag
+        run: python3 -I packaging/acceptance/compat_check.py --tag "$TAG" --release-dir rel
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: release-assets-check
+          path: release_assets_check.json
+          if-no-files-found: warn
+  native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: macos-arm64 (dmg), runner: macos-15, pattern: "*_aarch64.dmg"}
+          - {name: windows-x64 (msi), runner: windows-2022, pattern: "*_x64_en-US.msi"}
+          - {name: windows-x64 (nsis exe), runner: windows-2022, pattern: "*_x64-setup.exe"}
+          - {name: linux-amd64 (deb), runner: ubuntu-24.04, pattern: "*_amd64.deb"}
+          - {name: linux-amd64 (AppImage), runner: ubuntu-24.04, pattern: "*_amd64.AppImage"}
+          - {name: linux-arm64 (deb), runner: ubuntu-24.04-arm, pattern: "*_arm64.deb"}
+          - {name: linux-arm64 (AppImage), runner: ubuntu-24.04-arm, pattern: "*_aarch64.AppImage"}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag || 'r0prime-v0.1.5' }}
+      PATTERN: ${{ matrix.pattern }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download the published asset and check it against the release manifest
+        shell: bash
+        run: |
+          # A release carries either the signed manifest (v0.6.1) or checksum lists from the signing runs (the r0prime prereleases).
+          mkdir -p dl ref && gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$PATTERN" -D dl
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p release-manifest.json -p "SHA256SUMS*" -D ref
+          python - <<'PY'
+          import glob, hashlib, os
+          asset = glob.glob("dl/*")[0]
+          h = hashlib.sha256(open(asset, "rb").read()).hexdigest()
+          refs = {f: open(f, encoding="utf-8", errors="replace").read() for f in glob.glob("ref/*")}
+          where = [os.path.basename(f) for f, t in refs.items() if h in t]
+          ok = bool(where)
+          print(asset, h, "listed in:", where or "NOTHING the release publishes")
+          open(os.environ["GITHUB_ENV"], "a").write(f"ASSET={asset}\nASSET_SHA256={h}\n")
+          raise SystemExit(0 if ok else 1)
+          PY
+      - name: macOS - signature, notarization, install
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/aa "$ASSET"
+          APP="$(ls -d /tmp/aa/*.app | head -1)"
+          codesign --verify --deep --strict "$APP"
+          spctl -a -vv "$APP"
+          xcrun stapler validate "$ASSET"
+          mkdir -p "$HOME/aa-install" && cp -R "$APP" "$HOME/aa-install/"
+          echo "SIDECAR=$HOME/aa-install/$(basename "$APP")/Contents/MacOS/redevops-sidecar" >> "$GITHUB_ENV"
+      - name: Windows - signature and silent install
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature $env:ASSET
+          "$($sig.Status) $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "the installer's Authenticode signature is $($sig.Status)" }
+          if ($env:ASSET -like '*.msi') { $p = Start-Process msiexec -ArgumentList '/i', (Resolve-Path $env:ASSET), '/qn', '/norestart' -Wait -PassThru }
+          else { $p = Start-Process (Resolve-Path $env:ASSET) -ArgumentList '/S' -Wait -PassThru }
+          if ($p.ExitCode -ne 0) { throw "installer exit code $($p.ExitCode)" }
+          $side = Get-ChildItem -Path "$env:ProgramFiles", "$env:LOCALAPPDATA" -Recurse -Filter 'redevops-sidecar.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $side) { throw 'redevops-sidecar.exe not found after install' }
+          $s2 = Get-AuthenticodeSignature $side.FullName
+          if ($s2.Status -ne 'Valid') { throw "the installed sidecar's signature is $($s2.Status)" }
+          "SIDECAR=$($side.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Linux - install the .deb
+        if: runner.os == 'Linux' && endsWith(env.ASSET, '.deb')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y "./$ASSET"
+          echo "SIDECAR=$(command -v redevops-sidecar || echo /usr/bin/redevops-sidecar)" >> "$GITHUB_ENV"
+      - name: Linux - unpack the AppImage
+        if: runner.os == 'Linux' && endsWith(env.ASSET, '.AppImage')
+        run: |
+          chmod +x "$ASSET" && "./$ASSET" --appimage-extract >/dev/null
+          echo "SIDECAR=$(find "$PWD/squashfs-root" -name redevops-sidecar -type f | head -1)" >> "$GITHUB_ENV"
+      - name: Native checks of the installed app
+        shell: bash
+        env:
+          # the dashboards session's independent API checks run inside native_check.py and write dashboards_check.json
+          DASH_CHECK_PLATFORM: ${{ matrix.name }}
+          DASH_CHECK_RELEASE: "${{ inputs.release_tag || 'current-release' }}"
+        run: python packaging/acceptance/native_check.py "$SIDECAR" native_result.json
+      # The same build, in a real browser on this operating system: first workflows, keyboard, accessibility, the session boundary.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: UI workflows, keyboard and accessibility in a real browser
+        shell: bash
+        run: |
+          mkdir -p uiroot && (cd uiroot && npm init -y >/dev/null && npm i --silent @playwright/test@1.56.1 axe-core@4.10.3 && if [ "$RUNNER_OS" = Linux ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi)
+          # v0.6.1 predates the explicit profile (launcher 0.1.2): recorded as a known defect of that release, not as a pass.
+          if [ "$TAG" = v0.6.1 ]; then export KNOWN_NO_PROFILE=1; fi
+          # r0prime-v0.1.3 (application 0.1.2) on Linux: the workspace is 14 px wider than a 390 px window where scrollbars are not overlaid.
+          # Recorded as a known defect of that release until the Projects UI is fixed; any other release must pass the check.
+          if [ "$TAG" = r0prime-v0.1.3 ] && [ "$RUNNER_OS" = Linux ]; then export KNOWN_NARROW_OVERFLOW=1; fi
+          PW_ROOT="$PWD/uiroot" node packaging/acceptance/ui_workflow.mjs "$SIDECAR" ui_result.json
+      - name: Windows - uninstall leaves nothing running
+        if: runner.os == 'Windows' && endsWith(env.ASSET, '.msi')
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/x', (Resolve-Path $env:ASSET), '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exit code $($p.ExitCode)" }
+          if (Test-Path $env:SIDECAR) { throw 'the sidecar is still on disk after uninstall' }
+      - name: Linux - uninstall the .deb
+        if: runner.os == 'Linux' && endsWith(env.ASSET, '.deb')
+        run: |
+          sudo apt-get remove -y "$(dpkg-deb -f "$ASSET" Package)"
+          test ! -e /usr/bin/redevops-sidecar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ strategy.job-index }}
+          path: |
+            native_result.json
+            dashboards_check.json
+            ui_result.json
+          if-no-files-found: warn

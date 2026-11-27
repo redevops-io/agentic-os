@@ -55,7 +55,9 @@ _TOOLS: Tuple[Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, 
      ("request_unban_approval",)),
     ("security.sentinel_request_decision", "security", "Show the approval card of an Edge Sentinel proposal. Makes no decision.",
      ("approval card", "request decision", "show approval", "what needs approval security"), ("request_id",), (), ()),
-    ("security.sentinel_read_back", "security", "Read the persisted post-action verification (read-back) of an Edge Sentinel action.",
+    ("security.sentinel_read_back", "security", "Read the persisted post-action verification (read-back) of an Edge Sentinel action. "
+     "action_has_run says whether the action ran and dry_run whether it was only a dry run; executed is false on every tool result "
+     "and means this call executed nothing.",
      ("read back", "verify ban", "was the ban verified", "verification", "read-back"), ("request_id",), (), ()),
     ("quality.qa_info", "quality", "redevops-qa version, platform and which test profiles are available or explicitly unavailable.",
      ("qa info", "quality status", "test platform status", "which tests can run"), (), (), ()),
@@ -68,6 +70,8 @@ _TOOLS: Tuple[Tuple[str, str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, 
     ("quality.qa_start_run", "quality", "Start a redevops-qa run for a target and profile; a run that needs approval waits for a person.",
      ("start run", "run tests", "start qa run", "run test profile"), ("target_id", "profile"),
      ("estimate_digest", "defect"), ("request_run_approval",)),
+    ("quality.qa_list_runs", "quality", "Recent redevops-qa runs with their state and outcome, newest first; filter by state to find what failed.",
+     ("list runs", "recent runs", "failed runs", "which runs failed", "qa history"), (), ("state", "limit"), ()),
     ("quality.qa_get_run", "quality", "Progress, state and outcome of a redevops-qa run.",
      ("run progress", "how is the run going", "qa run status", "get run"), ("run_id",), (), ()),
     ("quality.qa_run_events", "quality", "Progress events of a redevops-qa run.",
@@ -285,14 +289,18 @@ class ProductTools:
     def _sentinel_read_back(self, spec, inp, who):
         v = self.hub.sentinel(spec.id).verification(inp["request_id"], actor=who, source="sidekick")
         state = str(v.get("state") or "not_run")
-        text = {"verified": "Verified: the product read the edge back and the decision is present.",
+        text = {"verified": "Verified: the product read the edge back and saw the expected result.",
                 "unverified": "Unverified: the request was accepted but the read-back did not observe it.",
-                "dry_run": "Dry run: nothing was blocked, so there is nothing to verify at the edge.",
+                "dry_run": "Executed as a dry run: nothing was blocked, so there is nothing to verify at the edge.",
+                "no_read_back": "The action ran (it has a receipt) but no read-back is recorded, so its effect is not verified.",
                 "not_run": "No read-back has run yet (the action has not executed)."}.get(state, state)
         return CapabilityResult(capability_id="security.sentinel_read_back", answer=f"{inp['request_id']}: {text}"
                                 + (f" {v.get('detail')}" if v.get("detail") else ""), data={
             "product": spec.id, "request_id": inp["request_id"], "state": state, "detail": v.get("detail", ""),
-            "at": v.get("at", ""), "receipt_id": v.get("receipt_id", ""), "executed": False}, evidence=(inp["request_id"],),
+            "at": v.get("at", ""), "receipt_id": v.get("receipt_id", ""), "receipt_status": v.get("receipt_status", ""),
+            # about the ACTION: whether it ran at all, and whether that run was only a dry run
+            "action_has_run": bool(v.get("receipt_id")), "dry_run": v.get("receipt_status") == "DRY_RUN" or state == "dry_run",
+            "executed": False}, evidence=(inp["request_id"],),                       # "executed" is about THIS call: it runs nothing
             artifacts=(_link(spec, "action", inp["request_id"], f"/ui/actions/{inp['request_id']}"),))
 
     # quality ----------------------------------------------------------------------------------
@@ -337,6 +345,14 @@ class ProductTools:
         return CapabilityResult(capability_id="quality.qa_start_run", answer=ans, data={
             "product": spec.id, "run_id": rid, "state": st, "approval": card, "executed": False},
             evidence=(rid,), artifacts=(_link(spec, "run", rid, f"/ui/runs/{rid}"),))
+
+    def _qa_list_runs(self, spec, inp, who):
+        r = self.hub.qa(spec.id).runs(state=inp.get("state", ""), limit=inp.get("limit", 20), actor=who, source="sidekick")
+        items = r.get("items", r.get("runs", [])) if isinstance(r, Mapping) else []
+        lines = [f"{x.get('id') or x.get('run_id')} {x.get('state')}" + (f" {x.get('outcome')}" if x.get("outcome") else "") for x in items[:10]]
+        return CapabilityResult(capability_id="quality.qa_list_runs", answer=(f"{len(items)} run(s): " + "; ".join(lines) + ".") if items else "No runs match.",
+                                data={"product": spec.id, "items": items, "executed": False},
+                                evidence=tuple(str(x.get("id") or x.get("run_id")) for x in items if x.get("id") or x.get("run_id")))
 
     def _qa_get_run(self, spec, inp, who):
         r = self.hub.qa(spec.id).run(inp["run_id"], actor=who, source="sidekick")

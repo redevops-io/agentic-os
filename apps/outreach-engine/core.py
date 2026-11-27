@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import base64
 import hmac
+import html
 import json
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 from agentic_os.mission.operator_sdk import pending_approval
+from agentic_os.world import enrichment as _enrichment
 
 # ── config (env) ─────────────────────────────────────────────────────────────
 TWENTY_URL = os.environ.get("TWENTY_URL", "http://twenty:3000").rstrip("/")
@@ -32,6 +35,12 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 # Public Twenty origin (browsable UI) — read from env so the read-back panel can deep-link a
 # synced opportunity into the real CRM over https. Falls back to the internal URL.
 TWENTY_PUBLIC_URL = os.environ.get("TWENTY_PUBLIC_URL", "https://crm.redevops.io").rstrip("/")
+
+# ── the real sender for send_all: a Gmail mailbox's App Password (smtp.gmail.com, STARTTLS). No
+# Postmark/SES wiring here on purpose -- outreach-engine is a generic, OUTREACH_TENANT-configurable
+# app, and the simplest honest sender for an arbitrary already-owned mailbox is SMTP + an app password.
+GMAIL_SMTP_USER = os.environ.get("GMAIL_SMTP_USER", "")
+GMAIL_SMTP_APP_PASSWORD = os.environ.get("GMAIL_SMTP_APP_PASSWORD", "")
 
 # ── tenant / product framing — configurable so the CRM agent works for ANY workspace. Defaults to
 # Meridian Wealth Management (the demo company used across the agentic apps).
@@ -189,6 +198,50 @@ def teardown(s: dict) -> dict:
     return {"subject": a + ": a quick note from " + TENANT, "body": body, "icp": icp}
 
 
+def pitch_visual_html(row: dict) -> str:
+    """A small, honestly-labelled visualization of the REAL evidence that produced this outreach — not a
+    vanity chart. Every bar is a number already on the row (signal/source weight, and real GitHub stars
+    when present); nothing here is invented for the prospect. Every style is inlined (no external CSS,
+    no <style> block) because that's what actually survives into an email client's DOM.
+    """
+    bars = [("Signal strength", SIGNAL_PRIORITY.get(row.get("signal"), 0.15)),
+            ("Source confidence", SOURCE_WEIGHT.get(row.get("source"), 0.5))]
+    if row.get("stars"):
+        bars.append(("Project traction (★)", min(1.0, row["stars"] / 5000.0)))
+    rows = ""
+    for label, frac in bars:
+        pct = max(4, round(frac * 100))
+        rows += (
+            "<tr>"
+            "<td style=\"padding:4px 10px 4px 0;font:13px -apple-system,Segoe UI,sans-serif;color:#333;"
+            "white-space:nowrap\">" + html.escape(label) + "</td>"
+            "<td style=\"width:100%\"><div style=\"background:#e7e9ee;border-radius:4px;height:10px;"
+            "width:100%;max-width:220px\"><div style=\"background:#1f5eff;border-radius:4px;height:10px;width:" +
+            str(pct) + "%\"></div></div></td>"
+            "<td style=\"padding:4px 0 4px 10px;font:12px -apple-system,Segoe UI,sans-serif;color:#667;"
+            "white-space:nowrap\">" +
+            str(round(frac * 100)) + "%</td></tr>"
+        )
+    return (
+        "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:14px 0;"
+        "border-collapse:collapse;width:100%;max-width:400px\">"
+        "<tr><td colspan=\"3\" style=\"font:600 12px -apple-system,Segoe UI,sans-serif;color:#667;"
+        "padding-bottom:6px\">WHY WE REACHED OUT &mdash; the actual evidence, not a guess</td></tr>" +
+        rows + "</table>"
+    )
+
+
+def render_pitch_html(subject: str, text_body: str, row: dict) -> str:
+    """The HTML alternative for an outreach email: the drafted text, the evidence visualization, and the
+    lead's own real link (its GitHub repo/source, when the row has one) — never a fabricated one."""
+    paras = "".join(f"<p style=\"margin:0 0 12px;font:14px -apple-system,Segoe UI,sans-serif;color:#1a1a1a;"
+                    f"line-height:1.5\">{html.escape(p)}</p>" for p in text_body.strip().split("\n\n") if p.strip())
+    link = row.get("url") or row.get("artifact")
+    link_html = (f"<p style=\"margin:12px 0 0\"><a href=\"{html.escape(link)}\" "
+                f"style=\"color:#1f5eff;text-decoration:none\">{html.escape(link)}</a></p>") if link else ""
+    return (f"<div style=\"max-width:560px\">{paras}{pitch_visual_html(row)}{link_html}</div>")
+
+
 _LIVE_CACHE = {"ts": 0.0, "rows": []}
 
 
@@ -274,12 +327,24 @@ def _pilot_amount(row: dict) -> int:
 
 
 def twenty_sync(row: dict) -> bool:
+    """Whether the pilot was created in Twenty. See :func:`twenty_sync_result` for why not."""
+    return bool(twenty_sync_result(row)["synced"])
+
+
+def twenty_sync_result(row: dict) -> dict:
     """Create a REAL, followable pilot in Twenty for an approved lead: a Company (the org + its
     site/repo), a Person (the repo's top maintainer, with their GitHub profile as the contact),
-    and a populated Opportunity (amount · 30-day close · stage · linked to both). Needs TWENTY_API_KEY."""
-    if not TWENTY_API_KEY or not isinstance(row, dict):
-        return False
+    and a populated Opportunity (amount · 30-day close · stage · linked to both). Needs TWENTY_API_KEY.
+
+    Returns ``{"synced", "reason", "step", "http"}``. ``reason`` says why nothing (or not everything) was written: no key, a key or a
+    record Twenty refused (with its status), or Twenty not answering. A refusal is never reported as a sync, and a sync is reported
+    only when Twenty returned the id of the opportunity it created."""
+    if not TWENTY_API_KEY:
+        return {"synced": False, "reason": "no_api_key", "step": None, "http": None}
+    if not isinstance(row, dict):
+        return {"synced": False, "reason": "unknown_account", "step": None, "http": None}
     acct = row.get("account", "")
+    step = "company"
     try:
         full = row.get("full_name") or ""
         owner = _gh_profile(acct) if row.get("source") == "github" else {}
@@ -301,17 +366,61 @@ def twenty_sync(row: dict) -> bool:
             }
             if poc.get("email"):
                 person_payload["emails"] = {"primaryEmail": poc["email"]}
+            step = "person"
             pid = _tw_post("/rest/people", person_payload).get("id")
         from datetime import datetime, timedelta, timezone
         close = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        _tw_post("/rest/opportunities", {
+        step = "opportunity"
+        opp = _tw_post("/rest/opportunities", {
             "name": f"Pilot — {owner.get('name') or acct}",
             "amount": {"amountMicros": int(row.get("amount") or _pilot_amount(row)) * 1_000_000, "currencyCode": "USD"},
             "closeDate": close, "stage": "NEW", "companyId": cid, "pointOfContactId": pid,
         })
-        return True
+        if not opp.get("id"):
+            return {"synced": False, "reason": "twenty_returned_no_record", "step": step, "http": None}
+        return {"synced": True, "reason": "", "step": step, "http": None, "opportunity_id": opp["id"]}
+    except urllib.error.HTTPError as e:
+        # 400 on the company is what Twenty answers to a second company with the same address: the lead is already there
+        why = "twenty_refused_credentials" if e.code in (401, 403) else "twenty_refused_record"
+        return {"synced": False, "reason": why, "step": step, "http": e.code}
+    except (urllib.error.URLError, OSError):
+        return {"synced": False, "reason": "twenty_unreachable", "step": step, "http": None}
+    except Exception:  # noqa: BLE001 - an answer that could not be read is not a sync
+        return {"synced": False, "reason": "twenty_answer_unreadable", "step": step, "http": None}
+
+
+def _domain_of(owner: dict) -> str:
+    """A bare company domain (no scheme, no leading ``www.``) from a GitHub profile's ``blog`` field,
+    or '' if the profile has none / it doesn't parse as a host."""
+    blog = (owner.get("blog") or "").strip()
+    if not blog:
+        return ""
+    url = blog if "://" in blog else "https://" + blog
+    try:
+        host = urllib.parse.urlparse(url).netloc
     except Exception:
-        return False
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def enrich_contact(row: dict, *, provider=None) -> dict:
+    """Resolve a verified business email for this lead's point of contact via the configured enrichment
+    provider (Hunter by default; ``HUNTER_API_KEY``). Spends the provider's credits — call per-account on
+    demand, never on every pipeline refresh. Needs a real company domain, taken from the lead's public
+    GitHub profile; leads with no discoverable domain (e.g. the offline DEMO set, which has no GitHub
+    presence) stay at email=None — this never fabricates an address."""
+    acct = row.get("account", "")
+    full = row.get("full_name") or ""
+    owner = _gh_profile(acct) if row.get("source") == "github" else {}
+    poc = _gh_top_contributor(full) if full else {}
+    domain = _domain_of(owner)
+    if not domain:
+        return {"email": None, "verified": False, "provider": None,
+                "reason": "no company domain available for this lead"}
+    name = poc.get("name") or owner.get("name") or acct
+    parts = str(name).split(" ", 1)
+    first, last = parts[0], (parts[1] if len(parts) > 1 else "")
+    return _enrichment.resolve_verified_email(domain=domain, first_name=first, last_name=last, provider=provider)
 
 
 def twenty_opportunities(limit: int = 20) -> list[dict]:
@@ -360,6 +469,25 @@ def refresh(body: dict | None = None) -> dict:
     return {"ok": True, "action": "refresh", "n": len(_STATE["accounts"])}
 
 
+def enrich(body: dict | None = None) -> dict:
+    """Resolve + attach a verified business email for one ranked account (read-only; no CRM write, no
+    approval gate — it spends the enrichment provider's credits, not the prospect's trust). Call this
+    before ``approve``/``send_all`` so the sequence has a real address to land on."""
+    body = body or {}
+    acct = body.get("account", "")
+    row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
+    if row is None:
+        return {"ok": False, "action": "enrich", "account": acct,
+                "reason": "unknown account — refresh the pipeline first"}
+    result = enrich_contact(row)
+    row["contact_email"] = result.get("email")
+    row["email_verified"] = bool(result.get("verified"))
+    row["email_provider"] = result.get("provider")
+    if result.get("reason"):
+        row["email_reason"] = result["reason"]
+    return {"ok": True, "action": "enrich", "account": acct, **result}
+
+
 def approve(body: dict | None = None) -> dict:
     """Human sign-off on a ranked account → queue it AND sync a real pilot to Twenty CRM."""
     body = body or {}
@@ -368,22 +496,103 @@ def approve(body: dict | None = None) -> dict:
     acct = body.get("account", "")
     _STATE["approved"].add(acct)
     row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
-    synced = twenty_sync(row) if row else False
-    return {"ok": True, "action": "approve", "account": acct, "twenty_synced": synced}
+    res = twenty_sync_result(row) if row else {"synced": False, "reason": "unknown_account", "step": None, "http": None}
+    out = {"ok": True, "action": "approve", "account": acct, "twenty_synced": bool(res["synced"])}
+    if not res["synced"]:
+        out["twenty_sync"] = {k: res[k] for k in ("reason", "step", "http")}
+    return out
+
+
+def _sender():
+    """The configured real sender (Gmail SMTP app-password), or None when it isn't wired."""
+    if GMAIL_SMTP_USER and GMAIL_SMTP_APP_PASSWORD:
+        from agentic_os.world.connectors import GmailSMTPConnector
+        return GmailSMTPConnector(GMAIL_SMTP_USER, GMAIL_SMTP_APP_PASSWORD)
+    return None
+
+
+def _reader():
+    """The configured real reply reader (same Gmail App Password as the sender), or None when not wired."""
+    if GMAIL_SMTP_USER and GMAIL_SMTP_APP_PASSWORD:
+        from agentic_os.world.connectors import GmailIMAPConnector
+        return GmailIMAPConnector(GMAIL_SMTP_USER, GMAIL_SMTP_APP_PASSWORD)
+    return None
+
+
+def check_replies(body: dict | None = None) -> dict:
+    """Check the sender's own inbox for a reply from one account's (or every approved account's) contact
+    email. Read-only; never claims a reply exists without actually checking — with no reader configured,
+    or on an IMAP failure, it reports that honestly instead of guessing either way."""
+    body = body or {}
+    acct = body.get("account", "")
+    reader = _reader()
+    if reader is None:
+        return {"ok": False, "action": "check_replies", "reason": "no reader (IMAP) configured", "results": []}
+    if acct:
+        row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
+        targets = [row] if row else []
+        if row is None:
+            return {"ok": False, "action": "check_replies", "account": acct,
+                    "reason": "unknown account — refresh the pipeline first", "results": []}
+    else:
+        targets = [r for r in _STATE["accounts"] if r["account"] in _STATE["approved"]]
+    results = []
+    for row in targets:
+        to = row.get("contact_email")
+        if not to:
+            results.append({"account": row["account"], "replied": False,
+                            "reason": "no contact email on this lead — run `enrich` first"})
+            continue
+        res = reader.find_replies(to, limit=3)
+        replied = bool(res.get("ok")) and bool(res.get("replies"))
+        entry = {"account": row["account"], "replied": replied}
+        if replied:
+            row["replied"] = True
+            row["reply"] = res["replies"][0]
+            entry["reply"] = res["replies"][0]
+        elif not res.get("ok"):
+            entry["reason"] = res.get("error", "reply check failed")
+        results.append(entry)
+    return {"ok": True, "action": "check_replies", "results": results}
 
 
 def send_all(body: dict | None = None) -> dict:
     """Dispatch every approved outreach sequence to its prospect (the human-gated send).
 
-    HONEST no-op: no live sender (SMTP/provider) is wired in the demo, so nothing actually reaches a
-    prospect. This reports the approved sequences as STAGED and the send as UNEXECUTED — it never claims to
-    have sent what it didn't. `sequences_sent: False` is set explicitly so the operator SDK's output-marker
-    merge can't read this back as a successful send (N4). Wire a real sender to set it True."""
+    Sends ONLY to an approved account that `enrich` already resolved a VERIFIED contact_email for; an
+    approved account with no verified email is reported as skipped, never guessed at. With no sender
+    (GMAIL_SMTP_USER/GMAIL_SMTP_APP_PASSWORD) configured, this is an honest no-op exactly as before:
+    `sequences_sent: False` is set explicitly so the operator SDK's output-marker merge can't read this
+    back as a successful send (N4) when nothing actually reached a prospect."""
     if not (body or {}).get("_approval"):
         return pending_approval("outreach.send_all", staged=sorted(_STATE["approved"]), sequences_sent=False)
     approved = sorted(_STATE["approved"])
-    return {"ok": False, "action": "send_all", "status": "not_configured", "executed": False,
-            "sequences_sent": False, "dispatched": 0, "staged": approved, "sender_configured": False,
-            "reason": "no sender (SMTP/provider) is wired into this deployment",
-            "note": "no live sender configured — approved sequences are staged, not sent. "
-                    "Wire a sender (SMTP/provider) to actually dispatch."}
+    sender = _sender()
+    if sender is None:
+        return {"ok": False, "action": "send_all", "status": "not_configured", "executed": False,
+                "sequences_sent": False, "dispatched": 0, "staged": approved, "sender_configured": False,
+                "reason": "no sender (SMTP/provider) is wired into this deployment",
+                "note": "no live sender configured — approved sequences are staged, not sent. "
+                        "Wire a sender (SMTP/provider) to actually dispatch."}
+    results = []
+    sent = 0
+    for acct in approved:
+        row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
+        to = (row or {}).get("contact_email")
+        if not row or not to or not row.get("email_verified"):
+            results.append({"account": acct, "sent": False,
+                            "reason": "no verified contact email — run `enrich` for this account first"})
+            continue
+        draft = row.get("draft") or teardown(row)
+        html_body = draft.get("html") or render_pitch_html(draft["subject"], draft["body"], row)
+        r = sender.send(to=to, subject=draft["subject"], body=draft["body"], tag="outreach-engine",
+                        html=html_body)
+        ok = r.get("error_code", 1) == 0
+        entry = {"account": acct, "sent": ok, "to": to, "message_id": r.get("message_id")}
+        if not ok:
+            entry["reason"] = r.get("error", "send failed")
+        results.append(entry)
+        sent += int(ok)
+    return {"ok": True, "action": "send_all", "status": "dispatched" if sent else "no_eligible_recipients",
+            "executed": True, "sequences_sent": sent > 0, "dispatched": sent, "staged": approved,
+            "sender_configured": True, "results": results}

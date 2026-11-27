@@ -90,5 +90,10 @@ class HTTPOperatorClient:
         if configured_token():                      # operators require the same bearer credential as the runtime
             headers["Authorization"] = f"Bearer {configured_token()}"
         data = post_json(f"{self._base(operator)}/invoke", body, headers, self.timeout, self.transport)
+        if isinstance(data, dict) and "result" not in data and set(data) == {"detail"} and data["detail"]:
+            # A transport that returns the body of a refused request instead of raising (an in-process test
+            # client does) must not turn the refusal into the capability's result.
+            from .util import HTTPError  # noqa: PLC0415
+            raise HTTPError(f"operator {operator} refused {capability}: {str(data['detail'])[:300]}")
         # tolerate either {"result": {...}} or a bare result object
         return data.get("result", data) if isinstance(data, dict) else {"result": data}

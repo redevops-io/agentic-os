@@ -250,7 +250,49 @@ def inbound_lead(mission_id: str) -> ExecutionIntent:
                            steps=[s_crm, s_draft, s_send, s_log, s_next])
 
 
+def market_intelligence_loop(mission_id: str) -> ExecutionIntent:
+    """Market Intelligence on the company's own site, as one loop that ends in a checked change.
+
+    research (what changed on watched pages; how the site reads to a search engine; where visitors come from) → recommendations with
+    evidence and machine checks → a person approves the list (bound to its digest) → the change is made in the site's own repository →
+    QA: the approved items' checks must pass on the LIVE site (the step fails until they do; re-running it is the wait) → analytics read
+    again → reassessment, whose output is the next round's input. Nothing in the mission writes to the site."""
+    s_brief = IntentStep(outcome="market_brief", value_hint="medium", need="summarise what changed on the watched competitor and vendor pages")
+    s_audit = IntentStep(outcome="site_audit", value_hint="high", need="audit the company's own site for discoverability and funnel instrumentation")
+    s_before = IntentStep(outcome="growth_attribution", value_hint="medium", need="read where visitors and leads come from before the change")
+    s_rec = IntentStep(outcome="recommendations", inputs_from=["site_audit", "market_brief", "growth_attribution"], value_hint="high",
+                       need="rank recommendations from the audit, the brief and the analytics, each with evidence and checks")
+    s_ok = IntentStep(outcome="change_plan_approved", inputs_from=["recommendations"], value_hint="high",
+                      need="have a person approve the list of recommendations to implement",
+                      constraints=["requires human approval, bound to the digest of the list"])
+    s_qa = IntentStep(outcome="change_verified", inputs_from=["change_plan_approved"], value_hint="high",
+                      need="verify on the live site that every approved recommendation was implemented")
+    s_after = IntentStep(outcome="growth_remeasured", inputs_from=["change_verified"], value_hint="medium",
+                         need="read the analytics again after the change")
+    s_re = IntentStep(outcome="reassessment", inputs_from=["site_audit", "change_verified", "growth_attribution", "growth_remeasured"], value_hint="medium",
+                      need="audit again and state what was resolved, what remains and what is new")
+    return ExecutionIntent(mission_id=mission_id, rationale="market-intelligence-loop template",
+                           steps=[s_brief, s_audit, s_before, s_rec, s_ok, s_qa, s_after, s_re])
+
+
+def market_intelligence_research(mission_id: str) -> ExecutionIntent:
+    """The research half of the loop, on its own: what changed on watched pages, how the site reads, where visitors come from, and the
+    ranked recommendations. Every step only READS (public pages, the analytics store); none is consequential, so the mission has no
+    approval step and runs to the end without a person. It decides nothing: `recommendations.plan_kind` says whether the list proposes a
+    change to the site (`changes`) or only information (`read_only`). A list that proposes changes is implemented through
+    `market_intelligence_loop`, whose approval step is where a person decides."""
+    s_brief = IntentStep(outcome="market_brief", value_hint="medium", need="summarise what changed on the watched competitor and vendor pages")
+    s_audit = IntentStep(outcome="site_audit", value_hint="high", need="audit the company's own site for discoverability and funnel instrumentation")
+    s_before = IntentStep(outcome="growth_attribution", value_hint="medium", need="read where visitors and leads come from")
+    s_rec = IntentStep(outcome="recommendations", inputs_from=["site_audit", "market_brief", "growth_attribution"], value_hint="high",
+                       need="rank recommendations from the audit, the brief and the analytics, each with evidence and checks")
+    return ExecutionIntent(mission_id=mission_id, rationale="market-intelligence-research template (read-only)",
+                           steps=[s_brief, s_audit, s_before, s_rec])
+
+
 TEMPLATES = {
+    "market_intelligence_loop": market_intelligence_loop,
+    "market_intelligence_research": market_intelligence_research,
     "onboarding": onboarding,
     "invoice_recovery": invoice_recovery,
     "deploy_app": deploy_app,

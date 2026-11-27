@@ -112,7 +112,8 @@ sends no SQL of its own, and nothing here is required on a desktop or WASM insta
 No new authority. The caller is the principal Projects already resolves; a tenant bearer sees what
 `AGENTIC_OS_TENANT_LIMITS` grants (`dashboards:<source>`, `project:<id>`, or `*`); an Enterprise overlay may answer
 `provider.dashboard_access(principal)` instead; an `access` section in the dashboards file names what an anonymous caller
-and each principal may see, and with it present anything not granted is refused. An aggregate covers only records the
+and each principal may see, and with it present anything not granted is refused. **Financial data additionally needs the
+financial-data grant** (below). An aggregate covers only records the
 caller may read, and a caller scoped to some projects is told the totals are partial.
 
 Write routes (`PUT`/`DELETE /api/dashboards/views`, `POST /api/dashboards/{id}/track`, `POST /api/dashboards/qa/results`)
@@ -123,9 +124,77 @@ A deployment that enables business sources should not be reachable anonymously a
 control-plane bearer on every request, 503 when none is configured. A public evaluation deployment keeps the gate off and
 enables no business source.
 
+### Financial data needs its own grant
+
+Seeing a source is not seeing its money. The rule is one module (`agentic_os/financial_access.py`) used by the
+dashboards, their drill-downs and trends, Sidekick explanations, the agent gateway and ERPNext record lookups, so anything
+built on those reads inherits it.
+
+* **Refused whole** without the grant: `erpnext`, the economic events, `lago` and `metabase` (a saved question may hold
+  anything). **Money removed** from `twenty` (deal amounts) and `ai_usage` (recorded and projected spend): counts, stages,
+  tokens and durations remain, and each money figure reads "withheld", never zero and never "not recorded".
+* **Grants:** `egress:financial` (every source the caller may read), `egress:financial:<source>` (one), or
+  `demo:financial` (**only** sources the operator declared `data: synthetic` under `sources`).
+* **Who holds it:** the operator, the admin token, the desktop owner and a declared single owner. A tenant holds what its
+  `policy_refs` name. In an `access` section it is the `financial` key (`"*"`, a list, or `demo`). An Enterprise overlay
+  returns it as `financial` in `dashboard_access`; an answer without it grants none. **Anonymous callers can only be given
+  `demo`.** An agent needs the grant itself **and** its tenant must hold it.
+* A refusal says what is missing: HTTP 403 `missing_grant`, and the catalog lists such dashboards under
+  `needs_financial_grant`.
+
+A public demonstration over synthetic data:
+
+```yaml
+sources:
+  erpnext: {data: synthetic}
+access:
+  anonymous: {projects: "*", sources: [erpnext], financial: demo}
+```
+
+## Self-improvement
+
+What a harness optimizer did, from the records it writes (`agent-harness.sim-run/1`, `agent-harness.sim/1`): every
+candidate edit with the root-cause hypothesis it addresses and the tasks it was **predicted** to fix before it was
+evaluated; the measured fixed, missed and broken tasks; whether it was accepted, rejected, refused or screened out; memory
+carried from another run, with each run's task and optimizer models; and rollbacks. Each figure drills into its records.
+
+Off until the operator lists it, because a run's text is written by a model reading task failures:
+
+```yaml
+sources:
+  sim_runs: {project: <project id>, dir: /path/to/the/runs}     # or SIM_RUNS_DIR
+```
+
+Run directories (a `state.json`, `sim.json` and `rounds/`) are looked for up to three levels down. Per-task replies and
+traces in the round records are not read. A run that cannot be read is named and the figures are marked a lower bound; if
+none can be read they are unknown, not zero. Links leading out of the directory are not followed. The records carry no
+time, so the date range does not filter them. The dashboard reports what runs did; it does not claim a system improves
+itself, and it says when nothing was accepted.
+
+**Comparing runs.** A chart by run sets runs side by side, so it is drawn only for runs a reviewer marked comparable in a
+`RUN_NOTES.json` (`agent-harness.sim-run-notes/1`: `comparable`, `caveat`) in the run's directory or above it, and only
+among the runs under that same file. Runs without notes are "not yet reviewed" and are not compared. Each caveat is shown
+word for word; notes that cannot be shown in full approve nothing.
+
 ## From a finding to an action
 
 A drill-down returns actions. None executes anything by itself: *Ask Sidekick* answers from the evidence behind the
 number; *Track in Today* adds a note with the record references to the intake; *Review in Today* opens the approval;
 *Escalate to a security case* and *Request a re-test* call the registered product's existing human-only routes;
 *Plan a fix as a Mission* hands the finding to Sidekick, which creates a Mission when a runtime is bound.
+
+
+## Releases in the QA dashboard
+
+A reported run may name the `release` it qualifies. The state of a suite is then the state of the release its newest run
+names: for every platform the latest run **of that release** counts. A platform whose last run was for an earlier release
+reads "not executed" for the current one, and its drill-down says which release it last ran for. The suite's rows carry
+the release in their label. A suite whose runs name no release works as before (the latest run of each platform).
+Consequence for reporters: report one product per suite. Two products with their own version lines in one suite (a bundle
+and a desktop app, say) would make each other's platforms read "not executed".
+
+## Withdrawing a misfiled run
+
+`DELETE /api/dashboards/qa/results?project=&suite=&platform=&run_id=` removes exactly one reported run (all four are
+required). The callers are the ones that may report: a service identity holding `dashboards.ingest_qa`, or the operator.
+It exists to correct a run filed under the wrong suite or platform; report it again where it belongs.

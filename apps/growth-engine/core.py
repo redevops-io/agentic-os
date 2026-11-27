@@ -330,12 +330,13 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
                f"{best['label']} (modeled ROAS {best['roas']:.1f}x). Use action "
                "'reallocate_budget' — it is approval-gated.")
 
-    summary = (f"Top channel is {t['top_channel']} by lead volume. "
-               f"{t['leads']} leads / {t['visitors']} visitors over 30d, "
-               f"{t['conversions']} est. conversions ({t['booked_rate']}% booked rate), "
+    # What is MEASURED here is traffic: visitors, and visits attributed to a channel (called "leads" in this app's model). Conversions, the booked
+    # rate, spend, CPL and ROAS are computed from fixed rates on that traffic. The sentence says which is which, so a model is not read as a result.
+    summary = (f"Measured (Umami, 30d): {t['visitors']} visitors, {t['leads']} visits attributed to a channel; the top channel is {t['top_channel']}. "
+               f"Modelled from fixed rates, not measured: {t['conversions']} conversions ({t['booked_rate']}% booked rate), "
                f"blended CPL ${t['blended_cpl']:,.0f}, blended ROAS "
                f"{'∞' if t['blended_roas'] is None else str(t['blended_roas'])+'x'} "
-               "(spend/CPL/ROAS are a modeled_estimate: illustrative until an ad connector is configured).")
+               "(a modeled_estimate: illustrative until an ad connector and a conversion source are configured).")
 
     reasoning = blurb(
         "You are a growth marketing agent for a wealth management firm. In ONE sentence, "
@@ -350,6 +351,8 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
         "recommendation": rec,
         "source": "real Umami stats + UTM/referrer metrics (30d)",
         "economics_basis": MODELED, "economics_note": MODELED_NOTE,
+        "measured": {"visitors": t["visitors"], "attributed_visits": t["leads"], "top_channel": t["top_channel"], "window": "30d", "source": "umami"},
+        "modelled": {"conversions": t["conversions"], "booked_rate_pct": t["booked_rate"], "basis": "fixed conversion rates applied to attributed visits"},
     }
     if reasoning:
         out["reasoning"] = reasoning
