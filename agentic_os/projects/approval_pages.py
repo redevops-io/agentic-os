@@ -95,6 +95,8 @@ def card_html(card: Card, base: str, csrf: str, *, message: str = "") -> str:
     if card.decisions:
         out.append(f'<form method="post" action="{_e(base + PREFIX + "/" + card.ref + "/decision")}">'
                    f'<input type="hidden" name="csrf" value="{_e(csrf)}"><input type="hidden" name="digest" value="{_e(card.digest)}">'
+                   + (f'<p class=note><label><input type="checkbox" name="attested" value="yes" style="width:auto"> {_e(card.attestation)}'
+                      '</label></p>' if card.attestation and "approve" in card.decisions else "")
                    + "".join(f'<button name="decision" value="{_e(d)}">{_e(_BUTTONS[d])}</button>' for d in card.decisions) + "</form>")
     if card.native_note or card.native:
         out.append(f'<p class=muted>{_e(card.native_note)} ' + " ".join(
@@ -270,7 +272,8 @@ class ApprovalPages:
             from starlette.concurrency import run_in_threadpool  # noqa: PLC0415  (a decision performs the write: off the event loop)
             try:
                 card = await run_in_threadpool(self.center.decide, person, source, record_id,
-                                               decision=form.get("decision", ""), digest=form.get("digest", ""))
+                                               decision=form.get("decision", ""), digest=form.get("digest", ""),
+                                               attested=form.get("attested") == "yes")
             except DecisionRefused as e:
                 try:
                     card = self.center.card(person, source, record_id)

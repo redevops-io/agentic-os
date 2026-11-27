@@ -13,7 +13,7 @@ from __future__ import annotations
 import html
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import quote
 
 
@@ -130,6 +130,20 @@ class ErpnextWriter(_Http):
         if not isinstance(data, list):
             raise NotApplied(f"the application's list of {doctype} could not be read")
         return data
+
+    # ── only for the payment correction (payment_correction.py): cancel, and an amendment that is drafted, then submitted ──
+    def cancel(self, doctype: str, name: str) -> None:
+        self._call("POST", "/api/method/frappe.client.cancel", body={"doctype": doctype, "name": name})
+
+    def create_draft(self, doctype: str, body: Mapping[str, Any]) -> str:
+        data = self._call("POST", self._path(doctype), body={**body, "docstatus": 0}).get("data") or {}
+        if not data.get("name"):
+            raise OutcomeUnknown("the application did not say what it created")
+        return str(data["name"])
+
+    def submit(self, doctype: str, name: str) -> None:
+        """Submit the draft as it stands now, so ERPNext runs its own submission rules."""
+        self._call("POST", "/api/method/frappe.client.submit", body={"doc": json.dumps({**self.document(doctype, name), "doctype": doctype})})
 
     def create_draft_purchase_order(self, *, supplier: str, schedule_date: str, items: List[dict], company: str = "") -> str:
         """A DRAFT (``docstatus`` 0): it orders nothing and books nothing until a person submits it in ERPNext."""

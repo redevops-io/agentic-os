@@ -69,10 +69,12 @@ def make_router(writes: GovernedWrites, principal: Callable[[], Optional[str]]) 
         if not decides:
             raise HTTPException(403, {"error": "refused", "detail": "deciding needs an approver credential"})
         approved, digest = body.get("approved"), body.get("digest")
-        if set(body) - {"approved", "digest"} or not isinstance(approved, bool) or not isinstance(digest, str) or not _DIGEST.match(digest):
-            raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, digest: <64 hex>}"})
+        attested = body.get("attested", False)
+        if (set(body) - {"approved", "digest", "attested"} or not isinstance(approved, bool) or not isinstance(attested, bool)
+                or not isinstance(digest, str) or not _DIGEST.match(digest)):
+            raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, digest: <64 hex>[, attested: bool]}"})
         try:
-            return writes.decide(checked(request_id), approve=approved, digest=digest, approver=who, tenant=tenant)
+            return writes.decide(checked(request_id), approve=approved, digest=digest, approver=who, tenant=tenant, attested=attested)
         except WriteError as e:
             raise _http(e)
 

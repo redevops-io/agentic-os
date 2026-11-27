@@ -64,7 +64,18 @@ def _changes(apps):
     return [p for p, _ in apps.posts]
 
 
-@pytest.mark.parametrize("action", sorted(ACTIONS))
+#: actions with their own applications' fakes are held to the same guarantees in their module's tests
+ELSEWHERE = {"economics.request_payment_correction": "tests/test_payment_correction.py"}
+
+
+def test_every_action_is_held_to_the_approval_guarantees_somewhere():
+    import pathlib
+    assert set(ACTIONS) == set(CASES) | set(ELSEWHERE) and not set(CASES) & set(ELSEWHERE)
+    for action, where in ELSEWHERE.items():
+        assert action in (pathlib.Path(__file__).resolve().parents[1] / where).read_text()
+
+
+@pytest.mark.parametrize("action", sorted(CASES))
 def test_nothing_happens_until_a_person_approves_then_once_and_read_back(tmp_path, action):
     w = World(tmp_path)
     r = w.ask(action)

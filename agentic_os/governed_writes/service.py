@@ -53,6 +53,7 @@ class GovernedWrites:
     def __init__(self, state_dir: "str | Path", writers: Mapping[str, Any], *, ttl_s: float = 86400.0,
                  clock: Callable[[], float] = time.time, authority: Any = None, retention_s: float = 7 * 86400.0,
                  single_owner: Optional[Callable[[], bool]] = None) -> None:
+        self.mentions: Optional[Callable[[str, str], List[str]]] = None   # set by whoever can read the tenant's messages
         root = Path(state_dir)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.writers, self.ttl_s, self.clock = dict(writers), float(ttl_s), clock
@@ -72,6 +73,12 @@ class GovernedWrites:
             created REAL NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, approver TEXT, decided REAL,
             record TEXT, read_back TEXT, note TEXT, executed INTEGER, verified INTEGER, finished REAL,
             UNIQUE(tenant, requester, idem))""")
+        columns = {r["name"] for r in self._db.execute("PRAGMA table_info(requests)").fetchall()}
+        for column in ("evidence", "attested"):                  # added after the first release of this table
+            if column not in columns:
+                self._db.execute(f"ALTER TABLE requests ADD COLUMN {column} TEXT")
+        self._journal: Any = None
+        self._journal_dir = root
         if authority is None:
             from agentic_os.mission.authority import authority_from_env  # noqa: PLC0415
             authority = authority_from_env()
@@ -101,8 +108,21 @@ class GovernedWrites:
 
     def authorization(self, action: str, *, requester: str, tenant: str) -> authorization.Authorization:
         """May this requester of this tenant have this action done? Never changed by an approval."""
-        return authorization.authorize(action, app=ACTIONS[action].app, requester=requester, tenant=tenant,
+        spec = ACTIONS[action]
+        if spec.financial and not authorization.tenant_holds_financial(tenant, spec.app):
+            return authorization.Authorization(authorization.Verdict.DENIED, "missing_grant",
+                                               f"{action} concerns financial data: the tenant {tenant or '(none)'} needs egress:financial "
+                                               "(policy_refs in AGENTIC_OS_TENANT_LIMITS)")
+        return authorization.authorize(action, app=spec.app, requester=requester, tenant=tenant,
                                        someone_else_can_approve=self._single_owner)
+
+    def context(self, tenant: str, *, approver: str = "", evidence: Optional[Mapping[str, Any]] = None) -> Any:
+        """What an action with a ``prepare`` step needs besides the application: its journal and what was approved."""
+        from agentic_os.governed_writes import payment_correction  # noqa: PLC0415
+        with self._lock:
+            if self._journal is None:
+                self._journal = payment_correction.Journal(self._journal_dir, self.clock)
+        return payment_correction.Context(tenant=tenant, journal=self._journal, approver=approver, evidence=evidence, mentions=self.mentions)
 
     # ── the operator: runs only with the runtime's approval marker ───────────────
     def _handler(self, name: str) -> Callable[[dict], dict]:
@@ -126,7 +146,11 @@ class GovernedWrites:
                 writer = self.writers.get(action.app)
                 if writer is None:
                     raise NotApplied(f"{action.app} is not connected")
-                outcome: Outcome = action.perform(writer, args, footer, mid)
+                if action.prepare is None:
+                    outcome: Outcome = action.perform(writer, args, footer, mid)
+                else:
+                    outcome = action.perform(writer, args, footer, mid, self.context(
+                        row["tenant"], approver=str(marker["by"]), evidence=json.loads(row["evidence"] or "null")))
             except SchemaError:
                 self._ran[mid] = ("failed", "the inputs are not valid; nothing was changed")
                 raise
@@ -178,6 +202,14 @@ class GovernedWrites:
                                        (tenant, requester, PENDING, self.clock())).fetchone()[0]
             if waiting >= MAX_PENDING_PER_REQUESTER:
                 raise WriteError("too_many", f"{waiting} requests are already waiting for a decision")
+            evidence = None
+            if spec.prepare is not None:                          # refused here: nothing is left for a person to approve
+                try:
+                    evidence = spec.prepare(self.context(tenant), self.writers[spec.app], args)
+                except NotApplied as e:
+                    raise WriteError("refused", f"{e}"[:900]) from None
+                except Exception as e:  # noqa: BLE001
+                    raise WriteError("unavailable", f"the evidence could not be gathered ({type(e).__name__})") from None
             mission = self.runtime.create_mission(f"governed write: {action}", policy_refs=[self._permission(spec.app)], inputs=dict(args),
                                                   principal=requester, tenant=tenant, selected_capability=action, bind_selected=True)
             if mission.state is not MissionState.FAILED:
@@ -186,13 +218,16 @@ class GovernedWrites:
             if not parked or mission.id in self._ran:
                 raise WriteError("unavailable", "the approval gate did not open, so nothing was requested")
             digest = hashlib.sha256(canonical({"request_id": mission.id, "tenant": tenant, "requester": requester,
-                                               "action": action, "inputs": args})).hexdigest()
+                                               "action": action, "inputs": args,
+                                               **({"evidence_sha256": hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()}
+                                                  if evidence is not None else {})})).hexdigest()
             now = self.clock()
             self._db.execute(
-                "INSERT INTO requests(id,tenant,requester,action,app,idem,digest,intent,inputs,preview,created,expires,state)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO requests(id,tenant,requester,action,app,idem,digest,intent,inputs,preview,created,expires,state,evidence)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (mission.id, tenant, requester, action, spec.app, idempotency_key, digest, intent, json.dumps(args),
-                 spec.preview(args)[:300], now, now + self.ttl_s, PENDING))
+                 ((evidence or {}).get("summary") or spec.preview(args))[:300], now, now + self.ttl_s, PENDING,
+                 None if evidence is None else json.dumps(evidence)))
             return {**self._view(self._row(mission.id)), "replayed": False}
 
     # ── reading ──────────────────────────────────────────────────────────────────
@@ -233,6 +268,9 @@ class GovernedWrites:
             out["executed"] = False
         if for_approver:                                       # for a person: exactly what would be, or was, written
             out["inputs"] = None if row["inputs"] is None else json.loads(row["inputs"])    # None: erased after the retention
+            if row["evidence"]:                                 # kept with the decision: what the approver saw and attested to
+                out["evidence"] = json.loads(row["evidence"])
+                out["attested"] = row["attested"] or ""
             if row["state"] == PENDING:                        # and the digest a decision names
                 allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"])
                 out["authorization"] = {"verdict": allowed.verdict.value, "reason": allowed.reason}
@@ -262,7 +300,8 @@ class GovernedWrites:
             return [self._view(r, for_approver=for_approver) for r in rows if not state or r["state"] == state][: max(1, min(limit, 200))]
 
     # ── deciding: a person, never the requester ──────────────────────────────────
-    def decide(self, request_id: str, *, approve: bool, digest: str, approver: str, tenant: Optional[str] = None) -> Dict[str, Any]:
+    def decide(self, request_id: str, *, approve: bool, digest: str, approver: str, tenant: Optional[str] = None,
+               attested: bool = False) -> Dict[str, Any]:
         if not approver:
             raise WriteError("refused", "a decision needs an identified person")
         with self._lock:
@@ -274,6 +313,9 @@ class GovernedWrites:
                 raise WriteError("conflict", f"this request is already {current['state']}")
             if digest != row["digest"]:
                 raise WriteError("conflict", "the digest is not this request's: read it again and decide on what is shown")
+            statement = (json.loads(row["evidence"]) or {}).get("attestation", "") if row["evidence"] else ""
+            if approve and statement and attested is not True:
+                raise WriteError("refused", f"approving this needs your attestation: {statement}")
             if approve:
                 if not self.configured(row["app"]):
                     raise WriteError("unavailable", f"{row['app']} is not connected now; the request is still waiting")
@@ -285,8 +327,8 @@ class GovernedWrites:
                 own = app_gate.operator_denial(OPERATOR, row["action"], self.operator)
                 if own:
                     raise WriteError("denied", f"not_authorized (permission_denied): you may not have this performed: {own}"[:400])
-            taken = self._db.execute("UPDATE requests SET state=?, approver=?, decided=? WHERE id=? AND state=?",
-                                     (DECIDING, approver, self.clock(), request_id, PENDING)).rowcount
+            taken = self._db.execute("UPDATE requests SET state=?, approver=?, decided=?, attested=? WHERE id=? AND state=?",
+                                     (DECIDING, approver, self.clock(), statement if approve else None, request_id, PENDING)).rowcount
             if taken != 1:
                 raise WriteError("conflict", "someone else is deciding this request")
             self._perform(request_id, json.loads(row["inputs"]), approve=approve, approver=approver)
