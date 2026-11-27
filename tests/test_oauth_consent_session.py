@@ -30,11 +30,13 @@ def world(monkeypatch, tmp_path, request):
         return real(provider)
 
     monkeypatch.setattr(AP, "create_app", create)
+    gated = request.param != "without the gate"
     if request.param == "without the gate":
         # a deployment several people can reach: no declared single owner, who would be whoever sends a request
         registry = AP.write_registry
         monkeypatch.setattr(AP, "write_registry", lambda *a, **k: registry(*a, **{**k, "single_owner": ""}))
-    yield from AP.world.__wrapped__(monkeypatch, tmp_path)
+    for made in AP.world.__wrapped__(monkeypatch, tmp_path):
+        yield {**made, "gated": gated}
 
 
 def client_link(c, scope="erp.read erp.propose"):
@@ -59,8 +61,15 @@ def test_follow_the_clients_link_sign_in_allow_and_the_agent_works(world):
     link, client_id, verifier = client_link(world["browser"]())
     browser = world["browser"]()
     first = browser.get(link)
-    assert first.status_code == 303 and first.headers["location"].startswith("/approvals/signin?next="), (first.status_code, first.text)
-    form = browser.get(first.headers["location"])
+    if world["gated"]:
+        # the operator's password is still asked for; the page behind that prompt offers sign-in for everyone else
+        assert first.status_code == 401 and first.headers["www-authenticate"].startswith("Basic") and "ticket" not in first.text, first.text
+        to = re.search(r'href="([^"]+)"', first.text).group(1).replace("&amp;", "&")
+    else:
+        assert first.status_code == 303, (first.status_code, first.text)
+        to = first.headers["location"]
+    assert to.startswith("/approvals/signin?next="), to
+    form = browser.get(to)
     then = re.search(r'name="next" value="([^"]+)"', form.text).group(1).replace("&amp;", "&")
     assert then == link
     back = AP.sign_in(browser, AP.A_APPROVER, then)
@@ -96,8 +105,8 @@ def test_an_answer_resting_on_the_session_must_come_from_this_site(world):
 def test_without_a_session_or_credential_nothing_is_granted(world):
     link, *_ = client_link(world["browser"]())
     stranger = world["browser"]()
-    assert stranger.get(link).status_code == 303                                 # to sign-in, with nothing of the page
-    assert "ticket" not in stranger.get(link).text
+    met = stranger.get(link)
+    assert met.status_code == (401 if world["gated"] else 303) and "ticket" not in met.text
     signed = world["browser"]()
     AP.sign_in(signed, AP.A_APPROVER)
     page = signed.get(link)
@@ -129,3 +138,25 @@ def test_a_request_with_its_own_credential_is_judged_by_it_not_by_the_cookie(wor
                                    "/oauth/authorizeevil?x=1", "/oauth/authorize?" + "a" * 2001, "/oauth/authorize/../x?y=1"])
 def test_sign_in_leads_only_to_these_pages_or_the_consent_page(value):
     assert safe_next(value) == "/approvals", value
+
+
+def test_the_operators_browser_still_consents_with_the_password_it_is_asked_for(world, monkeypatch):
+    monkeypatch.setenv("PROJECTS_TENANT", "acme")                       # the operator connects agents to this tenant
+    link, *_ = client_link(world["browser"]())
+    browser = world["browser"]()
+    page = browser.get(link, headers=AP.OPERATOR)
+    assert page.status_code == 200 and "operator" in page.text, page.text
+    ticket = re.search(r'name="ticket" value="([^"]+)"', page.text).group(1)
+    done = browser.post("/oauth/authorize", content=urlencode([("ticket", ticket), ("decision", "approve"), ("grant", "erp.read")]),
+                        headers={**AP.OPERATOR, "Content-Type": "application/x-www-form-urlencoded", "Origin": ISSUER})
+    assert done.status_code == 303 and "code=" in done.headers["location"], done.text
+
+
+def test_with_no_operator_password_the_gate_sends_a_browser_straight_to_sign_in(world, monkeypatch):
+    if not world["gated"]:
+        pytest.skip("the gate is what is under test")
+    link, *_ = client_link(world["browser"]())
+    monkeypatch.delenv("OPERATOR_BASIC_AUTH")
+    met = world["browser"]().get(link)
+    assert met.status_code == 303 and met.headers["location"].startswith("/approvals/signin?next=%2Foauth") or \
+        met.status_code == 303 and met.headers["location"].startswith("/approvals/signin?next=/oauth/authorize"), (met.status_code, met.headers.get("location"))
