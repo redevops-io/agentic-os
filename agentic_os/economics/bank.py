@@ -64,9 +64,11 @@ class BankFinding:
     banked: Optional[Decimal] = None
     difference: Optional[Decimal] = None
     note: str = ""
+    through: str = ""          # the statement's last day (ISO), for findings that depend on how far the statement runs
+    latest: str = ""           # the latest deposit date among ``lines``
 
     def to_json(self) -> Dict[str, Any]:
-        d = {"kind": self.kind, "reference": self.reference, "posting": self.posting, "lines": list(self.lines), "note": self.note}
+        d = {"kind": self.kind, "reference": self.reference, "posting": self.posting, "lines": list(self.lines), "note": self.note, "through": self.through, "latest": self.latest}
         for k in ("booked", "banked", "difference"):
             v = getattr(self, k)
             d[k] = str(v) if v is not None else None
@@ -195,7 +197,8 @@ def match(lines: Sequence[StatementLine], postings: Sequence[Posting]) -> List[B
                 used.add(f.id)
             out.append(BankFinding("matched_with_fee", p.reference, p.name, ids + [f.id for f in fees], p.amount, total, p.amount - total, f"deposit {total} plus bank fee(s) {-net_fees} equal the payment"))
         else:
-            out.append(BankFinding("amount_mismatch", p.reference, p.name, ids, p.amount, total, p.amount - total, "the amounts differ and no fee line or further deposit closes the gap"))
+            out.append(BankFinding("amount_mismatch", p.reference, p.name, ids, p.amount, total, p.amount - total, "the amounts differ and no fee line or further deposit closes the gap",
+                                   last, max(l.date for l in deposits)))
     for l in lines:
         if l.id not in used:
             out.append(BankFinding("unmatched_bank", l.reference, None, [l.id], None, l.amount, None, f"{l.date}: {l.description or 'no description'}"))
