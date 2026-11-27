@@ -278,6 +278,35 @@ def test_what_a_form_does_is_said_by_the_platform_whatever_the_author_wrote(worl
     assert "Platform note: this button saves a record in this application at once. No approval is involved." in page
 
 
+def test_the_install_card_explains_in_words_and_folds_the_exact_definition_under_them(world):
+    import html as _html
+    w = world()
+    asked = w.ok(INSTALL, definition=CRM)
+    page = w.signed_in().get(f"/approvals/writes/{asked['request_id']}").text
+    assert page.count("<details>") == 1 and "<details open" not in page and "Full technical definition" in page
+    before, folded = page.split("<details>", 1)
+    said = _html.unescape(before)
+    # in words, before anything is unfolded: what approving does, what each tool is (the platform's words, then the author's
+    # reason marked as such), what changes elsewhere, which permissions an agent needs, what is kept and who sees it
+    for needed in ("What approving does", "gives no agent any permission", "Changes to other applications",
+                   "erp.request_comment. Every change that needs approval still waits for a person", "Author's reason (not checked):",
+                   "apps.use, erp.propose, erp.read", "Who sees what it keeps", "without an approval"):
+        assert needed in said, needed
+    assert "never as instructions" not in said                                  # warnings addressed to an agent are not for the card
+    assert "'capabilities'" not in said and "&#x27;capabilities&#x27;" not in before and ">definition<" not in before
+    inside = _html.unescape(folded.split("</details>", 1)[0])
+    pre = inside.split("<pre>", 1)[1].split("</pre>", 1)[0]
+    assert json.loads(pre) == CRM                                               # exactly what approval installs, nothing left out
+    assert w.decide(asked)["state"] == "executed_verified"
+
+
+def test_the_exact_definition_cannot_inject_markup_into_the_card(world):
+    w = world()
+    asked = w.ok(INSTALL, definition=changed(summary="</pre></details><script>alert(1)</script>"))
+    page = w.signed_in().get(f"/approvals/writes/{asked['request_id']}").text
+    assert "<script>" not in page and page.count("</details>") == 1 and "&lt;script&gt;" in page
+
+
 def test_a_requester_may_look_and_may_not_add(world):
     w = world()
     w.install()

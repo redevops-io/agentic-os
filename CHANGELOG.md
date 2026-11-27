@@ -35,9 +35,18 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.31; no version set)
+## Unreleased (after v0.4.33; no version set)
+
+## v0.4.33 (the install card states who reaches an application's records)
+
+- **Fix:** the card for installing or importing an application said an agent needed every listed permission to see its records. The runtime requires only `apps.use` (the listed permissions govern the tools). The card now says so, and that such agents can also add and change records.
+
+## v0.4.32 (an agent needs authority as well as approval; applications keep their state and can move)
 
 - **Changed, may need action:** a governed write now needs the requesting agent's **own stored authority** as well as a person's approval (`no_authority` otherwise). It is checked when proposed, when decided and just before the change, so **revoking an agent also stops its waiting requests**. Connections made by OAuth and tokens issued with `--authority-db` already have it. A deployment with `AGENTIC_OS_WRITES_DIR` but no `AGENTIC_OS_AUTHORITY_DB`, or file tokens issued without `--authority-db`, can no longer propose changes: set the store and reconnect or reissue. This is the same envelope the gateway already enforces in the production profile; no second permission system was added.
+- **Fix:** changing a record of an installed application deleted the stored values of any field a newer version had dropped. They are now kept, and the card of a newer version says what it hides or restricts for records already kept.
+- Installed applications can be moved with their records: a person who may decide exports one from its page and brings it into another tenant or deployment after reviewing it in words (`aos.app-bundle/v1`; all or nothing, never overwriting; unsigned, so only from a source you trust).
+- The card for installing an application now says in words what approving does, what each tool gives access to (the platform's description, then the author's reason marked as unchecked), what may change in other applications, the permissions an agent needs, what is kept and who sees it. The exact definition, which was the first row as raw text, is folded underneath.
 
 ## v0.4.31 (app images build again, a consent page that says what it grants, secrets stay in Vault)
 
