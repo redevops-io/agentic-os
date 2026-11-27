@@ -27,10 +27,12 @@ class Discrepancy:
     invoices: Sequence[str]
     customer: str
     sources: Sequence[str]
+    ambiguous: str = ""            # why no single payment can be named as the wrong one ("" = exactly one payment and one deposit under the reference)
+    payments: Sequence[str] = ()   # every submitted payment under the reference
 
     def to_json(self) -> Dict[str, Any]:
         return {"reference": self.reference, "posted": str(self.posted), "bank": str(self.bank), "difference": str(self.difference), "payment": self.payment,
-                "invoices": list(self.invoices), "customer": self.customer, "sources": list(self.sources)}
+                "invoices": list(self.invoices), "customer": self.customer, "sources": list(self.sources), "ambiguous": self.ambiguous, "payments": list(self.payments)}
 
 
 @dataclass(frozen=True)
@@ -40,13 +42,19 @@ class CorrectionProposal:
     action: str
     effect: str
     requires: str = "approval by a person with authority over the books"
+    proposable: bool = True        # False: the evidence does not say which record is wrong, so no change is proposed
 
     def to_json(self) -> Dict[str, Any]:
-        return {"action": self.action, "effect": self.effect, "requires": self.requires, "discrepancy": self.discrepancy.to_json(), "applied": False}
+        return {"action": self.action, "effect": self.effect, "requires": self.requires, "discrepancy": self.discrepancy.to_json(), "applied": False, "proposable": self.proposable}
 
 
 def find(client: Any) -> Extraction:
-    """Payments (submitted, not cancelled) against bank lines by shared reference; returns an Extraction whose ``events`` are the discrepancies."""
+    """Payments (submitted, not cancelled) against bank lines, grouped by the reference they share; returns an Extraction whose ``events`` are the discrepancies.
+
+    The comparison is per REFERENCE: the payments' total against the bank lines' net. Exactly one submitted payment and one deposit under a reference is an unambiguous discrepancy
+    that can be traced to a payment and proposed for correction. Several payments, several deposits, or a withdrawal (a fee or a reversal) under the same reference are compared by their totals
+    and, when they disagree, reported as ``ambiguous`` with the reason: nothing says which record is wrong, and no correction is proposed (re-entering one of two payments for the bank's
+    total would count the money twice; a fee line netted into the sum would read as a short payment)."""
     ex = Extraction()
     pays = _read(client, ex, "Payment Entry", ["name", "docstatus", "party", "paid_amount", "reference_no", "payment_type"], [["docstatus", "=", 1]])
     refs = _read(client, ex, "Payment Entry Reference", ["parent", "reference_doctype", "reference_name"], None)
@@ -59,24 +67,42 @@ def find(client: Any) -> Extraction:
     for r in refs or []:
         if r.get("reference_doctype") == "Sales Invoice":
             by_pay.setdefault(str(r["parent"]), []).append(str(r["reference_name"]))
-    lines: Dict[str, Decimal] = {}
+    lines: Dict[str, List[dict]] = {}
     for b in bank:
-        if int(b.get("docstatus") or 0) == 2 or not b.get("reference_number"):
-            continue
-        lines[str(b["reference_number"])] = lines.get(str(b["reference_number"]), Decimal("0.00")) + money(b.get("deposit")) - money(b.get("withdrawal"))
+        if int(b.get("docstatus") or 0) != 2 and b.get("reference_number"):
+            lines.setdefault(str(b["reference_number"]), []).append(b)
     ex.counts["Payment Entry"], ex.counts["Bank Transaction"] = len(pays), len(bank)
+    groups: Dict[str, List[dict]] = {}
     for p in pays:
-        ref = str(p.get("reference_no") or "")
-        if not ref or ref not in lines:
+        if p.get("reference_no") and str(p["reference_no"]) in lines:
+            groups.setdefault(str(p["reference_no"]), []).append(p)
+    for ref, ps in sorted(groups.items()):
+        ls = lines[ref]
+        posted = sum((money(p.get("paid_amount")) for p in ps), Decimal("0.00"))
+        net = sum((money(b.get("deposit")) - money(b.get("withdrawal")) for b in ls), Decimal("0.00"))
+        if posted == net:
             continue
-        posted = money(p.get("paid_amount"))
-        if posted != lines[ref]:
-            ex.events.append(Discrepancy(ref, posted, lines[ref], posted - lines[ref], str(p["name"]), by_pay.get(str(p["name"]), []), str(p.get("party") or ""),
-                                         (f"erpnext:Payment Entry/{p['name']}", *[f"erpnext:Sales Invoice/{i}" for i in by_pay.get(str(p["name"]), [])])))
+        inv = [i for p in ps for i in by_pay.get(str(p["name"]), [])]
+        why = []
+        if len(ps) > 1:
+            why.append(f"{len(ps)} payments are submitted under this reference")
+        if len(ls) > 1:
+            why.append(f"{len(ls)} bank lines carry this reference")
+        if any(money(b.get("withdrawal")) for b in ls):
+            why.append("a bank line under this reference is a withdrawal (a fee or a reversal), not a short deposit")
+        parties = {str(p.get("party") or "") for p in ps}
+        if len(parties) > 1:
+            why.append("the payments are from different parties")
+        names = [str(p["name"]) for p in ps]
+        ex.events.append(Discrepancy(ref, posted, net, posted - net, names[0] if len(ps) == 1 else "", inv, next(iter(parties)) if len(parties) == 1 else "", (*[f"erpnext:Payment Entry/{n}" for n in names], *[f"erpnext:Sales Invoice/{i}" for i in inv]),
+                                     "; ".join(why), tuple(names)))
     return ex
 
 
 def propose(d: Discrepancy) -> CorrectionProposal:
+    if d.ambiguous or not d.payment:
+        return CorrectionProposal(d, "none: no single payment can be named as the wrong one", f"{d.ambiguous or 'more than one payment or bank line'}; the totals differ by {d.difference}. "
+                                  "A person has to decide which record is wrong before anything is cancelled or entered again.", "a person to decide which record is wrong", False)
     return CorrectionProposal(d, f"cancel Payment Entry {d.payment} and record it again for {d.bank} (the amount the bank shows)",
                               f"the books show {d.bank} received for {d.reference}; invoice(s) {', '.join(d.invoices)} stay open for {d.difference}, "
                               f"which {d.customer} still owes")

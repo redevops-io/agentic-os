@@ -317,3 +317,25 @@ def test_a_child_table_is_read_with_its_parent_doctype(monkeypatch):
     assert seen["params"]["parent"] == "Sales Invoice" and seen["url"].endswith("/api/resource/Sales%20Invoice%20Item")
     c.read_list("Sales Invoice", ["name"])
     assert "parent" not in seen["params"]
+
+
+def test_two_payments_under_one_reference_or_a_fee_line_netted_into_the_sum_are_ambiguous_and_get_no_correction_proposal():
+    rows = recon_rows(3800)
+    rows["Payment Entry"].append({"name": "PAY-2", "docstatus": 1, "party": "Cedar", "paid_amount": 500, "reference_no": "WIRE-C1", "payment_type": "Receive"})
+    d = reconcile.find(Erp(rows)).events[0]
+    assert (d.posted, d.bank, d.payment, list(d.payments)) == (Decimal("4300.00"), Decimal("3800.00"), "", ["PAY-1", "PAY-2"]) and "2 payments" in d.ambiguous
+    p = reconcile.propose(d).to_json()
+    assert p["proposable"] is False and p["applied"] is False and p["action"].startswith("none")
+    fee = recon_rows(3380)
+    fee["Bank Transaction"].append({"name": "BT-2", "deposit": 0, "withdrawal": 420, "reference_number": "WIRE-C1", "docstatus": 1})
+    d = reconcile.find(Erp(fee)).events[0]
+    assert d.bank == Decimal("2960.00") and "withdrawal" in d.ambiguous and reconcile.propose(d).proposable is False
+    ok = recon_rows(3380)
+    assert reconcile.find(Erp(ok)).events[0].ambiguous == "" and reconcile.propose(reconcile.find(Erp(ok)).events[0]).proposable is True
+
+
+def test_several_payments_that_add_up_to_the_bank_total_are_not_a_discrepancy():
+    rows = recon_rows(3800)
+    rows["Payment Entry"] = [{"name": "PAY-1", "docstatus": 1, "party": "Cedar", "paid_amount": 3300, "reference_no": "WIRE-C1", "payment_type": "Receive"},
+                             {"name": "PAY-2", "docstatus": 1, "party": "Cedar", "paid_amount": 500, "reference_no": "WIRE-C1", "payment_type": "Receive"}]
+    assert reconcile.find(Erp(rows)).events == []

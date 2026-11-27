@@ -731,9 +731,9 @@ def economics(ctx: Context) -> SourceResult:
                            ref=e.sources[0] if e.sources else ""))
     rec = _rec.find(c)
     for d in rec.events:
-        rows.append(Record(source="economics", kind="discrepancy", id=d.reference, title=f"{d.reference} · {d.customer}", status="open", project=project, at=now,
-                           fields={"posted": float(d.posted), "bank": float(d.bank), "difference": float(d.difference), "payment": d.payment,
-                                   "invoices": ", ".join(d.invoices), "customer": d.customer}, ref=d.sources[0] if d.sources else ""))
+        rows.append(Record(source="economics", kind="discrepancy", id=d.reference, title=f"{d.reference} · {d.customer}", status="ambiguous" if d.ambiguous else "open", project=project, at=now,
+                           fields={"posted": float(d.posted), "bank": float(d.bank), "difference": float(d.difference), "payment": d.payment, "payments": ", ".join(d.payments),
+                                   "ambiguous": d.ambiguous, "invoices": ", ".join(d.invoices), "customer": d.customer}, ref=d.sources[0] if d.sources else ""))
     fixed = _rec.corrections(c)
     for k in fixed.events:
         rows.append(Record(source="economics", kind="payment_correction", id=f"{k.reference}:{k.replacement_payment}", title=f"{k.reference} · {k.customer}", status="reconciled" if k.reconciled else "not reconciled",
