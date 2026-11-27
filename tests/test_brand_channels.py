@@ -138,3 +138,9 @@ def test_favicon_ico_lists_16_32_and_48_with_32_first(site):
 
 def test_site_is_deterministic(site):
     assert C.site() == site
+
+
+def test_the_snap_set_has_no_banner_icon_because_the_banner_carries_the_mark_and_the_cap_is_five(stores):
+    names = [n for n in stores if n.startswith("snap/")]
+    assert names == ["snap/snap-01-icon-512x512-v1.png", "snap/snap-02-banner-1920x640-v1.png"]
+    assert "banner-icon" not in " ".join(stores)
