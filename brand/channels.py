@@ -11,9 +11,11 @@ Store specifications used (checked 2026-11-27; the owner re-checks them in Partn
     1:1 app tile icon 300 x 300 PNG; 1:1 box art 1080 x 1080 (or 2160) with the title in the top two thirds; 2:3 poster art 720 x 1080 (or 1440 x 2160);
     16:9 super hero art 1920 x 1080 PNG with NO text and no app UI; screenshots (at least one is required, 1366 x 768 or larger) are real captures
     and are not generated here. Text overlays may cover the bottom third of box art and poster art, so nothing important sits there.
-  Snap Store (forum.snapcraft.io "Store listing and branding", 2020 with a 2024 correction; dashboard wording may differ):
-    icon 1:1, PNG/JPEG (SVG reported to work), at most 512 x 512, at most 256 kB; banner 3:1 between 720 x 240 and 4320 x 1440, at most 2 MB,
-    recommended 1920 x 640 or larger; screenshots 480 x 480 to 3840 x 2160, at most 2 MB each, up to 5; banner-icon has no published size.
+  Snap Store (forum.snapcraft.io "Store listing and branding", 2020 with a 2024 correction; snapcraft.io/about/listing and the Snapcraft blog, read 2026-11-27):
+    icon 1:1, PNG/JPEG (SVG reported to work), 512 x 512 recommended and the maximum, at most 256 kB (that figure is from the forum only);
+    banner 3:1 between 720 x 240 and 4320 x 1440 (1920 x 640 or larger recommended), at most 2 MB, and it must be uploaded with the exact name banner.png or banner.jpg;
+    screenshots 480 x 480 to 3840 x 2160, at most 2 MB each, **at most 5 in all, and the banner and the banner-icon count towards those 5**;
+    an optional banner-icon.png/.jpg is overlaid on the LEFT of the banner, so a banner that already carries the mark at the left (this one) ships without it.
 """
 from __future__ import annotations
 
@@ -139,8 +141,7 @@ def _store_scenes() -> List[Tuple[str, R.Scene, int]]:
         ("microsoft/ms-03-poster-art-720x1080.png", poster(720, 1080, word=True, mark_side=330, top=90, cap=58), 720),
         ("microsoft/ms-04-super-hero-1920x1080-optional.png", super_hero(), 1920),
         ("snap/snap-01-icon-512x512.png", R.tile(R.PRIMARY), 512),
-        ("snap/snap-02-banner-1920x640.png", banner(), 1920),
-        ("snap/snap-03-banner-icon-256x256.png", R.tile(R.COMPACT), 256),
+        ("snap/snap-02-banner-1920x640.png", banner(), 1920),   # upload it named banner.png (the store's required name); the version stays in this name
     ]
 
 
