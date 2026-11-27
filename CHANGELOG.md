@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.33; no version set)
 
+- **Changed, may need action:** opening an application no longer reaches its records. `apps.use` now only lists applications and shows their definitions; reading records needs `apps.records.read`, adding and changing them needs `apps.records.write`, and neither includes the other. No agent is granted them automatically: reconnect it or issue it a new token naming them (see `docs/APP_DEFINITIONS.md`). People reaching records on an application's pages are not affected.
+
 ## v0.4.33 (the install card states who reaches an application's records)
 
 - **Fix:** the card for installing or importing an application said an agent needed every listed permission to see its records. The runtime requires only `apps.use` (the listed permissions govern the tools). The card now says so, and that such agents can also add and change records.
