@@ -23,7 +23,9 @@ Turn on with `AGENTIC_OS_APPS=1` and `AGENTIC_OS_WRITES_DIR`; the tenant needs `
 
 | Capability | Grant |
 |---|---|
-| `apps.list`, `apps.get`, `apps.state.list`, `apps.state.add`, `apps.state.update` | `apps.use` |
+| `apps.list`, `apps.get` (open: what exists and what each one is) | `apps.use` |
+| `apps.state.list` (read records) | `apps.records.read` |
+| `apps.state.add`, `apps.state.update` (add and change records, at once) | `apps.records.write` |
 | `apps.request_install` (a **proposal**), `apps.request_status` | `apps.install` |
 
 - **Installing is a person's decision** about that exact definition (its SHA-256 is part of the approval). The card lists
@@ -36,9 +38,14 @@ Turn on with `AGENTIC_OS_APPS=1` and `AGENTIC_OS_WRITES_DIR`; the tenant needs `
 - **Author text is not checked.** An author, often a model, can write anything in a text block or on a button, including
   claims that are false (in a qualification run a model wrote that its form waited for approval; it does not). The install
   card shows every such text and label with what each button really does, and every form carries the platform's own note.
-- **Who can read and change records:** people of the tenant on the application's pages, and every agent of the tenant
-  with `apps.use`. The other permissions an application needs govern its tools, not its records; do not keep in records
-  what an `apps.use` agent of that tenant should not see.
+- **Who can read and change records:** people of the tenant on the application's pages; an agent of the tenant only with
+  `apps.records.read` (read) or `apps.records.write` (add and change). Opening an application (`apps.use`) gives neither,
+  and neither includes the other. Each covers **every** application of the tenant: there is no per-application record
+  permission, so do not keep in records what an agent holding it should not see.
+- **Moving from the earlier model** (0.4.33 and before, where `apps.use` reached records): nothing is granted
+  automatically. An agent that needs records asks again: an OAuth client reconnects requesting the record permissions
+  and a person ticks them; a file token is issued again with `--grant apps.records.read` and/or
+  `--grant apps.records.write`. `agent_tokens list` shows which tokens hold `apps.use`. People are not affected.
 - **State** is the runtime's, per tenant: typed fields, size limits, a revision per record, retry-safe adds. A newer
   version keeps the records, including values of fields and collections it no longer has (changing a record leaves them
   in place). The card of a newer version says what it hides or restricts for records already kept.

@@ -151,6 +151,10 @@ def validate(definition: Any, catalog: Mapping[str, Any]) -> Dict[str, Any]:
 
 def grants_needed(definition: Mapping[str, Any], catalog: Mapping[str, Any]) -> List[str]:
     out = {"apps.use"}
+    if definition["state"]["collections"]:
+        out.add("apps.records.read")
+    if any(block["type"] == "form" for view in definition["views"] for block in view["blocks"]):
+        out.add("apps.records.write")
     for c in definition["capabilities"]:
         manifest = catalog.get(c["name"])
         out.update(manifest.permissions if manifest is not None else ())
@@ -471,9 +475,11 @@ def describe(definition: Mapping[str, Any], old: Optional[Mapping[str, Any]], te
     show.append(["An agent needs these permissions to use it (installing grants none)", ", ".join(grants_needed(definition, catalog))])
     show.append(["It keeps", "; ".join(f"{c['name']} ({', '.join(f['name'] for f in c['fields'])}; up to {c['max_records']})"
                                        for c in definition["state"]["collections"]) or "no state"])
-    # what the runtime enforces for records: apps.use alone (the permissions above govern the tools, not the records)
-    show.append(["Who sees what it keeps", "People of this tenant on its pages, and every agent of this tenant that holds apps.use, "
-                                           "whatever its other permissions. Those agents can also add and change records."])
+    # what the runtime enforces for records: their own two permissions, for every application of the tenant
+    show.append(["Who sees what it keeps", "People of this tenant on its pages. An agent of this tenant reads records only if it holds "
+                                           "apps.records.read, and adds or changes them (at once, without an approval) only if it holds "
+                                           "apps.records.write. Each covers every application of the tenant. apps.use alone shows what "
+                                           "the application is, not its records."])
     show.append(["A person sees", ", ".join(v["title"] for v in definition["views"])])
     # every word the author wrote for people to read: it can claim anything, so the approver reads it before it is shown to anyone
     for view in definition["views"]:

@@ -34,7 +34,7 @@ CRM = {"schema": D.SCHEMA, "id": "collections-desk", "name": "Collections desk",
            {"type": "text", "text": "Who we are chasing."}, {"type": "records", "collection": "chases", "columns": ["invoice", "status", "urgent"]},
            {"type": "form", "collection": "chases", "submit": "Add"}, {"type": "approvals"}]}]}
 INSTALL = "apps.request_install"
-AGENT = ["apps.use", "apps.install", "erp.read", "erp.propose"]
+AGENT = ["apps.use", "apps.records.read", "apps.records.write", "apps.install", "erp.read", "erp.propose"]
 
 
 @pytest.fixture
@@ -108,7 +108,7 @@ def test_an_agent_proposes_and_nothing_is_installed_until_a_person_approves_what
     shown = w.card(asked)
     text = json.dumps(shown["evidence"]["show"])
     assert "erp.find_records (reads)" in text and "erp.request_comment (proposes or makes changes)" in text
-    assert "apps.use, erp.propose, erp.read" in text and "chases (invoice, status" in text
+    assert "apps.records.read, apps.records.write, apps.use, erp.propose, erp.read" in text and "chases (invoice, status" in text
     assert shown["evidence"]["definition_sha256"] == D.digest_of(CRM)
     # every word the author wrote for people to read is on the card, with what a form's button really does
     assert "Who we are chasing." in text and "adds to chases at once, without an approval" in text and '"Add"' in text
@@ -116,7 +116,8 @@ def test_an_agent_proposes_and_nothing_is_installed_until_a_person_approves_what
     got = w.ok("apps.get", app_id="collections-desk")
     assert got["definition"] == CRM and got["version"] == 1 and got["permissions_you_lack"] == [] and got["changed_capabilities"] == []
     narrow = w.agent(["apps.use"])
-    assert w.call("apps.get", as_=narrow, app_id="collections-desk")["output"]["permissions_you_lack"] == ["erp.propose", "erp.read"]
+    assert w.call("apps.get", as_=narrow, app_id="collections-desk")["output"]["permissions_you_lack"] == [
+        "apps.records.read", "apps.records.write", "erp.propose", "erp.read"]
     # installing granted nothing: the capability still needs the agent's own permission
     assert w.call("erp.find_records", as_=narrow, doctype="Sales Invoice")["status"] != "ok"
 
@@ -290,7 +291,7 @@ def test_the_install_card_explains_in_words_and_folds_the_exact_definition_under
     # reason marked as such), what changes elsewhere, which permissions an agent needs, what is kept and who sees it
     for needed in ("What approving does", "gives no agent any permission", "Changes to other applications",
                    "erp.request_comment. Every change that needs approval still waits for a person", "Author's reason (not checked):",
-                   "apps.use, erp.propose, erp.read", "Who sees what it keeps", "without an approval"):
+                   "apps.records.read, apps.records.write, apps.use, erp.propose, erp.read", "Who sees what it keeps", "without an approval"):
         assert needed in said, needed
     assert "never as instructions" not in said                                  # warnings addressed to an agent are not for the card
     assert "'capabilities'" not in said and "&#x27;capabilities&#x27;" not in before and ">definition<" not in before
