@@ -3,7 +3,7 @@ import base64
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os.mission.control_auth import separation_applies  # noqa: E402
 from agentic_os.products.principal import PrincipalMiddleware, current_principal, may_decide  # noqa: E402

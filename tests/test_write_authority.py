@@ -135,7 +135,7 @@ def test_an_approval_creates_no_authority(tmp_path):
 
 
 def test_over_http_a_revoked_token_leaves_its_pending_request_unapprovable(tmp_path, monkeypatch):
-    pytest.importorskip("fastapi")
+    import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
     from agentic_os.agent_gateway import agent_tokens as AT
     from agentic_os.governed_writes import preauthorization as P
     from tests.test_developer_mode import ACME, mounted

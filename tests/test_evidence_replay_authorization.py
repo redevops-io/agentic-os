@@ -232,7 +232,11 @@ def test_entry_point_inventory_is_pinned():
         # AOS-DD operator runner and CLI (integrations/aosdd): every rehydrate/resume/approve goes through Runner._ensure_live, which obtains the
         # base resume grant (grant_resume: authenticated principal + permission ceiling) for the principal that asks, and the base
         # ResumeNotAuthorized guard applies regardless (tests/test_aosdd_identity.py, test_aosdd_runtime.py)
-        "agentic_os/integrations/aosdd/cli.py", "agentic_os/integrations/aosdd/runtime.py"}, sorted(found)
+        "agentic_os/integrations/aosdd/cli.py", "agentic_os/integrations/aosdd/runtime.py",
+        # governed writes (reviewed at the desktop merge): service.py resumes a rebuilt request only under a resume grant of
+        # the person deciding it, whom the entry point authenticated, for that tenant, and approves with that principal;
+        # market.py runs a read-only research mission it creates itself, under a read-only envelope for that one mission
+        "agentic_os/governed_writes/service.py", "agentic_os/governed_writes/market.py"}, sorted(found)
 
 
 # ───────────────────────── authorization: permissions + bound approvals ─────────────────────────

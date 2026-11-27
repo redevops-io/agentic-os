@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 

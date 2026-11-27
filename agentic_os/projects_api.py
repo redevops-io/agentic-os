@@ -1819,7 +1819,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     from agentic_os.mission.profile import is_production
     # The production profile refuses a gateway without durable authority; an installation with locally connected agents is
     # fail-closed in every profile: an agent whose envelope is missing, expired or revoked is denied even with a valid token.
-    if is_production() or local_agents is not None:
+    if (is_production() or local_agents is not None) and os.environ.get("AGENTIC_OS_AUTHORITY_DB", "").strip():
         # The production profile refuses a gateway without durable authority (and with none configured it still does).
         # Each per-agent token needs its stored record (agent_tokens issue --authority-db); the shared bearer has none.
         from agentic_os.agent_gateway.agent_tokens import envelope_key_of

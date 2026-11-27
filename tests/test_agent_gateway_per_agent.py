@@ -148,7 +148,7 @@ def test_behind_the_sign_in_gate_an_agents_own_token_opens_the_gateway_and_nothi
 def test_a_standard_mcp_client_connects_to_the_projects_api_with_its_own_token(env, tmp_path):
     """The real protocol over a real socket: a uvicorn server running the whole Projects API, gate on, and FastMCP's client."""
     pytest.importorskip("fastmcp", reason="the optional [mcp] extra (fastmcp) is not installed")
-    pytest.importorskip("uvicorn", reason="uvicorn is not installed")
+    import uvicorn  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
     import asyncio
     import socket
     import threading
@@ -232,7 +232,7 @@ def test_the_mounted_surface_can_only_read_stage_or_start_bounded_work(env, tmp_
 def test_over_a_real_socket_a_capability_can_actually_be_invoked(env, tmp_path):
     """The in-process test client is treated as advisory by the route layer, so only a real request shows whether the POSTs
     work. They answered 403 'no authorization policy' on every real deployment."""
-    pytest.importorskip("uvicorn", reason="uvicorn is not installed")
+    import uvicorn  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
     import socket
     import threading
     import time

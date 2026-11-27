@@ -273,8 +273,9 @@ def test_every_gateway_call_path_only_reads(dev):
     spy._calls.clear()
     args = {"project_id": "customer-ops", "mission_id": "4821", "query": "x", "limit": 3}
     for x in listed:
-        assert c.post(f"/api/agent-gateway/capabilities/{x['name']}/invoke", headers=good, json=args).status_code == 200
-        assert c.post("/api/agent-gateway/mcp", headers=good, json={"method": "tools/call", "params": {"name": x["name"], "arguments": args}}).status_code == 200
+        mine = {k: v for k, v in args.items() if k in x["input_schema"].get("properties", {})}
+        assert c.post(f"/api/agent-gateway/capabilities/{x['name']}/invoke", headers=good, json=mine).status_code == 200
+        assert c.post("/api/agent-gateway/mcp", headers=good, json={"method": "tools/call", "params": {"name": x["name"], "arguments": mine}}).status_code == 200
     assert set(spy._calls) and not (set(spy._calls) & MUTATORS), spy._calls
     assert set(spy._calls) <= {"projects", "overview", "missions", "mission_detail", "attention", "sources", "workflows", "discovery", "apps",
                                "runtime", "templates", "workflows"}, set(spy._calls)

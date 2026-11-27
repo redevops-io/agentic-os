@@ -6,7 +6,7 @@ import pytest
 
 from agentic_os.mission import control_auth as ca
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 from fastapi import HTTPException  # noqa: E402
 
 ADMIN, RUN, APPROVE, STEADY = "a" * 40, "r" * 40, "p" * 40, "s" * 40

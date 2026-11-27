@@ -7,7 +7,7 @@ from email.message import EmailMessage
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os.agent_gateway import economics_sources as S  # noqa: E402
 from agentic_os.collaboration.slack import SlackCollaborationProvider  # noqa: E402

@@ -4,7 +4,7 @@ client failed at ``initialize`` (found by the official SDK against a deployment,
 import pytest
 
 pytest.importorskip("fastmcp")
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 from fastapi.testclient import TestClient  # noqa: E402
 
 from agentic_os.agent_gateway import agent_tokens as AT  # noqa: E402

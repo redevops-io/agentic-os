@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os.agent_gateway.contracts import DENIAL_ADVICE, GatewayDecision, GatewayResult, GatewayStatus, RiskTier  # noqa: E402
 from tests.test_agent_gateway_media import world  # noqa: E402,F401

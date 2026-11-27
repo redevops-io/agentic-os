@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 from fastapi.testclient import TestClient  # noqa: E402
 
 from agentic_os import app_definitions as D  # noqa: E402

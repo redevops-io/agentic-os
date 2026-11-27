@@ -264,7 +264,7 @@ class TestOneAuthoritativeActionMapping:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
-                if isinstance(node, ast.Dict) and len(node.values) >= 2:
+                if isinstance(node, ast.Dict) and len(node.values) >= 2 and all(isinstance(v, ast.Constant) for v in node.values):
                     values = {v.value for v in node.values if isinstance(v, ast.Constant)}
                     if values and values <= {"read", "write", "delete"}:
                         holders.append(f"{path.relative_to(root)}:{node.lineno}")

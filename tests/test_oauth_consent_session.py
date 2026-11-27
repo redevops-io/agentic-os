@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os.projects.approval_pages import safe_next  # noqa: E402
 from tests import test_approval_pages as AP  # noqa: E402

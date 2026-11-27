@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os.agent_gateway.oauth_http import GRANT_TEXT, consent_page  # noqa: E402
 

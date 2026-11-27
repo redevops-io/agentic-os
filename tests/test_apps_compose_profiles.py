@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = yaml.safe_load((ROOT / "deploy" / "apps" / "compose.yml").read_text(encoding="utf-8"))
 SERVICES = COMPOSE["services"]
 
-ALWAYS_ON = {"caddy", "projects-console"}
+ALWAYS_ON = {"caddy", "projects-console", "projects"}     # `projects` (the dashboards) came from main, always on
 
 # profile name -> the service it's named after (three of the six services carry a "-agent" suffix the profile drops)
 AGENT_SERVICE = {

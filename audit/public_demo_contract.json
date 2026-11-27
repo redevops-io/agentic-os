@@ -5,7 +5,7 @@
   "apps": {
     "permissions": "deploy/permissions-showcase-demo/app.py",
     "security": "deploy/security-showcase-demo/app.py",
-    "evidence": "deploy/evidence-explorer-demo/app.py",
+    "evidence": "deploy/evidence-explorer-demo/public_app.py",
     "worlds": "deploy/world-canvas-demo/app.py",
     "attention": "deploy/attention-console/app.py",
     "admin": "deploy/admin-console/app.py"

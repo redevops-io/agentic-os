@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from agentic_os.mission.approval import (
     ReplayGuard, approver_identity_required, mint_approval_token, verify_approval_token)
+from agentic_os.mission.authority_policy import AuthorityTestPolicy
 from agentic_os.mission.operator_sdk import Operator, capability
 
 SECRET = _secrets.token_hex(24)
@@ -83,6 +84,10 @@ def operator():
 
     op = Operator("crm", [capability("crm.bank_change", change, side_effecting=True, approval_required=True, undo="crm.undo"),
                           capability("crm.undo", lambda i: {"undone": True}, side_effecting=True)])
+    # this line's suite-wide operator policy also waives approvals; these tests are about approvals, so their operator keeps
+    # a policy that supplies authority only (as main's fixture removes main's own suite-wide override)
+    op.test_policy = AuthorityTestPolicy(name="approval-binding", reason="these tests are about whose approval it is, not authority",
+                                         allow=("crm.*",), anonymous_operators=False)
     app = FastAPI()
     app.include_router(op.router())
     return TestClient(app, raise_server_exceptions=False), seen

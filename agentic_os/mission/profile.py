@@ -51,7 +51,7 @@ def profile() -> str:
     if os.environ.get("AGENTIC_OS_REQUIRE_AUTHORITY", "").strip().lower() in ("1", "true", "yes", "on"):
         return PRODUCTION
     if packaged():
-        raise ProfileError(f"{ENV_PROFILE} is not set in a packaged build. Set {ENV_PROFILE}=production (with AGENTIC_OS_AUTHORITY_DB and "
+        raise ProfileError(f"{ENV_PROFILE} is not set in a packaged deployment (a packaged build). Set {ENV_PROFILE}=production (with AGENTIC_OS_AUTHORITY_DB and "
                            f"AGENTIC_OS_REPLAY_DB on durable storage) for anything that acts on real systems, or {ENV_PROFILE}=development to "
                            "state that this is an evaluation without the production requirements. It is never assumed.")
     if not _warned:

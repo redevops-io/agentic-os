@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PUBLISH_ACTIONS = ("softprops/action-gh-release", "actions/create-release", "actions/upload-release-asset",
                    "ncipollo/release-action", "marvinpinto/action-automatic-releases", "pypa/gh-action-pypi-publish",
                    "docker/build-push-action", "JamesIves/github-pages-deploy-action", "peaceiris/actions-gh-pages")
-PUBLISH_COMMANDS = re.compile(r"gh\s+release|gh\s+api\b|twine\s+upload|npm\s+publish|cargo\s+publish|docker\s+push|"
+PUBLISH_COMMANDS = re.compile(r"gh\s+release(?!\s+download\b)|gh\s+api\b|twine\s+upload|npm\s+publish|cargo\s+publish|docker\s+push|"
                               r"git\s+push|git\s+tag|vsce\s+publish|uv\s+publish|pip\s+upload", re.I)
 WRITE_PERMS = re.compile(r"^\s*(contents|packages|id-token|deployments|pages|releases|attestations|statuses)\s*:\s*write\b|"
                          r"^\s*permissions\s*:\s*write-all", re.I | re.M)

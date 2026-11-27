@@ -220,7 +220,7 @@ def test_enterprise_an_unpermitted_person_cannot_approve_and_the_request_keeps_w
 def test_enterprise_package_absent_means_projects_does_not_start(monkeypatch, tmp_path):
     from agentic_os.governed_writes import apps as apps_mod
     from tests._writes_fakes import FakeApps
-    pytest.importorskip("fastapi")
+    import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
     from agentic_os.projects_api import SampleProjectionProvider, create_app
     stub.absent(monkeypatch)
     monkeypatch.setenv("CR_PERMISSIONS", "1")
@@ -233,7 +233,7 @@ def test_enterprise_package_absent_means_projects_does_not_start(monkeypatch, tm
 
 @pytest.mark.parametrize("mode", ["basic", "enterprise"])
 def test_through_projects_the_plane_installs_its_gate_and_denials_are_actionable(mode, monkeypatch, tmp_path):
-    pytest.importorskip("fastapi")
+    import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
     from fastapi.testclient import TestClient
 
     from agentic_os.agent_gateway import agent_tokens as AT

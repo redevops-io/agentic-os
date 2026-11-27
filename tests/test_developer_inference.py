@@ -9,7 +9,7 @@ import threading
 import pytest
 
 pytest.importorskip("httpx")
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os.governed_writes import preauthorization as P  # noqa: E402
 from tests.test_agent_gateway_media import APPROVER, LIMITS, world  # noqa: E402,F401
