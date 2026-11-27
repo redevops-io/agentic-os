@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.30; no version set)
 
+- **Fix:** 12 app images (Market Radar among them) could not be built: git was installed after the requirements step that needs it. A test now checks the order.
 ## v0.4.30 (portable applications, developer mode with local-model budgets, more reconciliation for agents)
 
 - **Fix:** `deploy/apps/bootstrap-secrets.sh` no longer writes secrets to a local file when Vault is configured (backend `auto`) and no Python able to reach it is found; it refuses and says how to ask for the file on purpose.
