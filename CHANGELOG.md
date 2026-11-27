@@ -15,15 +15,17 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.30; no version set)
+## Unreleased (after v0.4.31; no version set)
+
+## v0.4.31 (app images build again, a consent page that says what it grants, secrets stay in Vault)
 
 - **Fix:** 12 app images (Market Radar among them) could not be built: git was installed after the requirements step that needs it. A test now checks the order.
 - **Fix:** an agent whose corrected retry reused an `idempotency_key` after a failed write got a bare `denied`, which reads like a person refusing. That denial now says it is not, and what to do; every other denial stays unexplained. The application-definition help now says `version` is a whole number and that `capabilities` are tool names.
 - **Fix:** the agent consent page said a connection was read-only while offering grants that make files, keep records and start work without a further approval. It now says what the ticks mean.
+- **Fix:** `deploy/apps/bootstrap-secrets.sh` no longer writes secrets to a local file when Vault is configured (backend `auto`) and no Python able to reach it is found; it refuses and says how to ask for the file on purpose.
 
 ## v0.4.30 (portable applications, developer mode with local-model budgets, more reconciliation for agents)
 
-- **Fix:** `deploy/apps/bootstrap-secrets.sh` no longer writes secrets to a local file when Vault is configured (backend `auto`) and no Python able to reach it is found; it refuses and says how to ask for the file on purpose.
 - Developer mode can cover **local model runs on a budget** (`media.request_generate`): only in a deployment declared an isolated developer environment (`AGENTIC_OS_DEVELOPER_ENVIRONMENT=isolated`), for a tenant with `inference:local`, for a model the media service reports as on-premises and free per use **and** the deployment lists in `AGENTIC_OS_LOCAL_INFERENCE_BACKENDS`, within a budget of video seconds and images. Paid or hosted models, publication and money changes still wait for a person. The approval card now says where a model runs and whether a use is billed.
 - Media calls and downloads name their tenant, so the media service can enforce file ownership itself.
 - Economics for agents: `economics.findings` (deterministic findings, naming the kinds it did not evaluate; message text only within the caller's source grants).
