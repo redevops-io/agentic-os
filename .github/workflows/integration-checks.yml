@@ -16,7 +16,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: integration-checks-${{ github.ref }}
+  # a pull request drops its superseded runs; every pushed or dispatched commit keeps its own: a later merge never
+  # cancels the checks of a commit that is being released
+  group: integration-checks-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 jobs:
   check:

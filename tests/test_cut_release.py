@@ -92,7 +92,7 @@ def publishing(monkeypatch, tmp_path):
             return result(*args) if callable(result) else result
         monkeypatch.setattr(R, name, call)
 
-    step("check", "c" * 40)
+    step("check", lambda tag, runner, commit="": commit or "c" * 40)
     step("export", lambda commit, into, *a: into)
     step("build", lambda source, out, *a: an_archive(out, {"a": "1"}))
     step("probe")
@@ -132,3 +132,64 @@ def test_a_failed_step_stops_everything_after_it(publishing, broken, never):
     for words in never:
         assert not [c for c in publishing["commands"] if words in c], (broken, words)
     assert publishing["steps"][-1] == broken and "images" not in publishing["steps"]
+
+
+def a_git(contained=True, head="h" * 40):
+    said = []
+
+    def runner(cmd, **kwargs):
+        said.append(" ".join(cmd))
+        if cmd[:3] == ["git", "merge-base", "--is-ancestor"] and not contained:
+            raise R.ReleaseError("not an ancestor")
+        if cmd[:2] == ["git", "rev-parse"]:
+            return (head if cmd[-1] == "origin/main^{commit}" else cmd[-1].split("^")[0]) + "\n"
+        return ""
+    return runner, said
+
+
+def test_a_release_is_of_one_commit_contained_in_main_wherever_main_has_got_to():
+    runner, _ = a_git()
+    assert R.release_commit("a" * 40, runner) == "a" * 40 and R.release_commit("", runner) == "h" * 40
+    runner, _ = a_git(contained=False)
+    with pytest.raises(R.ReleaseError):
+        R.release_commit("a" * 40, runner)
+
+
+def test_the_candidate_runs_the_dispatched_checks_on_a_branch_held_at_that_commit():
+    runner, said = a_git()
+    R.candidate("v9.9.9", "a" * 40, runner)
+    assert f"git push --quiet origin {'a' * 40}:refs/heads/rc/v9.9.9" in said
+    assert any(c.startswith("gh workflow run integration-checks.yml") and c.endswith("--ref rc/v9.9.9") for c in said)
+
+
+def test_images_are_built_on_the_tag_and_never_depend_on_where_main_is():
+    said, runs = [], [[], [{"databaseId": 7}]]
+
+    def runner(cmd, **kwargs):
+        said.append(" ".join(cmd))
+        if cmd[:3] == ["gh", "run", "list"]:
+            return __import__("json").dumps(runs.pop(0) if runs else [{"databaseId": 7}])
+        if cmd[:3] == ["gh", "run", "view"]:
+            return '{"status": "completed", "conclusion": "success"}'
+        return ""
+    R.images("v9.9.9", "a" * 40, runner, pause=lambda s: None)
+    dispatch = next(c for c in said if c.startswith("gh workflow run oci-release.yml"))
+    assert "--ref v9.9.9 " in dispatch and not any("origin/main" in c for c in said)
+
+
+def test_the_images_workflow_builds_only_a_tag_contained_in_main():
+    text = (ROOT / ".github" / "workflows" / "oci-release.yml").read_text()
+    assert '[ "$GITHUB_REF" = "refs/tags/$REF" ]' in text and 'git merge-base --is-ancestor "$COMMIT" origin/main' in text
+
+
+def test_a_later_merge_never_cancels_the_checks_of_a_pushed_commit():
+    import yaml
+    checked = []
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        doc = yaml.safe_load(path.read_text())
+        group = (doc.get("concurrency") or {})
+        on = doc.get(True) or doc.get("on") or {}
+        if isinstance(group, dict) and group.get("cancel-in-progress") and ("push" in on or "workflow_dispatch" in on):
+            assert "github.sha" in group["group"], path.name
+            checked.append(path.name)
+    assert {"tests.yml", "native-core.yml", "integration-checks.yml"} <= set(checked)
