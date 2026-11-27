@@ -27,7 +27,8 @@ from agentic_os.products.principal import SEPARATED, may_decide
 WRITES = "writes"
 #: what a tenant credential needs among its tenant's policy_refs: the same permissions the decision routes require
 WRITE_PERMISSION, PRODUCT_PERMISSION = "writes:decide", "projects:write"
-_APPS = {"erpnext": "ERPNext", "chatwoot": "Support (Chatwoot)", "twenty": "CRM (Twenty)"}
+_APPS = {"erpnext": "ERPNext", "chatwoot": "Support (Chatwoot)", "twenty": "CRM (Twenty)", "postiz": "Social (Postiz)",
+         "vibexgen": "VibeXGen"}
 _PUBLIC_URL = {"erpnext": "ERPNEXT_PUBLIC_URL", "chatwoot": "CHATWOOT_PUBLIC_URL", "twenty": "TWENTY_PUBLIC_URL"}
 
 
@@ -131,6 +132,8 @@ def _web(url: str) -> str:
 def app_link(app: str, kind: str, record: str) -> str:
     """The record in the application's own UI, where the deployment says what that UI's address is for a person (the
     address Projects itself uses is usually internal, so it is never used here)."""
+    if app not in _PUBLIC_URL:                                   # no per-record address is known for it
+        return ""
     base = _web(os.environ.get(_PUBLIC_URL[app], "").strip().rstrip("/"))
     if not base or not record:
         return ""
@@ -214,6 +217,13 @@ class ApprovalCenter:
                 add(f"Bank reference {inputs['reference']}")
             if made:
                 add(f"Payment Entry {made} (its replacement)", "Payment Entry", made)
+        elif action == "social.request_post":
+            if inputs:
+                add(f"Channel {inputs['channel_id']}")
+                if inputs.get("asset"):
+                    add(f"Media file {inputs['asset']}")
+            if made:
+                add(f"Post {made} (created)")
         elif action == "erp.request_comment" and inputs:
             add(f"{inputs['doctype']} {inputs['name']}", inputs["doctype"], inputs["name"])
             if made:

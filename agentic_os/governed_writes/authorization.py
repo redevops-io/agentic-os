@@ -104,7 +104,8 @@ def approver_exists(tenant: str, *, also: Optional[Callable[[], bool]] = None) -
     return bool(also and also())
 
 
-def authorize(tool: str, *, app: str, requester: str, tenant: str, someone_else_can_approve: Optional[Callable[[], bool]] = None) -> Authorization:
+def authorize(tool: str, *, app: str, requester: str, tenant: str, someone_else_can_approve: Optional[Callable[[], bool]] = None,
+              needs_approval: bool = True) -> Authorization:
     action = TOOL_ACTIONS.get(APP, {}).get(tool)
     if action is None:
         return _denied("unclassified", f"{tool} has no reviewed classification")
@@ -114,8 +115,8 @@ def authorize(tool: str, *, app: str, requester: str, tenant: str, someone_else_
     why = app_gate.requester_denial(APP, tool, requester=requester, tenant=tenant)
     if why:
         return _denied("permission_denied", f"this deployment's permissions do not allow {tool}: {why}")
-    if action == "read":
-        return Authorization(Verdict.PERMITTED)
+    if action == "read" or not needs_approval:       # a write that only makes new local files waits for nobody; every
+        return Authorization(Verdict.PERMITTED)      # other check above applies to it as to any write
     if not approver_exists(tenant, also=someone_else_can_approve):
         return _denied("no_approver", f"nobody on this deployment can approve a change of tenant {tenant}, so nothing was requested: "
                                       "configure the operator sign-in, or an approver for the tenant "

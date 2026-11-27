@@ -140,6 +140,38 @@ always checked; an input the schema does not name is refused where the schema sa
 every capability this gateway offers does (`idempotency_key` is always accepted). The answer is `{"status": "error", "error": "invalid_arguments:
 <field>: <problem>"}` (REST: HTTP 200; MCP: `isError` true), and never repeats a value.
 
+## Video, images and social posts
+
+Offered with governed writes (`AGENTIC_OS_WRITES_DIR`), where VibeXGen's operator app and/or Postiz are connected:
+
+| Setting | What it is |
+|---|---|
+| `VIBEXGEN_OPERATOR_URL`, `VIBEXGEN_CONTROL_TOKEN` | VibeXGen's operator app (`vibexgen.rails_app`) and its `AGENTIC_OS_CONTROL_TOKEN` |
+| `VIBEXGEN_DOWNLOAD_TOKEN` | the same value on both sides; needed to attach a file to a post |
+| `POSTIZ_PUBLIC_API_URL`, `POSTIZ_API_KEY` | Postiz's public API (the address ending in `/public/v1`) and the organisation's key |
+
+The tenant needs `app:vibexgen` / `app:postiz`.
+
+| Capability | Grant | What it does |
+|---|---|---|
+| `media.library`, `media.assets`, `media.inspect` | `media.read` | the operator's source footage; the tenant's own files |
+| `media.import`, `media.compose`, `media.export` | `media.edit` | new files with ffmpeg: no model, nothing leaves. No approval |
+| `media.request_generate` | `media.generate` | **proposes** an image or video from a model; refused where none is configured |
+| `social.channels`, `social.posts` | `social.read` | channels and the month's calendar |
+| `social.request_post` | `social.propose` | **proposes** a draft or a post scheduled at least 15 minutes ahead. There is no publish-now |
+
+- **Files belong to a tenant.** VibeXGen has one asset store, so Projects records which tenant made each file
+  (`media.sqlite` in the writes directory); another tenant's file does not exist. Agents see asset ids written as UUIDs.
+- **Source footage** comes only from VibeXGen's operator-kept library (`VIBEXGEN_LIBRARY_DIR`), which says whether a model
+  made each item.
+- **Plans** are checked against a closed list of ffmpeg steps. A reference is `$input` or `@step`: a direct asset reference
+  or an `export` step inside a plan is refused, so a plan can neither reach another file nor drop the AI label.
+- **Only a `media.export` file can be posted**, to a channel its platform matches. The export burns "AI-generated" into
+  anything a model had a part in.
+- **Approval names the bytes.** The card shows channel, time, caption, the file's SHA-256, its source footage and the AI
+  label; all are part of the digest. The file is fetched again at posting time and must hash the same. The post is read back
+  from Postiz (state, channel, text, time); the public API does not return the attachment, so that is not re-read.
+
 ## Security and quality products
 
 Where a deployment registers Edge Sentinel or redevops-qa (`AGENTIC_OS_PRODUCTS`), their tools are capabilities too, each

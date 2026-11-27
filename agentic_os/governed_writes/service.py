@@ -116,13 +116,22 @@ class GovernedWrites:
         return authorization.authorize(action, app=spec.app, requester=requester, tenant=tenant,
                                        someone_else_can_approve=self._single_owner)
 
-    def context(self, tenant: str, *, approver: str = "", evidence: Optional[Mapping[str, Any]] = None) -> Any:
+    @property
+    def state_dir(self) -> Path:
+        return self._journal_dir
+
+    @property
+    def single_owner(self) -> Optional[Callable[[], bool]]:
+        return self._single_owner
+
+    def context(self, tenant: str, *, approver: str = "", evidence: Optional[Mapping[str, Any]] = None, requester: str = "") -> Any:
         """What an action with a ``prepare`` step needs besides the application: its journal and what was approved."""
         from agentic_os.governed_writes import payment_correction  # noqa: PLC0415
         with self._lock:
             if self._journal is None:
                 self._journal = payment_correction.Journal(self._journal_dir, self.clock)
-        return payment_correction.Context(tenant=tenant, journal=self._journal, approver=approver, evidence=evidence, mentions=self.mentions)
+        return payment_correction.Context(tenant=tenant, journal=self._journal, approver=approver, evidence=evidence, mentions=self.mentions,
+                                          requester=requester, state_dir=self._journal_dir, operators=self.writers)
 
     # ── the operator: runs only with the runtime's approval marker ───────────────
     def _handler(self, name: str) -> Callable[[dict], dict]:
@@ -150,7 +159,7 @@ class GovernedWrites:
                     outcome: Outcome = action.perform(writer, args, footer, mid)
                 else:
                     outcome = action.perform(writer, args, footer, mid, self.context(
-                        row["tenant"], approver=str(marker["by"]), evidence=json.loads(row["evidence"] or "null")))
+                        row["tenant"], approver=str(marker["by"]), evidence=json.loads(row["evidence"] or "null"), requester=row["requester"]))
             except SchemaError:
                 self._ran[mid] = ("failed", "the inputs are not valid; nothing was changed")
                 raise
@@ -205,7 +214,7 @@ class GovernedWrites:
             evidence = None
             if spec.prepare is not None:                          # refused here: nothing is left for a person to approve
                 try:
-                    evidence = spec.prepare(self.context(tenant), self.writers[spec.app], args)
+                    evidence = spec.prepare(self.context(tenant, requester=requester), self.writers[spec.app], args)
                 except NotApplied as e:
                     raise WriteError("refused", f"{e}"[:900]) from None
                 except Exception as e:  # noqa: BLE001
