@@ -67,7 +67,8 @@ KERNEL_PLANES = ("governed-writes",)
 def test_the_governed_writes_plane_is_classified_exactly():
     """Its table is exactly what the plane offers, each at what it does: a proposal writes, everything else reads."""
     from agentic_os.agent_gateway.app_record_capabilities import manifests
-    offered = {m.name: ("write" if m.side_effecting else "read") for m in manifests()}
+    from agentic_os.agent_gateway.economics_capabilities import manifests as economics
+    offered = {m.name: ("write" if m.side_effecting else "read") for m in (*manifests(), *economics())}
     assert TOOL_ACTIONS["governed-writes"] == offered
 
 

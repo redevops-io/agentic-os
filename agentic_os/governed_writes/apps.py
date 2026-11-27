@@ -120,6 +120,17 @@ class ErpnextWriter(_Http):
             raise OutcomeUnknown("the application did not say what it created")
         return str(data["name"])
 
+    def read_list(self, doctype: str, fields: List[str], filters: Optional[list] = None, limit: int = 0) -> List[dict]:
+        """A strict read for ``agentic_os.economics``: it RAISES when the collection cannot be read, so unreadable is never
+        mistaken for empty."""
+        params = {"fields": json.dumps(list(fields)), "limit_page_length": str(limit)}
+        if filters:
+            params["filters"] = json.dumps(filters)
+        data = self._call("GET", self._path(doctype), params=params).get("data")
+        if not isinstance(data, list):
+            raise NotApplied(f"the application's list of {doctype} could not be read")
+        return data
+
     def create_draft_purchase_order(self, *, supplier: str, schedule_date: str, items: List[dict], company: str = "") -> str:
         """A DRAFT (``docstatus`` 0): it orders nothing and books nothing until a person submits it in ERPNext."""
         body: Dict[str, Any] = {"supplier": supplier, "schedule_date": schedule_date, "docstatus": 0,
