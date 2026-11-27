@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import os
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qsl, quote, urlsplit
@@ -51,8 +52,14 @@ def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
                         status_code=status, headers=HEADERS)
 
 
+#: the one other place a sign-in may lead: an agent's consent page of THIS deployment, with its query and nothing else
+_CONSENT = re.compile(r"/oauth/authorize\?[A-Za-z0-9._~%&=+:/-]{1,2000}")
+
+
 def safe_next(value: str) -> str:
-    """Where to go after signing in: only a path of these pages, never another address."""
+    """Where to go after signing in: only a path of these pages or the consent page, never another address."""
+    if _CONSENT.fullmatch(value):
+        return value
     return value if value == PREFIX or (value.startswith(PREFIX + "/") and ".." not in value and "//" not in value[1:]
                                         and all(c.isalnum() or c in "/_.-" for c in value)) else PREFIX
 
@@ -132,8 +139,8 @@ class ApprovalPages:
 
     # ── what the sign-in gate may let through ────────────────────────────────────
     def gate_admits(self, relative_path: str, cookie_header: str) -> bool:
-        """A signed-in session opens these pages and nothing else of the deployment."""
-        if not (relative_path == PREFIX or relative_path.startswith(PREFIX + "/")) or ".." in relative_path.split("/"):
+        """A signed-in session opens these pages and the agent consent page, and nothing else of the deployment."""
+        if not (relative_path in (PREFIX, "/oauth/authorize") or relative_path.startswith(PREFIX + "/")) or ".." in relative_path.split("/"):
             return False
         return self.sessions.get(_cookie_of(cookie_header)) is not None
 
@@ -169,6 +176,14 @@ class ApprovalPages:
     def _session(self, request: Request):
         return self.sessions.get(request.cookies.get(COOKIE, ""))
 
+    def sign_in_url(self, request: Request, then: str) -> str:
+        return f"{self._base(request)}{PREFIX}/signin?next={quote(safe_next(then), safe='/')}"
+
+    def signed_in(self, request: Request):
+        """The principal this browser is signed in as, or None."""
+        session = self._session(request)
+        return session.principal if session is not None else None
+
     def require_session_post(self, request: Request, form: Dict[str, str]):
         """The signed-in session a POST acts in. Refused (403) without a live session, without its CSRF token, or when
         the form was sent from another origin."""
@@ -179,7 +194,7 @@ class ApprovalPages:
         return session
 
     def _to_signin(self, request: Request, path: str) -> RedirectResponse:
-        return RedirectResponse(f"{self._base(request)}{PREFIX}/signin?next={quote(safe_next(path), safe='/')}", 303, headers=HEADERS)
+        return RedirectResponse(self.sign_in_url(request, path), 303, headers=HEADERS)
 
     def mount(self, app: Any) -> Dict[str, Any]:
         """Add the routes and return their route policies."""

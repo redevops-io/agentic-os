@@ -66,8 +66,13 @@ Code, Claude Desktop, MCP Inspector, a base-path issuer behind a proxy.
 The official TypeScript SDK (1.32.2) was run separately over the same server (37 of 37 checks): unlike the Python SDK,
 a new process with an expired access token refreshes with its refresh token and carries on.
 
-A tenant approver whose only credential is a bearer token cannot answer the consent page from an ordinary browser: a
-browser sends the operator's Basic sign-in, not a bearer. A browser sign-in for approvers is not built.
+**Consent in a browser.** A person following a client's link without a credential is offered the approval-page sign-in
+(`/approvals/signin`) and brought back to the same consent request. Behind the operator gate with an operator password,
+the browser still asks for that password first, and the page behind the prompt links to the sign-in; so a tenant approver, whose only credential is a
+token a browser cannot send by itself, can consent. A request that carries `Authorization` is judged by that alone. An
+answer that rests on the session must carry this deployment's `Origin`, and the consent ticket is single use and bound to
+the person who saw the page. A deployment that declares a single owner treats whoever reaches it as that owner, as
+before.
 
 ## Arguments
 

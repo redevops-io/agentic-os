@@ -28,6 +28,12 @@ def gate_enabled() -> bool:
     return os.environ.get(ENV_GATE, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _operator_password() -> bool:
+    from agentic_os.app_kit.route_authz import operator_credential  # noqa: PLC0415
+    user, pw = operator_credential()
+    return bool(user and pw)
+
+
 def _configured() -> bool:
     from agentic_os.app_kit.route_authz import operator_credential  # noqa: PLC0415
     user, pw = operator_credential()
@@ -120,11 +126,19 @@ class OperatorGateMiddleware:
             if len(cookies) == 1 and self.session_check(rel, cookies[0].decode("latin-1")):
                 return await self.app(scope, receive, send)
         # a person who follows a deep link without a session is sent to sign in, not shown a bare refusal
+        consent = rel == "/oauth/authorize"
         if scope["type"] == "http" and self.session_check is not None and scope.get("method") == "GET" and not auth \
-                and (rel == "/approvals" or rel.startswith("/approvals/")) and ".." not in rel.split("/"):
+                and (consent or rel == "/approvals" or rel.startswith("/approvals/")) and ".." not in rel.split("/"):
+            from urllib.parse import quote  # noqa: PLC0415
             from .approval_pages import safe_next  # noqa: PLC0415  (only a path of those pages ever reaches the header)
-            target = (root.rstrip("/") + "/approvals/signin?next=" + safe_next(rel)).encode("ascii", "ignore")
-            await send({"type": "http.response.start", "status": 303, "headers": [(b"location", target), (b"cache-control", b"no-store")]})
+            then = rel + "?" + scope.get("query_string", b"").decode("latin-1") if consent else rel
+            target = root.rstrip("/") + "/approvals/signin?next=" + quote(safe_next(then), safe="/")
+            if consent and _operator_password():
+                # a browser can answer the consent page with the operator's password, so it is still asked for it; the page
+                # behind that prompt offers the other way in, for a person whose credential a browser cannot send
+                return await self._offer_sign_in(send, target)
+            await send({"type": "http.response.start", "status": 303,
+                        "headers": [(b"location", target.encode("ascii", "ignore")), (b"cache-control", b"no-store")]})
             await send({"type": "http.response.body", "body": b""})
             return
         if not _configured():
@@ -133,6 +147,17 @@ class OperatorGateMiddleware:
             agent = self.agent_challenge if rel.startswith(AGENT_PREFIX) else ""
             return await self._refuse(scope, send, 401, "sign in to use this deployment", True, origin, agent)
         return await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _offer_sign_in(send, target: str) -> None:
+        import html  # noqa: PLC0415
+        body = ("<!doctype html><meta charset=utf-8><title>Sign in to answer this agent</title><p>Sign in to this deployment to "
+                f'answer this agent.</p><p><a href="{html.escape(target, quote=True)}">Sign in with your own approver credential</a></p>').encode()
+        await send({"type": "http.response.start", "status": 401, "headers": [
+            (b"content-type", b"text/html; charset=utf-8"), (b"content-length", str(len(body)).encode()), (b"cache-control", b"no-store"),
+            (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'"), (b"referrer-policy", b"same-origin"),
+            (b"www-authenticate", f'Basic realm="{REALM}", charset="UTF-8"'.encode())]})
+        await send({"type": "http.response.body", "body": body})
 
     @staticmethod
     async def _refuse(scope, send, status: int, detail: str, challenge: bool, origin: str = "", agent_challenge: str = "") -> None:

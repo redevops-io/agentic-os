@@ -1487,10 +1487,10 @@ def _proposals(app: "FastAPI") -> Any:
 
 
 def mount_approvals(app: "FastAPI", prov: "ProjectionProvider") -> Dict[str, Any]:
-    """The sign-in and approval pages, wherever something here can await a person: governed writes or a registered product.
-    Returns their route policies ({} when there is nothing to approve here)."""
+    """The sign-in and approval pages, wherever something here can await a person: governed writes, a registered product,
+    or an agent asking for access (OAuth consent). Returns their route policies ({} when there is nothing to decide here)."""
     writes, hub = getattr(app.state, "governed_writes", None), getattr(prov, "products_hub", None)
-    if writes is None and hub is None:
+    if writes is None and hub is None and getattr(app.state, "oauth_gateway", None) is None:
         return {}
     from agentic_os.projects.approval_center import ApprovalCenter
     from agentic_os.projects.approval_pages import ApprovalPages
@@ -1814,8 +1814,16 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                     cannot[grant] = f"the tenant {tenant} is not granted that application here (app:{app_name} in AGENTIC_OS_TENANT_LIMITS)"
             return cannot
 
+        def _signed_in(request):
+            pages = getattr(app.state, "approval_pages", None)       # mounted after the gateway: looked up per request
+            return pages.signed_in(request) if pages is not None else None
+
+        def _sign_in(request, then):
+            pages = getattr(app.state, "approval_pages", None)
+            return pages.sign_in_url(request, then) if pages is not None else None
+
         policies.update(oauth_http.mount(app, oauth, single_owner=lambda: hub.registry.single_owner if hub is not None else "",
-                                         unavailable=_cannot_grant))
+                                         unavailable=_cannot_grant, session_person=_signed_in, sign_in=_sign_in))
         app.state.agent_gateway_open_routes = oauth_http.OPEN_ROUTES
         app.state.agent_gateway_challenge = challenge
         app.state.oauth_gateway = oauth
