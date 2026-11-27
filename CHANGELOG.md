@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.29; no version set)
 
+- Economics evidence can read an IMAP mailbox and Slack channels (read-only), each belonging to the one tenant the deployment names, with their own grants (`mail.read`, `messenger.read`).
 - Portable application definitions (`aos.app-definition/v1`, off unless `AGENTIC_OS_APPS=1`): an agent proposes an application as data (capabilities, typed state, views); a person approves that exact definition; the runtime keeps its state per tenant, generates its views without script, pins each capability's contract and grants nothing by installing. See docs/APP_DEFINITIONS.md.
 - Developer mode (off by default): a person who may decide can preauthorize one agent for named, low-consequence actions, a limited number of times within at most 8 hours (`/api/writes/preauthorizations`). Money, generation, publication, attestations and plan judgements always wait for a person; the same authorization and permissions checks run, and every use is recorded.
 ## v0.4.29 (governed media, social and market research; a safe payment correction)

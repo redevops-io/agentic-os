@@ -133,6 +133,22 @@ source the tenant is not granted is not read. A source the agent was not granted
 items: no id, no excerpt, and they are withheld before anything is correlated. A message is tied to a customer only by an
 e-mail address or website both systems hold, never by a name; the answer says how many could not be tied, and why.
 
+### E-mail and messenger evidence
+
+`economics.evidence` and `economics.findings` can also read one IMAP mailbox and a set of Slack channels, read-only (messages
+are not marked read):
+
+| Setting | What it is |
+|---|---|
+| `AGENTIC_OS_ECONOMICS_IMAP_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_FOLDERS` (default `INBOX`), `_SINCE_DAYS` (default 180) | the mailbox. `_SSL=0` is accepted only for a private or local address |
+| `AGENTIC_OS_ECONOMICS_IMAP_OWN_DOMAINS` | your domains: how a customer's message is told from yours (required) |
+| `AGENTIC_OS_ECONOMICS_SLACK_BOT_TOKEN`, `_CHANNELS`, `_SHARED_CHANNELS`, `_WORKSPACE`, `_OWN_DOMAINS` | the channels; a channel is internal unless listed as shared with customers |
+| `..._IMAP_TENANT`, `..._SLACK_TENANT` | **whose** mailbox or channels these are. On a deployment with tenants a source with no named tenant is not read, even for a tenant with `app:*` |
+
+The tenant needs `app:mail` / `app:messenger`; the agent needs `mail.read` / `messenger.read` (named, never default), which
+cover exactly the configured folders and channels, internal messages included. Without the grant such messages are only
+counted. The answer says how far back mail was read.
+
 ## Arguments
 
 Every call is checked against the capability's published input schema, on REST and MCP alike, after the caller's
