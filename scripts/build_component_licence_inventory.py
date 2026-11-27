@@ -49,6 +49,7 @@ RULES: list[tuple[str, str, str, tuple[str, ...]]] = [
     ("packaging/ui-artifacts/", THIRD, "the pinned Projects UI bundle (built output of the separate `redevops-projects` repository, with React, ReactDOM and scheduler, MIT)", ("F4",)),
     ("packaging/", CORE, "build, signing, notice and gate tooling and the release records", ("F2",)),
     ("scripts/", CORE, "repository scripts", ("F2",)),
+    ("brand/", CORE, "the generator of the rAIls mark (Python standard library only; its outputs are the launcher icons)", ("F2",)),
     ("snap/", CORE, "Snap packaging files (the strict snap is excluded from the first 0.6.0 distribution)", ()),
     ("docs/legal/sources/", THIRD, "excerpts of third-party agreements and licence texts quoted for counsel (verbatim, with their sources)", ("F3",)),
     ("docs/", CORE, "product documentation", ("F2",)),
