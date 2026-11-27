@@ -15,9 +15,13 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.26; no version set)
+## Unreleased (after v0.4.27; no version set)
+
+## v0.4.27 (failed sign-ins never keep a correct credential out)
 
 - Fixed: failed approval sign-ins could keep legitimate approvers out for five minutes: 60 failures from anywhere refused everyone, and 8 refused one address, which behind `--forwarded-allow-ips "*"` is whatever the caller puts in `X-Forwarded-For`. A configured credential now always signs in; limits only delay or refuse wrong ones. Password guessing is not meaningfully slowed by these limits (it never was: the other gated routes accept the same password without one), so use long random credentials.
+- Economic events: reasoning over linked evidence (explanations and commitments) with deterministic guards around the model; an optional custom field a site lacks is a note, so the source is no longer reported stale for it.
+- Releases are cut and verified with `scripts/cut_release.py`, which stops at the first failed check and verifies the published assets (docs/RELEASING.md).
 
 ## v0.4.26 (the MCP server works under a base path)
 
