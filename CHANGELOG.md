@@ -17,6 +17,10 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.29; no version set)
 
+- Developer mode can cover **local model runs on a budget** (`media.request_generate`): only in a deployment declared an isolated developer environment (`AGENTIC_OS_DEVELOPER_ENVIRONMENT=isolated`), for a tenant with `inference:local`, for a model the media service reports as on-premises and free per use **and** the deployment lists in `AGENTIC_OS_LOCAL_INFERENCE_BACKENDS`, within a budget of video seconds and images. Paid or hosted models, publication and money changes still wait for a person. The approval card now says where a model runs and whether a use is billed.
+- Media calls and downloads name their tenant, so the media service can enforce file ownership itself.
+- Economics for agents: `economics.findings` (deterministic findings, naming the kinds it did not evaluate; message text only within the caller's source grants).
+
 - Portable application definitions (`aos.app-definition/v1`, off unless `AGENTIC_OS_APPS=1`): an agent proposes an application as data (capabilities, typed state, views); a person approves that exact definition; the runtime keeps its state per tenant, generates its views without script, pins each capability's contract and grants nothing by installing. See docs/APP_DEFINITIONS.md.
 - Developer mode (off by default): a person who may decide can preauthorize one agent for named, low-consequence actions, a limited number of times within at most 8 hours (`/api/writes/preauthorizations`). Money, generation, publication, attestations and plan judgements always wait for a person; the same authorization and permissions checks run, and every use is recorded.
 ## v0.4.29 (governed media, social and market research; a safe payment correction)
