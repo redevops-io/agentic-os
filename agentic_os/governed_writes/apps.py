@@ -123,9 +123,12 @@ class ErpnextWriter(_Http):
     def read_list(self, doctype: str, fields: List[str], filters: Optional[list] = None, limit: int = 0) -> List[dict]:
         """A strict read for ``agentic_os.economics``: it RAISES when the collection cannot be read, so unreadable is never
         mistaken for empty."""
+        from agentic_os.integrations.erpnext import ErpnextClient  # noqa: PLC0415
         params = {"fields": json.dumps(list(fields)), "limit_page_length": str(limit)}
         if filters:
             params["filters"] = json.dumps(filters)
+        if doctype in ErpnextClient.CHILD_PARENT:         # ERPNext will not give a child table's columns without its parent
+            params["parent"] = ErpnextClient.CHILD_PARENT[doctype]
         data = self._call("GET", self._path(doctype), params=params).get("data")
         if not isinstance(data, list):
             raise NotApplied(f"the application's list of {doctype} could not be read")

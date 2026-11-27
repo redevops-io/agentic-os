@@ -66,6 +66,9 @@ class Ledger:
             doc = self.payments.get(parts[1])
             return httpx.Response(200, json={"data": doc}) if doc else httpx.Response(404, json={})
         if method == "GET" and len(parts) == 1:
+            child_of = {"Payment Entry Reference": "Payment Entry", "Sales Invoice Item": "Sales Invoice", "Timesheet Detail": "Timesheet"}
+            if parts[0] in child_of and request.url.params.get("parent") != child_of[parts[0]]:
+                return httpx.Response(403, json={})              # as ERPNext answers a user who names no parent
             fields = json.loads(request.url.params.get("fields", "[]"))
             rows = self.listing(parts[0])
             return httpx.Response(200, json={"data": [{k: r[k] for k in fields if k in r} for r in rows]})
