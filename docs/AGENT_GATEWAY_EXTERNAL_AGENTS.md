@@ -74,6 +74,26 @@ answer that rests on the session must carry this deployment's `Origin`, and the 
 the person who saw the page. A deployment that declares a single owner treats whoever reaches it as that owner, as
 before.
 
+## Economic intelligence and reconciliation
+
+Offered where ERPNext is connected. **Read-only.** Every tool needs `economics.read`, **and** the financial-data grant on
+the agent and its tenant, **and** the tenant's `app:erpnext`.
+
+| Capability | What it returns |
+|---|---|
+| `economics.discrepancies` | payments whose amount differs from the bank statement under the same reference, marked **ambiguous** where several payments or bank lines (or a netted withdrawal) share it; payments already cancelled and entered again |
+| `economics.explain_adjustment` | discounts, cancellation, credit notes and payment differences of one invoice; any approval claim in a comment, marked unverified |
+| `economics.evidence` | messages and CRM notes that refer to one invoice or customer, as references with excerpts |
+
+**A difference is not by itself an error.** A bank fee, a currency exchange, a partial settlement, timing or how a receipt
+is allocated can each explain it, so these tools propose no correction.
+
+**Evidence follows its source.** A conversation needs `support.read` (which covers its private notes, as
+`support.get_conversation` does) and the tenant's `app:chatwoot`; a CRM note needs `crm.records.read` and `app:twenty`. A
+source the tenant is not granted is not read. A source the agent was not granted is reported only as a count of withheld
+items: no id, no excerpt, and they are withheld before anything is correlated. A message is tied to a customer only by an
+e-mail address or website both systems hold, never by a name; the answer says how many could not be tied, and why.
+
 ## Arguments
 
 Every call is checked against the capability's published input schema, on REST and MCP alike, after the caller's

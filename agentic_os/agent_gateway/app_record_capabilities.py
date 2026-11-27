@@ -15,7 +15,6 @@ usable only by the tenants granted it (``app:<name>`` or ``app:*``), and two ten
 from __future__ import annotations
 
 import html
-import os
 import re
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
@@ -23,11 +22,9 @@ from agentic_os import financial_access
 from agentic_os.governed_writes import authorization
 from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS
 from agentic_os.governed_writes.apps import ERP_DOCTYPES, NotApplied, OutcomeUnknown
-from agentic_os.mission.control_auth import ENV_TENANT_LIMITS, ConfigError, tenant_limits
 
 from .contracts import ApprovalPolicy, CapabilityKind, CapabilityManifest, DataClass, GatewayPrincipal, RiskTier
 from .registry import CapabilityRegistry, HandlerResult
-from .scope import tenant_is_current
 
 APP_NAMES = {"erpnext": "ERPNext", "chatwoot": "support (Chatwoot)", "twenty": "CRM (Twenty)"}
 READ_GRANT_OF = {"erpnext": "erp.read", "chatwoot": "support.read", "twenty": "crm.records.read"}
@@ -114,18 +111,8 @@ def tenant_may_use_app(principal: GatewayPrincipal, app: str) -> bool:
 
 
 def tenant_holds_financial(principal: GatewayPrincipal, source: str) -> bool:
-    """Whether the caller's TENANT may receive this application's financial data. On a deployment without tenants there is
-    one owner and no tenant ceiling. Fail closed otherwise. (The demonstration grant covers dashboards over declared
-    synthetic sources, never record lookups.)"""
-    if not os.environ.get(ENV_TENANT_LIMITS, "").strip():
-        return True
-    if not tenant_is_current(principal.tenant):
-        return False
-    try:
-        refs, _ = tenant_limits(principal.tenant)
-    except ConfigError:
-        return False
-    return financial_access.covers(financial_access.covered(refs), source)
+    """Whether the caller's tenant may receive this application's financial data."""
+    return authorization.tenant_holds_financial(principal.tenant, source)
 
 
 def missing_financial_grant(principal: GatewayPrincipal, arguments: Mapping[str, Any]) -> Optional[str]:

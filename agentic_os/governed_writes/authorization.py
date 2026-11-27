@@ -69,6 +69,24 @@ def tenant_may_use_app(tenant: str, app: str) -> bool:
     return "app:*" in refs or f"app:{app}" in refs
 
 
+def tenant_holds_financial(tenant: str, source: str) -> bool:
+    """Whether this TENANT may receive this application's financial data (agentic_os/financial_access.py). On a deployment
+    without tenants there is one owner and no ceiling. Fail closed otherwise. (The demonstration grant covers dashboards
+    over declared synthetic sources, never record lookups or proposals.)"""
+    from agentic_os import financial_access  # noqa: PLC0415
+    from agentic_os.agent_gateway.scope import tenant_is_current  # noqa: PLC0415
+    from agentic_os.mission.control_auth import ENV_TENANT_LIMITS, ConfigError, tenant_limits  # noqa: PLC0415
+    if not os.environ.get(ENV_TENANT_LIMITS, "").strip():
+        return True
+    if not tenant_is_current(tenant):
+        return False
+    try:
+        refs, _ = tenant_limits(tenant)
+    except ConfigError:
+        return False
+    return financial_access.covers(financial_access.covered(refs), source)
+
+
 def approver_exists(tenant: str, *, also: Optional[Callable[[], bool]] = None) -> bool:
     """Whether some configured person could decide a change of this tenant: the operator's sign-in, the admin credential,
     the tenant's own approver with ``writes:decide`` among the tenant's policy_refs (what the decision route requires), or
