@@ -30,7 +30,7 @@ def test_a_fee_line_on_the_statement_explains_the_difference_to_the_cent_and_not
 
 
 def test_a_customers_statement_of_a_fee_is_a_claim_and_does_not_explain_it_but_does_not_stop_the_statement_corroborating_the_amount():
-    st = fs("date,amount,reference,description\n2026-10-05,3380,W1,in", P("3800"))
+    st = fs("date,amount,reference,description\n2026-10-05,3380,W1,in\n2026-10-14,50,OTHER,unrelated", P("3800"))
     class Claim:
         communication = "chatwoot:7/1"
     e = causes.explain_difference("W1", Decimal("420"), P("3800"), st, [Claim()])
@@ -39,7 +39,7 @@ def test_a_customers_statement_of_a_fee_is_a_claim_and_does_not_explain_it_but_d
 
 
 def test_only_a_statement_that_shows_another_amount_with_every_cause_excluded_corroborates_it():
-    st = fs("date,amount,reference,description\n2026-10-05,3380,W1,in", P("3800"))
+    st = fs("date,amount,reference,description\n2026-10-05,3380,W1,in\n2026-10-14,50,OTHER,unrelated", P("3800"))
     e = causes.explain_difference("W1", Decimal("420"), P("3800"), st)
     assert set(kinds(e).values()) == {"excluded"} and e.corroborated and not e.explained and e.residual == Decimal("420.00")
 
@@ -65,3 +65,16 @@ def test_a_payment_entry_document_becomes_a_posting_with_its_allocation():
            "references": [{"reference_doctype": "Sales Invoice", "reference_name": "S5"}, {"reference_doctype": "Journal Entry", "reference_name": "J1"}]}
     p = bank.posting_from_entry(doc)
     assert (p.name, p.reference, p.amount, list(p.invoices), p.unallocated) == ("PE-9", "W1", Decimal("3800.00"), ["S5"], Decimal("0.00"))
+
+
+def test_one_short_deposit_is_not_corroborated_while_a_second_instalment_could_still_arrive():
+    near = fs("date,amount,reference,description\n2026-10-05,3380,W1,in\n2026-10-08,50,OTHER,unrelated", P("3800"))   # the statement ends 3 days after: too soon to rule out a second instalment
+    e = causes.explain_difference("W1", Decimal("420"), P("3800"), near)
+    assert kinds(e)["partial_settlement"] == "unknown" and not e.corroborated
+    far = fs("date,amount,reference,description\n2026-10-05,3380,W1,in\n2026-10-10,50,OTHER,unrelated", P("3800"))     # exactly LATE_DAYS past both
+    e = causes.explain_difference("W1", Decimal("420"), P("3800"), far)
+    assert kinds(e)["partial_settlement"] == "excluded" and e.corroborated
+    only = fs("date,amount,reference,description\n2026-10-05,3380,W1,in", P("3800"))   # the statement ends on the deposit day
+    assert not causes.explain_difference("W1", Decimal("420"), P("3800"), only).corroborated
+    over = fs("date,amount,reference,description\n2026-10-05,3900,W1,in", P("3800"))   # more arrived than booked: no instalment can be pending
+    assert kinds(causes.explain_difference("W1", Decimal("-100"), P("3800"), over))["partial_settlement"] == "excluded"
