@@ -278,6 +278,8 @@ def writers_from_env() -> Dict[str, Any]:
         out["chatwoot"] = ChatwootWriter(env("CHATWOOT_API_URL").rstrip("/"), env("CHATWOOT_API_TOKEN"), env("CHATWOOT_ACCOUNT_ID", "1") or "1")
     if env("TWENTY_BASE_URL") and env("TWENTY_API_KEY"):
         out["twenty"] = TwentyWriter(env("TWENTY_BASE_URL").rstrip("/"), env("TWENTY_API_KEY"), shadow=shadow_mode_enabled())
+    from agentic_os.governed_writes.media import operators_from_env  # noqa: PLC0415 (it imports from this module)
+    out.update(operators_from_env())
     return out
 
 

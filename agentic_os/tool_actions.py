@@ -186,6 +186,9 @@ TOOL_ACTIONS["governed-writes"] = {
     "crm.request_company": "write", "crm.request_person": "write",
     "economics.discrepancies": "read", "economics.explain_adjustment": "read", "economics.evidence": "read",
     "economics.request_status": "read", "economics.request_payment_correction": "write",
+    "media.library": "read", "media.assets": "read", "media.inspect": "read", "media.import": "write", "media.compose": "write",
+    "media.export": "write", "media.request_generate": "write", "media.request_status": "read",
+    "social.channels": "read", "social.posts": "read", "social.request_post": "write", "social.request_status": "read",
 }
 
 PUBLIC_CANDIDATES: tuple[tuple[str, str], ...] = (

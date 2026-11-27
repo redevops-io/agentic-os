@@ -159,7 +159,8 @@ def test_economic_information_needs_the_application_and_the_money_grant_on_agent
     for tool, args in (("economics.discrepancies", {}), ("economics.explain_adjustment", {"invoice": "S2"}), ("economics.evidence", {"invoice": "S2"})):
         out = w.call(who, tool, **args)
         assert out["status"] == "error" and f"not_authorized ({code})" in out["error"], (tool, out)
-        assert not re.search(r"3800|3380|1800|Cedar", json.dumps(out))
+        said = json.dumps({k: v for k, v in out.items() if k != "request_id"})    # a random id can hold any digits
+        assert not re.search(r"3800|3380|1800|Cedar", said)
 
 
 def test_an_adjustment_is_explained_with_its_approval_claim_marked_unverified(world):

@@ -32,7 +32,7 @@ import re
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
@@ -235,6 +235,9 @@ class Context:
     evidence: Optional[Mapping[str, Any]] = None
     #: optional: how many messages mention this payment's invoice or amounts (shown to the approver, never deciding)
     mentions: Optional[Callable[[str, str], List[str]]] = None
+    requester: str = ""                                  # the agent that proposed it
+    state_dir: Optional[Path] = None                     # where governed writes keep their records
+    operators: Mapping[str, Any] = field(default_factory=dict)      # the other connected applications
 
 
 def _figures(i: Mapping[str, Any]):

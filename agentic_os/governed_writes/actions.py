@@ -188,6 +188,22 @@ def _prepare_correction(context: Any, w: Any, i: Mapping[str, Any]) -> Dict[str,
     return payment_correction.prepare(context, w, i)
 
 
+def _media(name: str) -> Callable[..., Any]:
+    def run(*args: Any) -> Any:
+        from agentic_os.governed_writes import media  # noqa: PLC0415 (it imports Outcome from here)
+        return getattr(media, name)(*args)
+    return run
+
+
+def _prepare_media(name: str) -> Callable[..., Dict[str, Any]]:
+    def run(context: Any, w: Any, i: Mapping[str, Any]) -> Dict[str, Any]:
+        from agentic_os.governed_writes import media  # noqa: PLC0415
+        return getattr(media, name)(context, w, i)
+    return run
+
+
+#: a media file as agents name it (governed_writes.media.PUBLIC_ASSET)
+_ASSET_ID = {"type": "string", "pattern": r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
 _ID = r"^[^\x00-\x1f/\\]{1,140}$"
 _DATE = r"^\d{4}-\d{2}-\d{2}$"
 
@@ -229,6 +245,21 @@ ACTIONS: Dict[str, WriteAction] = {a.name: a for a in (
                 lambda i: (f"CANCEL Payment Entry {i['payment_entry']} ({i['posted_amount']}) and enter it again for {i['bank_amount']}, "
                            f"the amount on the bank statement under {i['reference']}"),
                 _payment_correction, grant="economics.propose", served_by="economics", financial=True, prepare=_prepare_correction),
+    WriteAction("social.request_post", "postiz",
+                "Propose a social post: `when` is 'draft' (saved, never published) or an ISO 8601 UTC time at least 15 minutes ahead "
+                "(scheduled). There is no publish-now. An attached file must come from media.export for the channel's platform",
+                _schema(["channel_id", "caption", "when"], channel_id=_text(80, pattern=r"^[A-Za-z0-9_-]+$"), caption=_text(2200),
+                        when=_text(40), asset=_ASSET_ID),
+                lambda i: ("Save a draft social post" if i.get("when") == "draft" else f"Schedule a social post for {i.get('when')}"),
+                _media("perform_post"), grant="social.propose", served_by="media", prepare=_prepare_media("prepare_post")),
+    WriteAction("media.request_generate", "vibexgen",
+                "Propose generating an image or a video with a model, from a prompt (and optionally one of your images)",
+                _schema(["kind", "prompt"], kind={"type": "string", "enum": ["image", "video"]}, prompt=_text(2000),
+                        source_asset=_ASSET_ID,
+                        width={"type": "integer", "minimum": 256, "maximum": 2048}, height={"type": "integer", "minimum": 256, "maximum": 2048},
+                        duration={"type": "number", "minimum": 0.5, "maximum": 15}, seed={"type": "integer", "minimum": 0, "maximum": 2147483647}),
+                lambda i: f"Generate a {i.get('kind')} with a model", _media("perform_generate"), grant="media.generate", served_by="media",
+                prepare=_prepare_media("prepare_generate")),
 )}
 
 __all__ = ["APP_GRANTS", "Outcome", "WriteAction", "ACTIONS", "RESERVED_MARKERS", "reserved_marker"]
