@@ -67,6 +67,7 @@ PORT = int(os.environ.get("PORT", "8206"))
 _REEL_DIR = Path(__file__).resolve().parent / "reel"
 _REEL_OUT = _REEL_DIR / "out" / "reel.mp4"
 _REEL_STATUS = _REEL_DIR / "out" / "status.json"
+_REEL_STALE_S = 600.0
 _REEL_REQ = _REEL_DIR / "spool" / "record.request"
 
 # vibexgen content-intelligence adapter (trends + AI generation; config-driven, demo-limited).
@@ -78,6 +79,9 @@ def _reel_status_read() -> dict:
         d = json.loads(_REEL_STATUS.read_text())
     except Exception:
         d = {"status": "idle", "ts": 0, "duration": None, "error": None}
+    # a recording takes under a minute: one that has not reported back is not "still recording" (no worker picked it up, or it died)
+    if d.get("status") == "recording" and time.time() - float(d.get("ts") or 0) > _REEL_STALE_S:
+        d = {**d, "status": "error", "error": "the recorder did not report back: no worker took the job, or it stopped"}
     return d
 
 
@@ -342,10 +346,11 @@ REEL_JS = """
   }
   gen.addEventListener('click',function(){ st.textContent='Starting the UI agent…'; gen.disabled=true;
     fetch('api/reel/record',{method:'POST'}).then(function(){ if(timer)clearInterval(timer); timer=setInterval(poll,3000); poll(); }); });
-  sch.addEventListener('click',function(){ sch.disabled=true; sch.textContent='Queuing…';
-    fetch('api/reel/schedule',{method:'POST'}).then(function(r){return r.json();}).then(function(){
-      sch.textContent='Queued as draft ✓'; st.textContent='Queued as a Postiz draft — attach the reel + pick channels in Postiz.';
-    }).catch(function(){ sch.disabled=false; sch.textContent='Schedule as post ↗'; }); });
+  sch.addEventListener('click',function(){ sch.disabled=true; sch.textContent='Drafting…';
+    fetch('api/reel/schedule',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(d.status!=='drafted'){ sch.disabled=false; sch.textContent='Schedule as post ↗'; st.textContent='Not drafted: '+(d.error||'Postiz did not accept it'); return; }
+      sch.textContent='Drafted ✓'; st.textContent='Staged as a Postiz draft, not scheduled — attach the reel + pick channels in Postiz.';
+    }).catch(function(){ sch.disabled=false; sch.textContent='Schedule as post ↗'; st.textContent='No answer: whether it was drafted is not known.'; }); });
   poll();
 })();
 """
@@ -409,15 +414,19 @@ VIBEX_JS = """
         '<button class="mini primary" data-draft="'+seed+'">Draft post</button>'+
         '<button class="mini" data-gen="'+gen+'">Generate clip ▶</button></div></div>';
     }).join('');
-    st.textContent=(d.source==='vibexgen'?'live from vibexgen · ':'')+ (d.angles||[]).length+' angles for “'+(d.topic||'')+'”';
+    st.textContent=d.status==='unavailable'?('No trends: '+(d.error||'vibexgen did not answer')):
+      (d.status==='ok'?'live from vibexgen · ':'built-in samples · ')+(d.angles||[]).length+' angles for “'+(d.topic||'')+'”';
     angles.querySelectorAll('[data-draft]').forEach(function(b){b.addEventListener('click',function(){
       b.disabled=true;b.textContent='Drafting…';
       fetch('api/vibex/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hook:b.dataset.draft})})
-        .then(function(r){return r.json();}).then(function(){b.textContent='Drafted ✓';});});});
+        .then(function(r){return r.json();}).then(function(d){b.textContent=d.status==='done'?'Drafted ✓':'Not drafted';b.title=d.error||'';})
+        .catch(function(){b.textContent='No answer: status unknown';});});});
     angles.querySelectorAll('[data-gen]').forEach(function(b){b.addEventListener('click',function(){
       b.disabled=true;b.textContent='Requesting…';
       fetch('api/vibex/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:b.dataset.gen})})
-        .then(function(r){return r.json();}).then(function(d){b.textContent=d.source==='vibexgen'?('Sent to vibexgen ✓'+(d.operation?' ('+esc(d.operation)+')':'')):'Queued (connect vibexgen)';});});});
+        .then(function(r){return r.json();}).then(function(d){
+          var said={processed:'Done by vibexgen ✓',submitted:'Submitted to vibexgen: not finished yet',failed:'Failed: nothing was made',unknown:'No answer: status unknown',not_connected:'Not connected: nothing was made'};
+          b.textContent=said[d.status]||'Not done'; b.title=d.error||d.note||'';}).catch(function(){b.textContent='No answer: status unknown';});});});
   }
   function findTrends(){ st.textContent='Asking vibexgen…';
     fetch('api/vibex/trends',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:topic.value})})
@@ -596,8 +605,10 @@ def api_reel_schedule() -> JSONResponse:
         return _r
     draft = _draft({"topic": "our Context Runtime product demo — live retrieval, the planner "
                              "choosing a strategy, and measured v1→v2 benchmarks"})
-    return JSONResponse({"status": "queued", "draft": draft,
-                         "note": "queued as a Postiz DRAFT — attach the reel MP4 and pick channels in Postiz"})
+    if draft.get("status") != "done" or not draft.get("staged_as_draft"):
+        return JSONResponse({"status": "failed", "draft": draft, "error": draft.get("error") or "Postiz did not stage the draft"})
+    return JSONResponse({"status": "drafted", "draft": draft,
+                         "note": "staged as a Postiz DRAFT (not scheduled) — attach the reel MP4 and pick channels in Postiz"})
 
 
 # --- vibexgen: content intelligence (trends) + AI generation, exposed to the agent ----------

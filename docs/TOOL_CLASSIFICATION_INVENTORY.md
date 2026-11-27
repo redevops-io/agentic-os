@@ -153,13 +153,13 @@ Categories: `read-only-state` (reads state, writes nothing observable) / `writes
 | `outreach.refresh` | outreach-engine | read | read-only-state | apps/outreach-engine/operator.py:44 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `outreach.send_all` | outreach-engine | write | launches external process or network | apps/outreach-engine/operator.py:82 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `outreach.synced` | outreach-engine | read | read-only-state | apps/outreach-engine/app.py:586 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `social.activity` | social-autopilot | read | read-only-state | apps/social-autopilot/app.py:547 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `social.activity` | social-autopilot | read | read-only-state | apps/social-autopilot/app.py:556 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `social.draft` | social-autopilot | write | launches external process or network | apps/social-autopilot/operator.py:31 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `social.draft_visual` | social-autopilot | write | launches external process or network | apps/social-autopilot/operator.py:41 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `social.publish` | social-autopilot | write | launches external process or network | apps/social-autopilot/operator.py:52 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `social.record_reel` | social-autopilot | write | launches external process or network | apps/social-autopilot/app.py:570 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `social.vibex_generate` | social-autopilot | write | launches external process or network | apps/social-autopilot/app.py:621 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `social.vibex_trends` | social-autopilot | read | read-only-state | apps/social-autopilot/app.py:613 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `social.record_reel` | social-autopilot | write | launches external process or network | apps/social-autopilot/app.py:579 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `social.vibex_generate` | social-autopilot | write | launches external process or network | apps/social-autopilot/app.py:632 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `social.vibex_trends` | social-autopilot | read | read-only-state | apps/social-autopilot/app.py:624 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `draft_reply` | support | read | read-only-state | apps/support/app.py:15 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `inbox_summary` | support | read | read-only-state | apps/support/app.py:469 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `list_conversations` | support | read | read-only-state | apps/support/app.py:468 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
