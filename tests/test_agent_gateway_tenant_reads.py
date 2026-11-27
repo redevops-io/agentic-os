@@ -10,10 +10,10 @@ from agentic_os.projects_api import SampleProjectionProvider
 from tests.test_dashboards import T0, _app, _Chat, _Erp
 
 LIMITS = {
-    "erp-only": {"policy_refs": ["dashboards:erpnext", "project:*"]},
+    "erp-only": {"policy_refs": ["dashboards:erpnext", "project:*", "egress:financial"]},
     "desk-only": {"policy_refs": ["dashboards:chatwoot", "project:*"]},
-    "storefront-only": {"policy_refs": ["dashboards:*", "project:storefront"]},
-    "everything": {"policy_refs": ["dashboards:*", "project:*"]},
+    "storefront-only": {"policy_refs": ["dashboards:*", "project:storefront", "egress:financial"]},
+    "everything": {"policy_refs": ["dashboards:*", "project:*", "egress:financial"]},
     "lapsed": {"policy_refs": ["dashboards:*", "project:*"], "expires_at": T0 - 10_000_000},
 }
 ALL_GRANTS = sorted(AT.ALLOWED_GRANTS)
@@ -195,7 +195,7 @@ def test_in_production_the_authority_record_covers_the_dashboard_reads_that_were
     def issue(ident, grants, tenant, **kw):
         return {"Authorization": "Bearer " + AT.issue(agents, ident, grants, minutes=5, tenant=tenant, **kw)}
 
-    named = issue("named", ["dashboards.read", "projects.read"], "erp-only", authority_db=db)
+    named = issue("named", ["dashboards.read", "projects.read", "egress:financial"], "erp-only", authority_db=db)
     assert figure(invoke(client, named, "dashboards.get", dashboard_id="finance"), "receivables") == 1500.0
     assert invoke(client, named, "dashboards.list")["status"] == "ok" and invoke(client, named, "projects.list")["status"] == "ok"
     plain = issue("plain", ["projects.read"], "erp-only", authority_db=db)

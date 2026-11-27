@@ -109,7 +109,7 @@ def test_every_dashboard_that_is_not_offered_has_a_reason_and_a_step_for_each_de
 
 def test_how_to_enable_a_source_is_not_told_to_a_caller_who_may_not_read_it(clean):
     svc, _ = _service(_config())
-    acc = SimpleNamespace(source=lambda sid: sid in ("twenty",), project=lambda p: True, principal="viewer", scoped=True, basis="grant",
+    acc = SimpleNamespace(source=lambda sid: sid in ("twenty",), lacks_money=lambda sid: False, project=lambda p: True, principal="viewer", scoped=True, basis="grant",
                           grant=SimpleNamespace(sources=("twenty",)))
     hidden = {d["id"]: d for d in svc.catalog(acc)["not_connected"]}
     # finance: neither of its sources is this caller's. Listed by title as before, with nothing about how it is wired.

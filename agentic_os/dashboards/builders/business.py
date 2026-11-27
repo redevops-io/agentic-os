@@ -83,24 +83,30 @@ def revenue(b: Build) -> None:
     for key, title, recs in (("deals:open", "Open deals", open_), ("deals:won", "Deals won in range", won), ("deals:lost", "Deals lost in range", lost),
                              ("deals:stalled", "Open deals with no change for 14 days", stalled)):
         b.drill(key, title, recs, columns=cols)
-    pipe, cur, note = _money(open_)
-    won_v, wcur, wnote = _money(won)
+    paid = b.money("twenty")                    # without the grant the amounts were removed: counts remain, money is withheld
+    held = "amounts are withheld: they need the financial-data grant (egress:financial)"
+    pipe, cur, note = _money(open_) if paid else (None, "", held)
+    won_v, wcur, wnote = _money(won) if paid else (None, "", held)
     per = b.group(open_, lambda r: r.project)
     m_pipe = b.track(b.metric("pipeline", "Open pipeline", needs=S, value=pipe, unit=cur, drill="deals:open", good="up", note=note or f"{len(open_)} open deal(s)",
-                              unknown="" if pipe is not None or not open_ else "no_data"),
+                              unknown="unauthorized" if not paid else "" if pipe is not None or not open_ else "no_data"),
                      {p: (_money(v)[0], None) for p, v in per.items()})
     d.panels.append(panel("summary", "Sales", "stats", sources=S, span=2, metrics=[
         m_pipe, b.metric("open", "Open deals", needs=S, value=len(open_), drill="deals:open"),
-        b.metric("won", "Won in range", needs=S, value=won_v if won else 0, unit=wcur or cur, drill="deals:won", good="up", note=wnote or f"{len(won)} deal(s)"),
+        b.metric("won", "Won in range", needs=S, value=(won_v if won else 0) if paid else None, unit=wcur or cur, drill="deals:won", good="up",
+                 note=wnote or f"{len(won)} deal(s)", unknown="" if paid else "unauthorized"),
         b.metric("win_rate", "Win rate", needs=S, ratio=True, num=len(won), den=len(won) + len(lost), unit="%", good="up", drill="deals:lost" if lost else "deals:won",
                  tone=tone_of(pct(len(won), len(won) + len(lost)), good=40, warn=20), note=f"{len(won)} won, {len(lost)} lost, by last change in the range"),
         b.metric("stalled", "Stalled", needs=S, value=len(stalled), drill="deals:stalled", tone="warn" if stalled else "ok", good="down", note="open, unchanged for 14 days"),
         b.metric("accounts", "Accounts", needs=S, value=len(b.records("twenty", "account", timed=False)))]))
     stages = b.group(open_, lambda r: r.status or "—")
-    d.panels.append(panel("by_stage", "Open pipeline by stage", "bars", sources=S, unit=cur, empty="" if open_ else "No deal is open.",
-                          items=[{"label": k.replace("_", " ").title(), "value": _money(v)[0] or 0, "tone": "run", "note": f"{len(v)} deal(s)",
+    # by value for those who may see it; otherwise by count, and the panel says which it shows
+    size = (lambda v: _money(v)[0] or 0) if paid else len
+    d.panels.append(panel("by_stage", "Open pipeline by stage" if paid else "Open deals by stage", "bars", sources=S, unit=cur if paid else "deals",
+                          empty="" if open_ else "No deal is open.", note="" if paid else held.capitalize() + ".",
+                          items=[{"label": k.replace("_", " ").title(), "value": size(v), "tone": "run", "note": f"{len(v)} deal(s)",
                                   "drill": b.drill(f"stage:{k}", f"Open deals: {k.replace('_', ' ').lower()}", v, columns=cols)}
-                                 for k, v in sorted(stages.items(), key=lambda kv: -(_money(kv[1])[0] or 0))]))
+                                 for k, v in sorted(stages.items(), key=lambda kv: -size(kv[1]))]))
     rev = _card_series(b, "revenue_by_month")
     if rev:
         xs = [str(r.title) for r in rev]
@@ -108,6 +114,8 @@ def revenue(b: Build) -> None:
         d.panels.append(panel("revenue_month", "Revenue by month", "timeseries", sources=("metabase",), x=xs, unit="",
                               series=[{"id": "revenue", "label": "Revenue", "tone": "ok", "values": [r.get("row", {}).get(key) for r in rev]}],
                               note="Computed by Control Tower's saved question; open it there for the query."))
+    elif not paid:
+        d.panels.append(panel("won_month", "Won by month", "timeseries", sources=S, x=[], series=[], empty=held.capitalize() + "."))
     else:
         months = _months(b)
         by = {m: [] for m in months}
@@ -121,11 +129,12 @@ def revenue(b: Build) -> None:
     rows = [row({"deal": x.title, "company": x.get("company"), "stage": x.status.replace("_", " ").title(), "amount": x.get("amount"), "currency": x.get("currency"),
                  "idle_days": int((b.now - float(x.get("updated_at"))) / DAY) if x.get("updated_at") else None},
                 tone="warn" if x in stalled else "", ref=x.ref, url=x.url) for x in sorted(open_, key=lambda r: -(r.get("amount") or 0))[:50]]
-    d.panels.append(panel("deals", "Largest open deals", "table", sources=S, span=2, rows=rows, empty="" if rows else "No deal is open.",
+    d.panels.append(panel("deals", "Largest open deals" if paid else "Open deals", "table", sources=S, span=2, rows=rows, empty="" if rows else "No deal is open.",
                           columns=[col("deal", "Deal"), col("company", "Company"), col("stage", "Stage"), col("amount", "Amount", "right"), col("currency", "Cur."),
                                    col("idle_days", "Days idle", "right")]))
     if b.usable("twenty"):
-        d.summary = f"{len(open_)} open deal(s) worth {pipe if pipe is not None else 'an unknown amount'} {cur}; {len(stalled)} stalled.".replace("  ", " ")
+        worth = "" if not paid else f" worth {pipe if pipe is not None else 'an unknown amount'} {cur}"
+        d.summary = f"{len(open_)} open deal(s){worth}; {len(stalled)} stalled.".replace("  ", " ").replace(" ;", ";")
     else:
         d.summary = (f"Revenue by month from Control Tower ({len(rev)} month(s)). " if rev else "") + "The CRM is not connected, so pipeline and deals are not known."
 

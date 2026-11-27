@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.27; no version set)
 
+- **Changed (breaking for access):** financial data now needs the financial-data grant everywhere it can be read: dashboards, drill-downs, trends, Sidekick explanations, `dashboards.get` for agents and ERPNext record lookups. ERPNext, the economic events, Lago and Metabase are refused without it; CRM deal amounts and AI spend are removed and shown as withheld. Add `egress:financial` (or `egress:financial:<source>`) to a tenant's `policy_refs` **and** to the agents that need it; add `financial` to the principals in a dashboards `access` section. Anonymous callers can only be given the new `demo:financial` grant, which reaches only sources declared `data: synthetic`. The operator, admin token, desktop owner and a declared single owner are unaffected. See docs/DASHBOARDS.md.
+- Fixed: metric history was attached to a figure the caller was not allowed to see.
 - Economic intelligence: a message that states no figure is linked to an adjustment by what it is about (topic and one-order/several-orders labels from a model that only labels; the code decides), ambiguous matches are kept; `findings.py` (five reconciliation kinds), `bank.py` (independent statement CSV vs received payments), `mail.py` (read-only IMAP and messenger adapters), `Slack.read_history`, and per-source access scopes (`evidence.visible_to`). Docs: docs/ECONOMIC_EVENTS.md.
 
 ## v0.4.27 (failed sign-ins never keep a correct credential out)

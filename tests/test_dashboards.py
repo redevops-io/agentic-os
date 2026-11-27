@@ -78,6 +78,13 @@ def _app(monkeypatch, tmp_path, *, access="", sentinel=None, now=T0, config=None
     return TestClient(app), svc, clock
 
 
+def _operator(c):
+    """Read as the deployment's operator: money is shown only to someone who holds the financial grant, and what these
+    tests check is how the figures are computed (who may see them: tests/test_financial_access.py)."""
+    c.headers["Authorization"] = f"Bearer {ADMIN}"
+    return c
+
+
 def _report(c, *, project, suite, run, results, platform="chromium", at=T0 - 3600, verified=None, token=SVC, **extra):
     body = {"project": project, "suite": suite, "run_id": run, "platform": platform, "at": at,
             "results": [{"test_id": t, "status": s} if isinstance(s, str) else {"test_id": t, **s} for t, s in results.items()], **extra}
@@ -362,6 +369,7 @@ def test_saved_views_persist_and_belong_to_their_owner(monkeypatch, tmp_path):
 # ── empty states, outages ───────────────────────────────────────────────────────────────────────────────────────────
 def test_a_dashboard_is_offered_only_when_its_application_is_connected(monkeypatch, tmp_path):
     c, *_ = _app(monkeypatch, tmp_path)
+    _operator(c)
     cat = c.get("/api/dashboards").json()
     ids = [d["id"] for d in cat["dashboards"]]
     assert ids == ["portfolio", "missions", "infrastructure", "knowledge"]                # no QA, no security, no business app
@@ -434,6 +442,7 @@ def test_a_source_outage_makes_numbers_unknown_not_zero(monkeypatch, tmp_path):
 
 def test_business_sources_are_off_until_enabled_and_report_outages(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     assert "revenue" not in [d["id"] for d in c.get("/api/dashboards").json()["dashboards"]]
 
     class Twenty:
@@ -537,6 +546,7 @@ def _http_stub(routes):
 
 def test_finance_support_procurement_and_marketing_compute_from_application_records(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     svc.config.sources.update({"erpnext": {"project": "billing"}, "chatwoot": {}, "postiz": {}, "listmonk": {}})
     iso = lambda dt: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(T0 + dt))  # noqa: E731
     svc.ctx.clients.update({
@@ -592,6 +602,7 @@ def test_finance_support_procurement_and_marketing_compute_from_application_reco
 
 def test_ai_usage_comes_only_from_a_bound_mission_runtime(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     assert "ai_costs" not in {d["id"] for d in c.get("/api/dashboards").json()["dashboards"]}           # nothing is estimated without a runtime
 
     class Repo:
@@ -680,6 +691,7 @@ def test_links_from_application_data_are_http_only_and_demo_state_is_bounded(mon
 
 def test_metabase_must_prove_its_sign_in_even_with_no_card_configured(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
 
     class Resp:
         def __init__(self, code, body=None):
@@ -904,7 +916,7 @@ def test_a_panel_with_nothing_to_draw_says_so():
     d.panels = [panel("t", "Table", "table", columns=[{"id": "a", "label": "A"}]), panel("b", "Bars", "bars"),
                 panel("e", "Explained", "bars", empty="no source is connected")]
     b = Build.__new__(Build)
-    b.d, b._facets = d, {}
+    b.d, b._facets, b._money_withheld = d, {}, set()
     b.finish()
     assert [bool(p.empty) for p in d.panels] == [True, True, True] and d.panels[2].empty == "no source is connected"
 
@@ -979,6 +991,7 @@ def test_something_due_today_is_not_overdue_until_tomorrow(monkeypatch, tmp_path
             return super().get_list(doctype, fields, filters, limit)
 
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     svc.config.sources.update({"erpnext": {"project": "billing"}})
     svc.ctx.clients.update({"erpnext": Erp()})
     svc.cache.invalidate()

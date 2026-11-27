@@ -4,7 +4,7 @@
 |---|---|
 | ``erp.read``, ``support.read``, ``crm.records.read`` | look records up in that application |
 | ``erp.propose``, ``support.propose``, ``crm.propose`` | propose a write and follow your own requests |
-| ``egress:financial`` | receive invoice, order and quotation records. Without it the egress policy withholds them |
+| ``egress:financial`` | receive financial data: invoice, order and quotation records, and money figures on dashboards. The agent AND its tenant must hold it |
 
 A proposal changes nothing: it waits in the Mission Runtime's gate for a person of the same tenant
 (``agentic_os.governed_writes``). There is no tool that decides. What a record holds was written by customers and others:
@@ -19,12 +19,15 @@ import os
 import re
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from agentic_os import financial_access
 from agentic_os.governed_writes import authorization
 from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS
 from agentic_os.governed_writes.apps import ERP_DOCTYPES, NotApplied, OutcomeUnknown
+from agentic_os.mission.control_auth import ENV_TENANT_LIMITS, ConfigError, tenant_limits
 
 from .contracts import ApprovalPolicy, CapabilityKind, CapabilityManifest, DataClass, GatewayPrincipal, RiskTier
 from .registry import CapabilityRegistry, HandlerResult
+from .scope import tenant_is_current
 
 APP_NAMES = {"erpnext": "ERPNext", "chatwoot": "support (Chatwoot)", "twenty": "CRM (Twenty)"}
 READ_GRANT_OF = {"erpnext": "erp.read", "chatwoot": "support.read", "twenty": "crm.records.read"}
@@ -40,10 +43,10 @@ GRANTS: Dict[str, str] = {
     "support.propose": "Propose private notes on support conversations. Nothing happens until a person approves it",
     "crm.records.read": "Look up CRM companies and contacts (e-mail addresses are redacted)",
     "crm.propose": "Propose new CRM companies and contacts. Nothing happens until a person approves it",
-    FINANCIAL_EGRESS: "Send financial records (invoice, order and quotation amounts) to this agent",
+    FINANCIAL_EGRESS: "Receive financial data: invoice, order and quotation records, and the money figures on dashboards",
+    financial_access.DEMO_GRANT: "Receive money figures from demonstration (synthetic) data only",
 }
-GRANT_APP: Dict[str, str] = {**{g: a for a, g in APP_GRANTS.items()}, **{g: a for a, g in READ_GRANT_OF.items()},
-                             FINANCIAL_EGRESS: "erpnext"}
+GRANT_APP: Dict[str, str] = {**{g: a for a, g in APP_GRANTS.items()}, **{g: a for a, g in READ_GRANT_OF.items()}}
 _REQUEST_ID = {"type": "string", "minLength": 4, "maxLength": 80, "pattern": r"^[A-Za-z0-9_-]+$"}
 _KEY = {"type": "string", "minLength": 8, "maxLength": 128,
         "description": "choose one per intended change; a retry with the same key never proposes it twice"}
@@ -110,13 +113,34 @@ def tenant_may_use_app(principal: GatewayPrincipal, app: str) -> bool:
     return authorization.tenant_may_use_app(principal.tenant, app)
 
 
+def tenant_holds_financial(principal: GatewayPrincipal, source: str) -> bool:
+    """Whether the caller's TENANT may receive this application's financial data. On a deployment without tenants there is
+    one owner and no tenant ceiling. Fail closed otherwise. (The demonstration grant covers dashboards over declared
+    synthetic sources, never record lookups.)"""
+    if not os.environ.get(ENV_TENANT_LIMITS, "").strip():
+        return True
+    if not tenant_is_current(principal.tenant):
+        return False
+    try:
+        refs, _ = tenant_limits(principal.tenant)
+    except ConfigError:
+        return False
+    return financial_access.covers(financial_access.covered(refs), source)
+
+
 def missing_financial_grant(principal: GatewayPrincipal, arguments: Mapping[str, Any]) -> Optional[str]:
-    """The actionable refusal for a financial lookup by an agent without ``egress:financial``. Said BEFORE the application
-    is read: there is no export approval to wait for, so the call must not look as if one were coming."""
-    if arguments.get("doctype") in FINANCIAL_DOCTYPES and FINANCIAL_EGRESS not in principal.scopes:
-        return (f"not_authorized (missing_grant): {arguments.get('doctype')} records need the grant {FINANCIAL_EGRESS} on this agent, "
+    """The actionable refusal for a financial lookup without the financial grant on the agent AND its tenant. Said BEFORE
+    the application is read: there is no export approval to wait for, so the call must not look as if one were coming."""
+    doctype = arguments.get("doctype")
+    if doctype not in FINANCIAL_DOCTYPES:
+        return None
+    if FINANCIAL_EGRESS not in principal.scopes:
+        return (f"not_authorized (missing_grant): {doctype} records need the grant {FINANCIAL_EGRESS} on this agent, "
                 "besides erp.read. Ask the person who manages its access to add it (a new consent or token). Nothing was read, "
                 "requested or left waiting for approval.")
+    if not tenant_holds_financial(principal, "erpnext"):
+        return (f"not_authorized (missing_grant): {doctype} records need the grant {FINANCIAL_EGRESS} for this agent's tenant too "
+                "(policy_refs in AGENTIC_OS_TENANT_LIMITS). Nothing was read, requested or left waiting for approval.")
     return None
 
 

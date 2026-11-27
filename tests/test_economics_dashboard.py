@@ -1,10 +1,11 @@
 """The economics dashboard reads the same ERPNext documents as the finance dashboard and shows the same numbers a person would compute from them."""
-from tests.test_dashboards import _app, _metric, _panel
+from tests.test_dashboards import _app, _metric, _operator, _panel
 from tests.test_economics import Erp, base_rows, recon_rows
 
 
 def _dash(monkeypatch, tmp_path, rows, **kw):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     svc.config.sources.update({"erpnext": {"project": "billing"}})
     svc.ctx.clients["economics"] = Erp({**rows, **recon_rows(3380)}, **kw)
     svc.cache.invalidate()
@@ -39,6 +40,7 @@ def test_a_corrected_payment_leaves_no_open_mismatch_and_its_history_is_shown(mo
                              {"name": "PAY-2", "docstatus": 1, "party": "Cedar", "paid_amount": 3380, "reference_no": "WIRE-C1", "payment_type": "Receive"}]
     rows["Payment Entry Reference"] = [{"parent": "PAY-2", "reference_doctype": "Sales Invoice", "reference_name": "S5"}]
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     svc.config.sources.update({"erpnext": {"project": "billing"}})
     svc.ctx.clients["economics"] = Erp(rows)
     svc.cache.invalidate()
