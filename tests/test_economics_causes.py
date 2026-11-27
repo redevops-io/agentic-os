@@ -58,3 +58,10 @@ def test_a_different_currency_a_partial_settlement_an_unallocated_remainder_a_re
     assert kinds(e)["reversal"] == "supported" and not e.corroborated
     late = causes.explain_difference("W1", Decimal("0"), P("3800"), fs("date,amount,reference,description\n2026-10-09,3800,W1,in", P("3800")))
     assert kinds(late)["timing"] == "supported"
+
+
+def test_a_payment_entry_document_becomes_a_posting_with_its_allocation():
+    doc = {"name": "PE-9", "posting_date": "2026-10-05", "paid_amount": 3800, "reference_no": " w1 ", "party": "Cedar", "unallocated_amount": 0,
+           "references": [{"reference_doctype": "Sales Invoice", "reference_name": "S5"}, {"reference_doctype": "Journal Entry", "reference_name": "J1"}]}
+    p = bank.posting_from_entry(doc)
+    assert (p.name, p.reference, p.amount, list(p.invoices), p.unallocated) == ("PE-9", "W1", Decimal("3800.00"), ["S5"], Decimal("0.00"))
