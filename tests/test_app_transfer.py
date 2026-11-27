@@ -201,16 +201,32 @@ def test_what_the_card_says_about_the_records_is_what_the_runtime_enforces(world
     w = world()
     asked = w.ok(INSTALL, definition=CRM)
     said = dict(w.card(asked)["evidence"]["show"])["Who sees what it keeps"]
-    assert "every agent of this tenant that holds apps.use, whatever its other permissions" in said and "add and change" in said
+    assert "reads records only if it holds apps.records.read" in said and "only if it holds apps.records.write" in said
+    assert "apps.use alone shows what the application is, not its records" in said
     assert w.decide(asked)["state"] == "executed_verified"
-    only_use = w.agent(["apps.use"])                                      # none of the tools' permissions the card lists
-    added = w.call("apps.state.add", as_=only_use, app_id="collections-desk", collection="chases", values={"invoice": "SINV-1", "status": "new"})
-    listed = w.call("apps.state.list", as_=only_use, app_id="collections-desk", collection="chases")
-    assert added["status"] == "ok" and [r["values"]["invoice"] for r in listed["output"]["records"]] == ["SINV-1"], (added, listed)
-    without = w.agent(["erp.read", "erp.propose"])                        # and without apps.use, nothing
-    assert w.call("apps.state.list", as_=without, app_id="collections-desk", collection="chases")["status"] != "ok"
-    other = w.agent(["apps.use"], tenant="globex")
-    assert w.call("apps.state.list", as_=other, app_id="collections-desk", collection="chases")["status"] != "ok"
+    record = {"invoice": "SINV-1", "status": "new"}
+    reach = lambda who: (  # noqa: E731
+        w.call("apps.get", as_=who, app_id="collections-desk")["status"] == "ok",
+        w.call("apps.state.list", as_=who, app_id="collections-desk", collection="chases")["status"] == "ok",
+        w.call("apps.state.add", as_=who, app_id="collections-desk", collection="chases", values=record)["status"] == "ok")
+    assert reach(w.agent(["apps.use"])) == (True, False, False)                    # opening gives no record
+    assert reach(w.agent(["apps.use", "apps.records.read"])) == (True, True, False)
+    assert reach(w.agent(["apps.use", "apps.records.write"])) == (True, False, True)
+    assert reach(w.agent(["erp.read", "erp.propose"])) == (False, False, False)    # a tool's permission is no way in
+    assert reach(w.agent(["apps.use", "apps.records.read", "apps.records.write"], tenant="globex")) == (False, False, False)
+
+
+def test_a_change_to_a_record_needs_the_write_permission_even_with_the_read_one(world):
+    w = world()
+    asked = w.ok(INSTALL, definition=CRM)
+    assert w.decide(asked)["state"] == "executed_verified"
+    first = w.ok("apps.state.add", app_id="collections-desk", collection="chases", values={"invoice": "SINV-1", "status": "new"})
+    reader = w.agent(["apps.use", "apps.records.read"])
+    change = w.call("apps.state.update", as_=reader, app_id="collections-desk", collection="chases", record_id=first["id"], revision=1,
+                    values={"invoice": "SINV-1", "status": "paid"})
+    assert change["status"] != "ok"
+    kept = w.ok("apps.state.list", app_id="collections-desk", collection="chases")["records"]
+    assert [(r["values"]["status"], r["revision"]) for r in kept] == [("new", 1)]
 
 
 def test_confirming_something_other_than_what_was_reviewed_installs_nothing(two_tenants):
