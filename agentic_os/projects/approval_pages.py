@@ -32,6 +32,7 @@ table{border-collapse:collapse;width:100%;margin:.4rem 0 1rem}th,td{border:1px s
 white-space:pre-wrap;overflow-wrap:anywhere}th{width:12rem}.tables th{width:auto}code{overflow-wrap:anywhere}.card{border:1px solid #8886;border-radius:8px;padding:.6rem 1rem;margin:.6rem 0}
 button{font:inherit;padding:.5rem 1.2rem;margin-right:.6rem}input{font:inherit;padding:.4rem;width:100%;box-sizing:border-box;margin:.2rem 0 .8rem}
 @media (max-width:32rem){th{width:34%}.tables th{width:auto}}
+details{margin:0 0 1rem}summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #8886;padding:.6rem}
 .note{padding:.6rem 1rem;border-left:4px solid #c80}.muted{opacity:.75;font-size:.9em}header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}"""
 _BUTTONS = {"approve": "Approve", "reject": "Reject", "execute": "Execute now"}
 
@@ -81,6 +82,9 @@ def card_html(card: Card, base: str, csrf: str, *, message: str = "") -> str:
                + rows([("Requested", _when(card.created_at)), ]) + f"<tr><th>Approval expires</th><td>{expiry}</td></tr></table>")
     out.append("<h2>Proposed changes</h2>" if card.waiting else "<h2>Changes</h2>")
     out.append("<table>" + rows(card.changes) + "</table>")
+    if card.technical:
+        out.append('<details><summary>Full technical definition (exactly what approval installs)</summary>'
+                   f'<pre>{_e(card.technical)}</pre></details>')
     for t in card.tables:
         out.append(f'<h3>{_e(t["title"])}</h3><table class=tables><tr>' + "".join(f"<th>{_e(c)}</th>" for c in t["columns"]) + "</tr>"
                    + "".join("<tr>" + "".join(f"<td>{_e(v)}</td>" for v in r) + "</tr>" for r in t["rows"]) + "</table>")

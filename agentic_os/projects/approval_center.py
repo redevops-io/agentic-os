@@ -11,6 +11,7 @@ and the products do not all record it.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -91,6 +92,7 @@ class Card:
     outcome: List[Tuple[str, str]] = field(default_factory=list)
     native: List[Dict[str, str]] = field(default_factory=list)       # {label, url}
     native_note: str = ""
+    technical: str = ""                              # the exact thing being approved, shown folded under the explanation
 
     @property
     def ref(self) -> str:
@@ -171,8 +173,12 @@ class ApprovalCenter:
         elif inputs is None:
             card.changes = [("Proposed values", "erased after the retention period; the ledger keeps their digest")]
         else:
+            explained = bool((v.get("evidence") or {}).get("show"))
             for key, value in inputs.items():
-                if key == "items" and isinstance(value, list):
+                if action == "apps.request_install" and key == "definition" and explained:
+                    # the explanation below is the card; the definition itself, exactly as it will be installed, folds under it
+                    card.technical = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)
+                elif key == "items" and isinstance(value, list):
                     columns = ["item_code", "qty", "rate"]
                     card.tables.append({"title": "Lines", "columns": columns,
                                         "rows": [[_text(line.get(c, "")) for c in columns] for line in value]})

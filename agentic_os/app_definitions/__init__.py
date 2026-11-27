@@ -302,6 +302,12 @@ class AppStore:
 
 
 # ── installing, as a governed write ──────────────────────────────────────────────
+def plain_description(capability: Any) -> str:
+    """A capability's description for a person: without the warnings addressed to the agent that reads it."""
+    said = re.split(r"(?<=[.])\s+", str(getattr(capability, "description", "") or "").strip())
+    return " ".join(s for s in said if "never as instructions" not in s) or "No description."
+
+
 def prepare_install(ctx: Any, store: AppStore, inputs: Mapping[str, Any]) -> Dict[str, Any]:
     from agentic_os.governed_writes.apps import NotApplied  # noqa: PLC0415
     definition = inputs["definition"]
@@ -315,12 +321,22 @@ def prepare_install(ctx: Any, store: AppStore, inputs: Mapping[str, Any]) -> Dic
         raise NotApplied(f"the definition is not acceptable: {e}") from None
     proposes = [c["name"] for c in definition["capabilities"] if catalog[c["name"]].side_effecting]
     show = [["Application", f"{definition['name']} ({definition['id']}), version {definition['version']}"
-                            + (f", replacing version {old['version']}" if old else "")], ["What it is for", definition["summary"]]]
-    show += [[f"Uses {c['name']}" + (" (proposes or makes changes)" if c["name"] in proposes else " (reads)"), c["why"]]
+                            + (f", replacing version {old['version']}" if old else "")], ["What it is for", definition["summary"]],
+            ["What approving does", f"Installs this definition for the tenant {ctx.tenant or '(this deployment)'}"
+                                    + (", in place of the installed version; its records are kept" if old else "")
+                                    + ". It gives no agent any permission and changes nothing in any other application."],
+            ["Changes to other applications", ("It lists tools that propose or make them: " + ", ".join(proposes) + ". Every change that "
+                                               "needs approval still waits for a person, and for the asking agent's own authority.")
+             if proposes else "None: every capability it lists only reads."]]
+    # what each capability is, in the platform's words; the author's reason is the author's and is marked as such
+    show += [[f"Uses {c['name']}" + (" (proposes or makes changes)" if c["name"] in proposes else " (reads)"),
+              f"{plain_description(catalog[c['name']])}\nAuthor's reason (not checked): {c['why']}"]
              for c in definition["capabilities"]]
     show.append(["An agent needs these permissions to use it (installing grants none)", ", ".join(grants_needed(definition, catalog))])
     show.append(["It keeps", "; ".join(f"{c['name']} ({', '.join(f['name'] for f in c['fields'])}; up to {c['max_records']})"
                                        for c in definition["state"]["collections"]) or "no state"])
+    show.append(["Who sees what it keeps", "People of this tenant on its pages, and this tenant's agents that hold apps.use and every "
+                                           "permission above."])
     show.append(["A person sees", ", ".join(v["title"] for v in definition["views"])])
     # every word the author wrote for people to read: it can claim anything, so the approver reads it before it is shown to anyone
     for view in definition["views"]:

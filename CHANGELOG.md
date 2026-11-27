@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.31; no version set)
 
+- The card for installing an application now says in words what approving does, what each tool gives access to (the platform's description, then the author's reason marked as unchecked), what may change in other applications, the permissions an agent needs, what is kept and who sees it. The exact definition, which was the first row as raw text, is folded underneath.
+
 ## v0.4.31 (app images build again, a consent page that says what it grants, secrets stay in Vault)
 
 - **Fix:** 12 app images (Market Radar among them) could not be built: git was installed after the requirements step that needs it. A test now checks the order.
