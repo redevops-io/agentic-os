@@ -17,6 +17,10 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.28; no version set)
 
+- **Fix:** the economics tools offered to agents now read ERPNext child tables with their parent. With an API user that may not list a child table directly, reconciliation could not be read at all, and ERPNext can also answer such a read with names only, which left invoice links and discounts out.
+- Governed payment correction (`economics.request_payment_correction`, grant `economics.propose`), **off by default**. A bank difference alone cannot trigger it: the operator's own statement export must corroborate it and rule out a fee, currency, instalment, allocation, reversal and timing. The approver sees the evidence and attests to it; the original voucher is kept and amended; the ledger is read back; a half-done correction is finished only after a new approval, without a duplicate. See docs/AGENT_GATEWAY_EXTERNAL_AGENTS.md.
+- Approvals can require the approver's attestation (`attested` on the decision; a box on the approval page).
+
 ## v0.4.28 (financial data needs the financial-data grant)
 
 - **Changed (breaking for access):** financial data now needs the financial-data grant everywhere it can be read: dashboards, drill-downs, trends, Sidekick explanations, `dashboards.get` for agents and ERPNext record lookups. ERPNext, the economic events, Lago and Metabase are refused without it; CRM deal amounts and AI spend are removed and shown as withheld. Add `egress:financial` (or `egress:financial:<source>`) to a tenant's `policy_refs` **and** to the agents that need it; add `financial` to the principals in a dashboards `access` section. Anonymous callers can only be given the new `demo:financial` grant, which reaches only sources declared `data: synthetic`. The operator, admin token, desktop owner and a declared single owner are unaffected. See docs/DASHBOARDS.md.

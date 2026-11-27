@@ -76,8 +76,9 @@ before.
 
 ## Economic intelligence and reconciliation
 
-Offered where ERPNext is connected. **Read-only.** Every tool needs `economics.read`, **and** the financial-data grant on
-the agent and its tenant, **and** the tenant's `app:erpnext`.
+Offered where ERPNext is connected. Every reading tool needs `economics.read`, **and** the financial-data grant on the
+agent and its tenant, **and** the tenant's `app:erpnext`. Reading changes nothing. The one change an agent can propose, a
+payment correction, is off unless the deployment turns it on (below).
 
 | Capability | What it returns |
 |---|---|
@@ -86,7 +87,44 @@ the agent and its tenant, **and** the tenant's `app:erpnext`.
 | `economics.evidence` | messages and CRM notes that refer to one invoice or customer, as references with excerpts |
 
 **A difference is not by itself an error.** A bank fee, a currency exchange, a partial settlement, timing or how a receipt
-is allocated can each explain it, so these tools propose no correction.
+is allocated can each explain it, and a difference alone never leads to a change.
+
+### Correcting a payment (off by default)
+
+`economics.request_payment_correction` proposes cancelling a received payment and entering it again, as ERPNext's
+amendment of it, for the amount the bank received. It needs the named grant `economics.propose`, and:
+
+| Setting | What it is |
+|---|---|
+| `AGENTIC_OS_PAYMENT_CORRECTIONS=1` | turns it on (with `AGENTIC_OS_WRITES_DIR`) |
+| `AGENTIC_OS_BANK_STATEMENTS_DIR` | the bank's own CSV exports, one folder per tenant (`<dir>/<tenant>/*.csv`; `default` without tenants). Only the operator writes there. Columns: `date` (ISO), `amount` (or `deposit` and `withdrawal`), `reference`, `description`, optional `currency` (`USD` is assumed) |
+
+It is proposed, and performed after approval, only when the statement independently shows one deposit of another amount for
+this payment **and** nothing could explain the difference: no fee, currency conversion, further instalment, unallocated
+money, reversal or timing difference; no other statement line that names the payment or is for exactly the difference; no
+bank charge no larger than it within 5 days of the deposit; and a statement that starts by the payment date and runs 5 days
+past the payment and the deposit. The payment must be the only one under its reference, allocated in full to one sales
+invoice, in one currency at rate 1, with no deductions or taxes. Anything else is refused with the reason, and is for a
+person to resolve in ERPNext. With `economics.propose`, `economics.discrepancies` says for each difference whether a
+correction may be proposed and why not.
+
+**Approval.** The card shows the statement line, what was ruled out, the effect on the invoice and any messages that mention
+it. The approver must tick a statement that they checked this (API: `"attested": true` with the decision). The evidence,
+including each statement file's SHA-256, is part of the digest approved. If the books or the statement change before the
+write, nothing is written.
+
+**What happens to the records.** The original stays in ERPNext as a cancelled voucher with its ledger entries; the
+replacement names it (`amended_from`); each gets a comment naming the other, the approval and the evidence digest. The
+result is verified only after reading back both vouchers, the general ledger, the invoice's outstanding amount and the
+reconciliation. `corrections.sqlite` in the writes directory keeps the voucher as it was, the evidence, who approved and
+every step. **Back it up with the ledger: it is never erased.**
+
+**If it stops half way** (the cancellation happens and the replacement is not confirmed), the outcome is *unknown, check
+now*, and nothing is retried. Proposing the same correction again offers only to **finish** it, needs a new approval and a
+new attestation, looks for an existing amendment before creating one, and stops if the money was recorded by other means.
+
+**ERPNext API user.** Qualified with a user holding only the roles *Accounts User* and *Accounts Manager* on ERPNext
+v16.23.1. The separate `erp.request_comment` action creates `Comment` records directly, which needs more rights than that.
 
 **Evidence follows its source.** A conversation needs `support.read` (which covers its private notes, as
 `support.get_conversation` does) and the tenant's `app:chatwoot`; a CRM note needs `crm.records.read` and `app:twenty`. A
