@@ -98,6 +98,7 @@ class Social:
 
     def __init__(self):
         self.posts, self.uploads, self.fail, self.garble = [], [], {}, ""
+        self.names_the_post, self.also = True, 0      # newer Postiz answers with the id; the old one with an empty 201
         self.channels = [{"id": "ig1", "name": "Brand IG", "identifier": "instagram", "disabled": False},
                          {"id": "li1", "name": "Brand LinkedIn", "identifier": "linkedin-page", "disabled": False},
                          {"id": "off1", "name": "Old", "identifier": "instagram", "disabled": True}]
@@ -120,6 +121,10 @@ class Social:
         self.posts.append({"id": f"p{len(self.posts) + 1}", "state": {"schedule": "QUEUE", "draft": "DRAFT"}[body["type"]],
                            "publishDate": body["date"], "integration": {"id": post["integration"]["id"]},
                            "content": self.garble or post["value"][0]["content"], "image": post["value"][0]["image"]})
+        for _ in range(self.also):                    # someone else's identical post appears at the same moment
+            self.posts.append({**self.posts[-1], "id": f"p{len(self.posts) + 1}"})
+        if not self.names_the_post:
+            return httpx.Response(201, content=b"")
         return httpx.Response(201, json=[{"postId": self.posts[-1]["id"], "integration": post["integration"]["id"]}])
 
     def client(self):
@@ -270,6 +275,21 @@ def test_an_unconfirmed_post_is_unknown_and_not_retried_and_a_different_read_bac
     w.social.fail, w.social.garble = {}, "something else"
     out = w.decide(w.ok("social.request_post", channel_id="ig1", caption="Original", when="draft"))
     assert out["state"] == "executed_unverified" and "text differs" in out["note"] + out["read_back"], out
+
+
+def test_a_postiz_that_does_not_name_the_post_is_read_back_to_the_one_new_entry_that_is_it(world):
+    w = world
+    w.social.names_the_post = False
+    first = w.decide(w.ok("social.request_post", channel_id="ig1", caption="Same words", when="draft"))
+    assert first["state"] == "executed_verified" and first["record"] == "p1", first
+    second = w.decide(w.ok("social.request_post", channel_id="ig1", caption="Same words", when="draft"))
+    assert second["state"] == "executed_verified" and second["record"] == "p2", second            # the earlier twin is not taken for it
+    w.social.also = 1
+    twin = w.decide(w.ok("social.request_post", channel_id="ig1", caption="Twice", when="draft"))
+    assert twin["state"] == "outcome_unknown" and "2 new calendar entries" in twin["note"], twin
+    w.social.also, w.social.garble = 0, "not what was sent"
+    lost = w.decide(w.ok("social.request_post", channel_id="ig1", caption="Original", when="draft"))
+    assert lost["state"] == "outcome_unknown" and "0 new calendar entries" in lost["note"], lost
 
 
 # ── plans ────────────────────────────────────────────────────────────────────────

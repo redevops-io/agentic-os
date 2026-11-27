@@ -157,14 +157,28 @@ class PostizClient(_Http):
         return {"id": str(out["id"]), "path": str(out["path"])}
 
     def create_post(self, *, kind: str, when: str, channel: str, caption: str, media: Optional[Dict[str, str]]) -> str:
+        """The new post's id, or "" when this version of Postiz accepts the post without naming it (201, empty body)."""
+        import httpx  # noqa: PLC0415
         body = {"type": kind, "date": when, "shortLink": False,
                 "posts": [{"integration": {"id": channel}, "settings": {"__type": "fallback"},
                            "value": [{"content": caption, "image": [media] if media else []}]}]}
-        out = self._call("POST", "/posts", body=body)
-        made = out[0] if isinstance(out, list) and out else {}
-        if not made.get("postId"):
-            raise OutcomeUnknown("Postiz did not say which post it created")
-        return str(made["postId"])
+        try:
+            with httpx.Client(timeout=self.timeout, transport=self.transport) as client:
+                r = client.post(f"{self.base_url}/posts", headers=self._headers(), json=body)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
+            raise NotApplied(f"Postiz could not be reached ({type(e).__name__})") from None
+        except Exception as e:  # noqa: BLE001
+            raise OutcomeUnknown(f"no usable answer from Postiz ({type(e).__name__})") from None
+        if 400 <= r.status_code < 500 and r.status_code != 408:
+            raise NotApplied(f"Postiz refused the post (HTTP {r.status_code})")
+        if not 200 <= r.status_code < 300:
+            raise OutcomeUnknown(f"Postiz answered HTTP {r.status_code}")
+        try:
+            out = r.json()
+        except ValueError:
+            return ""
+        made = out[0] if isinstance(out, list) and out and isinstance(out[0], dict) else {}
+        return str(made.get("postId") or "")
 
 
 def operators_from_env() -> Dict[str, Any]:
@@ -313,13 +327,23 @@ def perform_post(postiz: Any, i: Mapping[str, Any], footer: str, rid: str, ctx: 
         media = postiz.upload(data, f"{entry['asset']}{suffix.get(entry['media_type'], '')}", entry["media_type"])
     kind = "schedule" if at else "draft"
     when = (at or _dt.datetime.fromtimestamp(ctx.journal.clock(), _dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    post = postiz.create_post(kind=kind, when=when, channel=channel["id"], caption=str(i["caption"]), media=media)
     wanted = "QUEUE" if at else "DRAFT"
+    moment = at or _dt.datetime.fromtimestamp(ctx.journal.clock(), _dt.timezone.utc)
+    before = {str(p.get("id")) for p in postiz.posts_in_month(moment)}      # unreadable: nothing has been posted yet
+    post = postiz.create_post(kind=kind, when=when, channel=channel["id"], caption=str(i["caption"]), media=media)
     try:
-        moment = at or _dt.datetime.fromtimestamp(ctx.journal.clock(), _dt.timezone.utc)
-        mine = next((p for p in postiz.posts_in_month(moment) if str(p.get("id")) == post), None)
+        rows = postiz.posts_in_month(moment)
     except Exception as e:  # noqa: BLE001
+        if not post:
+            raise OutcomeUnknown(f"Postiz accepted the post and its calendar could not be read back ({type(e).__name__})") from None
         return Outcome(True, False, post, f"created, but the calendar could not be read back ({type(e).__name__})")
+    if not post:                       # it was not named: only ONE new entry that is this post may be taken for it
+        new = [p for p in rows if str(p.get("id")) not in before and str((p.get("integration") or {}).get("id")) == channel["id"]
+               and str(p.get("state")) == wanted and str(i["caption"]) in str(p.get("content") or "")]
+        if len(new) != 1:
+            raise OutcomeUnknown(f"Postiz accepted the post without naming it, and {len(new)} new calendar entries match it")
+        post = str(new[0]["id"])
+    mine = next((p for p in rows if str(p.get("id")) == post), None)
     if mine is None:
         return Outcome(True, False, post, "created, but it is not in the calendar: check Postiz")
     problems = []
