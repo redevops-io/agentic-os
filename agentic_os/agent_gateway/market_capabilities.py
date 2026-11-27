@@ -164,9 +164,10 @@ def register(registry: CapabilityRegistry, operators: Mapping[str, Any], writes:
         rec = next((r for r in (found.get("recommendations") or {}).get("items", []) if r["id"] == req.arguments["recommendation_id"]), None)
         if rec is None:
             raise ValueError("that research has no such recommendation")
-        by_id = {f["id"]: f for f in (found.get("audit") or {}).get("findings", [])}
         refs: List[str] = rec.get("evidence_refs", [])
-        findings = [{k: by_id[r].get(k) for k in ("page", "severity", "detail", "check")} for r in refs if r in by_id]
+        wanted = set(refs)                       # several findings can share one id (every site-level finding of a page does)
+        findings = [{k: f.get(k) for k in ("page", "severity", "detail", "check")}
+                    for f in (found.get("audit") or {}).get("findings", []) if f.get("id") in wanted]
         out = {"research_id": found["mission_id"], "recommendation_id": rec["id"], "title": rec.get("title"), "findings": findings[:MAX_FINDINGS],
                "finding_count": len(findings)}
         if "market_brief" in refs:

@@ -68,7 +68,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(su, "_default_resolver", lambda h: ["93.184.216.34"])
     web = Web()
     real_audit, real_verify, real_reassess = loop.site_audit, loop.verify_change, loop.reassess
-    monkeypatch.setattr(loop, "site_audit", lambda inp: real_audit(inp, fetch=web.fetch))
+    monkeypatch.setattr(loop, "site_audit", lambda inp: real_audit(inp, fetch=lambda url: web.fetch(url)))
     monkeypatch.setattr(loop, "verify_change", lambda inp: real_verify(inp, fetch=web.fetch))
     monkeypatch.setattr(core, "brief", lambda inp: {"status": "done", "action": "brief", "items": web.watches, "changed": 1, "summary": "1 changed"})
 
@@ -150,6 +150,22 @@ def test_research_is_a_durable_mission_with_evidence_for_every_recommendation(wo
     assert out["research_id"] in log and "radar.site_audit" in log                     # the mission is on disk
     assert all(auth == "Bearer " + RADAR_TOKEN for _, auth, _ in w.seen)
     assert w.ok("market.list_research")["research"][0]["research_id"] == out["research_id"]
+
+
+def test_findings_that_share_an_id_are_all_given_as_evidence(world):
+    w = world
+    real = w.web.fetch
+
+    def single_page_app(url):                       # answers every address, robots.txt and the sitemaps too, with its page
+        return 200, "<!doctype html><html><head><title>App</title></head><body></body></html>", {"content-type": "text/html"}
+    w.web.fetch = single_page_app
+    try:
+        out = research(w)
+    finally:
+        w.web.fetch = real
+    ev = w.ok("market.evidence", research_id=out["research_id"], recommendation_id="REC-SITE")
+    details = [f["detail"] for f in ev["findings"]]
+    assert len(details) == len(set(details)) >= 2 and any("not well-formed XML" in d for d in details) and any("no sitemap" in d for d in details), details
 
 
 def test_a_repeated_key_returns_the_same_research_without_running_it_again(world):
