@@ -427,14 +427,16 @@ def requester_denial(app_name: str, tool: str, *, requester: str, tenant: str = 
     basic = None if gate is None else gate.check(tool)
     if basic or app_name not in _ENTERPRISE:
         return basic
-    from .permissions import Identity
     _principal_for, table = _ENTERPRISE[app_name]
     auth = _cr_default_authorizer()
     if auth is None:
         return "enterprise permissions are on but no authorizer is installed; denied (fail closed)"
     spec = SimpleNamespace(name=tool, side_effecting=table.get(tool) in ("write", "delete"), approval_required=False)
     try:
-        return _deny_reason(auth(Identity(app=app_name, user=requester, roles=["external-agent"], tenant=tenant), spec, {}))
+        # The ENTERPRISE package's own Identity: its authorizer treats any other class as no principal at all and denies every
+        # call. (The package is imported only because its bootstrap already installed this gate from a trusted distribution.)
+        identity = importlib.import_module("context_runtime_enterprise.policy").Identity
+        return _deny_reason(auth(identity(app=app_name, user=requester, roles=["external-agent"], tenant=tenant), spec, {}))
     except Exception as e:  # noqa: BLE001 — fail closed
         return f"authorizer error ({type(e).__name__})"
 
