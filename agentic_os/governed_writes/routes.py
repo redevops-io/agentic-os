@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from fastapi import APIRouter, Body, HTTPException
 
 from agentic_os.app_kit.route_authz import RoutePolicy as P
+from agentic_os.mission.principal import principal_of_signed_in
 
 from .preauthorization import PreauthorizationError
 from .service import GovernedWrites, WriteError
@@ -118,7 +119,8 @@ def make_router(writes: GovernedWrites, principal: Callable[[], Optional[str]]) 
                 or not isinstance(digest, str) or not _DIGEST.match(digest)):
             raise HTTPException(422, {"error": "invalid", "detail": "body must be {approved: bool, digest: <64 hex>[, attested: bool]}"})
         try:
-            return writes.decide(checked(request_id), approve=approved, digest=digest, approver=who, tenant=tenant, attested=attested)
+            return writes.decide(checked(request_id), approve=approved, digest=digest, approver=who, tenant=tenant, attested=attested,
+                                 principal=principal_of_signed_in(who, tenant, method="projects-sign-in"))
         except WriteError as e:
             raise _http(e)
 

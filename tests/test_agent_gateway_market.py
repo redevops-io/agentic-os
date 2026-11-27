@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import time
 import sys
 from pathlib import Path
 
@@ -84,8 +85,17 @@ def world(monkeypatch, tmp_path):
                  "AGENTIC_OS_APPROVAL_SECRET": SECRET, "AGENTIC_OS_REPLAY_DB": str(tmp_path / "replay.sqlite"),
                  "AGENTIC_OS_TENANT_LIMITS": json.dumps(LIMITS), "AGENTIC_OS_WRITES_DIR": str(tmp_path / "writes"),
                  "AGENTIC_OS_APPROVER_TOKENS": "acme=" + "A" * 40, "PROJECTS_UI_DIR": str(tmp_path / "ui"),
-                 "AGENTIC_OS_CONTROL_TOKEN": RADAR_TOKEN, M.ENV_SITES: SITE}.items():
+                 # on this line an operator runs an approved change only inside authority ITS owner gave: Market Radar serves one
+                 # tenant, so Projects signs in to it as that tenant, and its owner grants the tenant's direct-action envelope
+                 "AGENTIC_OS_CONTROL_TOKEN": "c" * 48,                     # Projects' administrator, who can also decide
+                 "AGENTIC_OS_TENANT_TOKENS": "acme=" + RADAR_TOKEN, M.ENV_SITES: SITE}.items():
         monkeypatch.setenv(k, v)
+    from agentic_os.mission.authority import AuthorityEnvelope, AutonomyBudget, Grant, SqliteEnvelopeStore
+    SqliteEnvelopeStore(db).put(AuthorityEnvelope(
+        tenant="acme", principal="market-radar-owner", mission_id="acme:direct", goal="approved changes to Market Radar's watches",
+        grants=(Grant(capability="radar.add_watch", max_tier=2), Grant(capability="radar.approve_plan", max_tier=2)),
+        budget=AutonomyBudget(usd=0.0, max_actions=50, max_children=0, max_depth=0, max_parallel=1), may_delegate=False,
+        issued_at=time.time(), expires_at=time.time() + 3600))
 
     radar_app = FastAPI()
     radar_app.include_router(operator_module.build_market_radar_operator().router())

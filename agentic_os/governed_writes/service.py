@@ -30,6 +30,8 @@ from agentic_os.mission.approval import canonical
 from agentic_os.mission.authority import Action, Verdict
 from agentic_os.mission.executor import Executor
 from agentic_os.mission.operator_sdk import LocalOperatorClient, Operator, capability, pending_approval
+from agentic_os.mission.principal import principal_of_signed_in
+from agentic_os.evidence_query.authz import StaticCeiling, perm
 from agentic_os.mission.registry import CapabilityRegistry
 from agentic_os.mission.runtime import ApprovalError, MissionRuntime
 from agentic_os.mission.store import EventStore
@@ -283,7 +285,9 @@ class GovernedWrites:
             return
         who = f"preauthorization:{grant['id']} (granted by {grant['granted_by']})"
         try:
-            done = self.decide(mid, approve=True, digest=digest, approver=who, tenant=tenant)
+            # the standing decision of the signed-in person who made this preauthorization, within its limits
+            done = self.decide(mid, approve=True, digest=digest, approver=who, tenant=tenant,
+                               principal=principal_of_signed_in(who, tenant, method="preauthorization"))
         except WriteError as e:
             self.preauthorizations.record(grant["id"], mid, f"not decided: {e.code}: {e.detail}", give_back=grant["charged"])
             return
@@ -365,7 +369,9 @@ class GovernedWrites:
 
     # ── deciding: a person, never the requester ──────────────────────────────────
     def decide(self, request_id: str, *, approve: bool, digest: str, approver: str, tenant: Optional[str] = None,
-               attested: bool = False) -> Dict[str, Any]:
+               attested: bool = False, principal: Any = None) -> Dict[str, Any]:
+        """``principal`` is the verified identity the entry point authenticated (``mission.principal``); ``approver`` is its
+        name. A name alone decides nothing: without a verified principal of that name the request is left waiting."""
         if not approver:
             raise WriteError("refused", "a decision needs an identified person")
         with self._lock:
@@ -392,17 +398,26 @@ class GovernedWrites:
                 own = app_gate.operator_denial(OPERATOR, row["action"], self.operator)
                 if own:
                     raise WriteError("denied", f"not_authorized (permission_denied): you may not have this performed: {own}"[:400])
+            # after every other refusal (so each keeps its own reason) and before the request is claimed
+            if principal is None or not self.runtime.principal_verifier().verify(principal) or getattr(principal, "id", "") != approver:
+                raise WriteError("refused", "a decision needs a verified sign-in of the person deciding")
             taken = self._db.execute("UPDATE requests SET state=?, approver=?, decided=?, attested=? WHERE id=? AND state=?",
                                      (DECIDING, approver, self.clock(), statement if approve else None, request_id, PENDING)).rowcount
             if taken != 1:
                 raise WriteError("conflict", "someone else is deciding this request")
-            self._perform(request_id, json.loads(row["inputs"]), approve=approve, approver=approver)
+            self._perform(request_id, json.loads(row["inputs"]), approve=approve, principal=principal)
             return self._view(self._row(request_id))
 
-    def _perform(self, mid: str, args: dict, *, approve: bool, approver: str) -> None:
+    def _perform(self, mid: str, args: dict, *, approve: bool, principal: Any) -> None:
         try:
             if mid not in self.runtime._missions:                # after a restart: the ledger, plus the inputs checked against its digest
                 self.runtime.rehydrate(mid, inputs=args)
+            if mid in self.runtime._reconstructed:
+                # resuming a mission rebuilt from the ledger takes its own short-lived grant: the person deciding this request
+                # (already checked to be allowed to decide it, for this tenant) may resume this tenant's request, and nothing else
+                scope = str(self.runtime._missions[mid].tenant or "")
+                self.runtime.grant_resume(mid, principal=principal, ceiling=StaticCeiling({perm(scope, "resume")}), scope=scope,
+                                          action="resume")
             parked = self.runtime.repo.pending_human(mid)
         except Exception as e:  # noqa: BLE001
             self._finish(mid, "failed", note=f"the request could not be restored ({type(e).__name__}); nothing was changed by this decision")
@@ -411,7 +426,7 @@ class GovernedWrites:
             self._finish(mid, "outcome_unknown", note="the ledger shows an earlier decision on this request; check the application")
             return
         try:
-            self.runtime.approve(mid, parked["node_id"], "approve" if approve else "reject", actor=approver)
+            self.runtime.approve(mid, parked["node_id"], "approve" if approve else "reject", principal=principal)
         except ApprovalError:
             self._finish(mid, "expired", note="the runtime refused the approval as out of date; nothing was changed")
             return
@@ -424,7 +439,9 @@ class GovernedWrites:
             return
         ran = self._ran.pop(mid, None)
         if ran is None:
-            self._finish(mid, "failed", note="the runtime did not perform it (see the mission's events); nothing was changed")
+            why = next((str(e.payload.get("reason") or "") for e in reversed(self.runtime.store.for_mission(mid))
+                        if e.type == "ExecutionAuthorityRefused"), "")
+            self._finish(mid, "failed", note=f"the runtime did not perform it ({why or 'see the mission events'}); nothing was changed")
         elif ran[0] != "done":
             self._finish(mid, ran[0], note=ran[1])
         else:

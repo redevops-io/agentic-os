@@ -14,7 +14,7 @@ from agentic_os.governed_writes.service import WriteError  # noqa: E402
 from agentic_os.permissions import GrantStore  # noqa: E402
 from agentic_os.permissions_setup import init_local_profile  # noqa: E402
 from tests import _cr_enterprise_stub as stub  # noqa: E402
-from tests.test_governed_writes import COMMENT, World, _changes, _env  # noqa: E402,F401  (the autouse environment)
+from tests.test_governed_writes import COMMENT, World, signed_in, _changes, _env  # noqa: E402,F401  (the autouse environment)
 
 PO = {"supplier": "Steelco", "schedule_date": "2026-12-01", "items": [{"item_code": "BOLT", "qty": 5}]}
 
@@ -85,7 +85,8 @@ def test_a_tenant_restriction_added_after_the_proposal_beats_the_approval(tmp_pa
     assert shown(w, rid)["authorization"]["verdict"] == "denied"                # the approver is told before deciding
     why = refused(lambda: w.writes.decide(rid, approve=True, digest=digest, approver="approver:acme", tenant="acme"))
     assert "tenant_not_granted" in why and _changes(w.apps) == [] and w.writes.get(rid)["state"] == "pending"
-    assert w.writes.decide(rid, approve=False, digest=digest, approver="approver:acme", tenant="acme")["state"] == "rejected"
+    assert w.writes.decide(rid, approve=False, digest=digest, approver="approver:acme", tenant="acme",
+                           principal=signed_in("approver:acme"))["state"] == "rejected"
 
 
 def test_the_last_moment_check_stops_a_denied_write_even_if_the_runtime_was_approved_another_way(tmp_path, monkeypatch):
@@ -94,7 +95,7 @@ def test_the_last_moment_check_stops_a_denied_write_even_if_the_runtime_was_appr
     rid = w.ask()["request_id"]
     monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"acme": {"policy_refs": ["writes:decide"]}}))
     node = w.writes.runtime.repo.pending_human(rid)["node_id"]
-    w.writes.runtime.approve(rid, node, "approve", actor="approver:acme")        # around the service's own check
+    w.writes.runtime.approve(rid, node, "approve", principal=signed_in("approver:acme"))        # around the service's own check
     assert _changes(w.apps) == []
     assert w.writes._ran[rid][0] == "failed" and "tenant_not_granted" in w.writes._ran[rid][1]
 

@@ -383,8 +383,10 @@ class ApprovalCenter:
         if source == WRITES:
             from agentic_os.governed_writes.service import WriteError  # noqa: PLC0415
             try:
+                from agentic_os.mission.principal import principal_of_signed_in  # noqa: PLC0415
+                # ``person`` was resolved from this request's signed-in session by the approval pages
                 self.writes.decide(record_id, approve=decision == "approve", digest=digest, approver=person.principal, tenant=person.tenant,
-                                   attested=attested)
+                                   attested=attested, principal=principal_of_signed_in(person.principal, person.tenant, method="projects-sign-in"))
             except WriteError as e:
                 raise DecisionRefused({"not_found": 404, "conflict": 409, "unavailable": 503}.get(e.code, 403), e.detail) from None
         else:

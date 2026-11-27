@@ -91,6 +91,9 @@ class RadarClient:
         try:
             out = self.operator_client().invoke(OPERATOR, capability, dict(inputs), key)
         except Exception as e:  # noqa: BLE001
+            refused = str(e)[:8] in ("http_401", "http_403")
+            if refused:                                  # its gate refuses before the handler runs: nothing happened
+                raise NotApplied("Market Radar refused the call: it did not accept this deployment's sign-in or authority") from None
             raise OutcomeUnknown(f"no usable answer from Market Radar ({type(e).__name__})") from None
         if not isinstance(out, dict):
             raise OutcomeUnknown("Market Radar's answer could not be read")

@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("httpx")
 
 from agentic_os.agent_gateway.agent_tokens import record_authority
+from agentic_os.mission.principal import principal_of_signed_in
 from agentic_os.governed_writes.service import ACTIONS, GovernedWrites, WriteError  # noqa: E402
 from tests._writes_fakes import FakeApps  # noqa: E402
 
@@ -55,6 +56,11 @@ def connect(agent_id, *, tenant="acme", grants=WRITE_GRANTS, minutes=60, db=None
                      expires_at=now + minutes * 60)
 
 
+def signed_in(who, tenant="acme"):
+    """The principal the authentication layer would issue for this signed-in name."""
+    return principal_of_signed_in(who, tenant, method="projects-sign-in") if who else None
+
+
 class World:
     def __init__(self, tmp_path, agents=("a1", "a2"), **kw):
         self.dir, self.apps, self.now = tmp_path / "writes", FakeApps(), [1_000_000.0]
@@ -74,7 +80,8 @@ class World:
     def approve(self, rid, *, approve=True, approver="approver:acme", tenant="acme", writes=None):
         w = writes or self.writes
         digest = w.get(rid, tenant=tenant, for_approver=True)["digest"]
-        return w.decide(rid, approve=approve, digest=digest, approver=approver, tenant=tenant)
+        # as the authentication layer does for a signed-in person
+        return w.decide(rid, approve=approve, digest=digest, approver=approver, tenant=tenant, principal=signed_in(approver, tenant))
 
 
 def _changes(apps):
@@ -169,7 +176,7 @@ def test_who_may_decide(tmp_path):
     for approver, tenant, code in (("agent:a1", "acme", "refused"), ("agent:other", "acme", "refused"), ("", "acme", "refused"),
                                    ("approver:globex", "globex", "not_found")):
         with pytest.raises(WriteError) as e:
-            w.writes.decide(rid, approve=True, digest=digest, approver=approver, tenant=tenant)
+            w.writes.decide(rid, approve=True, digest=digest, approver=approver, tenant=tenant, principal=signed_in(approver, tenant))
         assert e.value.code == code, (approver, e.value)
     with pytest.raises(WriteError) as e:
         w.writes.decide(rid, approve=True, digest="0" * 64, approver="approver:acme", tenant="acme")
@@ -218,7 +225,7 @@ def test_two_people_approving_at_once_write_once(tmp_path):
 
     def go(svc, who):
         try:
-            out.append(svc.decide(rid, approve=True, digest=digest, approver=who, tenant="acme")["state"])
+            out.append(svc.decide(rid, approve=True, digest=digest, approver=who, tenant="acme", principal=signed_in(who))["state"])
         except WriteError as e:
             out.append(e.code)
     threads = [threading.Thread(target=go, args=(s, f"approver:{i}")) for i, s in enumerate(services)]
