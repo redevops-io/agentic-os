@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-pytest.importorskip("httpx")
+import httpx  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os import app_gate  # noqa: E402
 from agentic_os.agent_gateway.agent_tokens import envelope_key, envelope_key_for_requester, record_authority  # noqa: E402

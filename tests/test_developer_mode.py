@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-pytest.importorskip("httpx")
+import httpx  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os.governed_writes import preauthorization as P  # noqa: E402
 from agentic_os.governed_writes.service import ACTIONS, WriteError  # noqa: E402

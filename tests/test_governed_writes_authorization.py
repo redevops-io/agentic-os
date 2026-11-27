@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-pytest.importorskip("httpx")
+import httpx  # noqa: F401,PLC0415 - required on this line: its absence is a failure, not a skip
 
 from agentic_os import app_gate  # noqa: E402
 from agentic_os.governed_writes.authorization import APP, Verdict  # noqa: E402
