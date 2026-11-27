@@ -14,6 +14,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from agentic_os.app_kit.route_authz import RoutePolicy as P
 
+from .preauthorization import PreauthorizationError
 from .service import GovernedWrites, WriteError
 
 #: a tenant credential needs this among the tenant's ``policy_refs``; the operator and ``admin`` hold everything
@@ -22,6 +23,12 @@ WRITE_ROUTE_POLICIES = {
     "POST /api/writes/{request_id}/decision": P(
         "writes.decide", "human_only", permission=DECIDE_PERMISSION,
         rationale="approving or rejecting a change an agent proposed is a person's decision"),
+    "POST /api/writes/preauthorizations": P(
+        "writes.preauthorize", "human_only", permission=DECIDE_PERMISSION,
+        rationale="preauthorizing an agent's changes is a person's decision, made in advance"),
+    "POST /api/writes/preauthorizations/{preauthorization_id}/revoke": P(
+        "writes.preauthorize_revoke", "human_only", permission=DECIDE_PERMISSION,
+        rationale="ending a preauthorization is a person's decision"),
 }
 _STATUS = {"not_found": 404, "invalid": 422, "conflict": 409, "unavailable": 503, "refused": 403, "too_many": 429, "denied": 403}
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -54,6 +61,42 @@ def make_router(writes: GovernedWrites, principal: Callable[[], Optional[str]]) 
     def _list(state: str = "", limit: int = 50) -> Dict[str, Any]:
         _, tenant, decides = require_person()
         return {"requests": writes.list(tenant=tenant, state=state, limit=limit, for_approver=decides)}
+
+    # (declared before /api/writes/{request_id}, which would otherwise take "preauthorizations" for a request id)
+    def person_who_decides() -> Tuple[str, Optional[str]]:
+        who, tenant, decides = require_person()
+        if not decides:
+            raise HTTPException(403, {"error": "refused", "detail": "this needs an approver credential"})
+        return who, tenant
+
+    @r.get("/api/writes/preauthorizations")
+    def _preauthorizations(limit: int = 50) -> Dict[str, Any]:
+        _, tenant = person_who_decides()
+        return {"preauthorizations": writes.preauthorizations.list(tenant=tenant, limit=max(1, min(limit, 200)))}
+
+    @r.post("/api/writes/preauthorizations")
+    def _preauthorize(body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+        who, tenant = person_who_decides()
+        allowed = {"tenant", "agent", "actions", "match", "max_uses", "minutes", "reason"}
+        if set(body) - allowed or not isinstance(body.get("actions"), list) or not isinstance(body.get("agent"), str):
+            raise HTTPException(422, {"error": "invalid", "detail": "body: {agent, actions[], max_uses, minutes, reason[, match, tenant]}"})
+        named = str(body.get("tenant") or tenant or "")
+        if tenant is not None and named != tenant:            # a tenant's approver grants for that tenant only
+            raise HTTPException(403, {"error": "refused", "detail": "you can only preauthorize changes of your own tenant"})
+        try:
+            return writes.preauthorize(tenant=named, requester=body["agent"], actions=body["actions"], match=body.get("match"),
+                                       max_uses=body.get("max_uses"), minutes=body.get("minutes"), created_by=who,
+                                       reason=body.get("reason"))
+        except PreauthorizationError as e:
+            raise HTTPException(_STATUS.get(e.code, 403 if e.code == "disabled" else 400), {"error": e.code, "detail": e.detail})
+
+    @r.post("/api/writes/preauthorizations/{preauthorization_id}/revoke")
+    def _revoke(preauthorization_id: str) -> Dict[str, Any]:
+        who, tenant = person_who_decides()
+        try:
+            return writes.preauthorizations.revoke(preauthorization_id, by=who, tenant=tenant)
+        except PreauthorizationError as e:
+            raise HTTPException(_STATUS.get(e.code, 400), {"error": e.code, "detail": e.detail})
 
     @r.get("/api/writes/{request_id}")
     def _get(request_id: str) -> Dict[str, Any]:
