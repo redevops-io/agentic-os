@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.27; no version set)
 
+- Economic intelligence: a message that states no figure is linked to an adjustment by what it is about (topic and one-order/several-orders labels from a model that only labels; the code decides), ambiguous matches are kept; `findings.py` (five reconciliation kinds), `bank.py` (independent statement CSV vs received payments), `mail.py` (read-only IMAP and messenger adapters), `Slack.read_history`, and per-source access scopes (`evidence.visible_to`). Docs: docs/ECONOMIC_EVENTS.md.
+
 ## v0.4.27 (failed sign-ins never keep a correct credential out)
 
 - Fixed: failed approval sign-ins could keep legitimate approvers out for five minutes: 60 failures from anywhere refused everyone, and 8 refused one address, which behind `--forwarded-allow-ips "*"` is whatever the caller puts in `X-Forwarded-For`. A configured credential now always signs in; limits only delay or refuse wrong ones. Password guessing is not meaningfully slowed by these limits (it never was: the other gated routes accept the same password without one), so use long random credentials.
