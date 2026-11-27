@@ -17,7 +17,7 @@ import pytest
 
 
 from agentic_os import desktop_profile
-from agentic_os.local_agents import ACTING, LocalAgentError, LocalAgentStore, cli, connect_agent, discover_gateway
+from agentic_os.local_agents import LocalAgentError, LocalAgentStore, cli, connect_agent, discover_gateway
 from tests.test_local_agent_gateway import ENTRY, REPO, _free_port, call
 
 ALL_APPS = ["apps.use", "apps.records.read", "apps.records.write", "apps.install"]
@@ -117,8 +117,9 @@ def propose(d, token, key, **kw):
 
 def test_only_the_apps_own_screen_gives_a_permission_that_changes_something(desktop):
     status, offered = desktop.person("/api/local-agents")
-    acting = {g["grant"] for g in offered["grantable"] if g["changes"]}
-    assert status == 200 and set(ALL_APPS) <= acting <= set(ACTING)
+    names = {g["grant"] for g in offered["grantable"]}
+    assert status == 200 and set(ALL_APPS) <= names and not names & {"media.read", "media.edit", "media.generate"}     # no media tools yet
+    assert {g["grant"] for g in offered["grantable"] if g["changes"]} == {"apps.records.write", "apps.install"}
     assert all(g["meaning"] and g["meaning"] != g["grant"] for g in offered["grantable"]), offered["grantable"]
     # the command line cannot: an agent that runs commands cannot give itself more
     with pytest.raises(LocalAgentError, match="only on the app's own screen"):
@@ -150,7 +151,7 @@ def test_an_agent_and_a_request_without_the_session_reach_none_of_the_persons_ro
 def test_propose_reject_approve_execute_once_read_back_and_record(desktop):
     agent, token = desktop.connect("builder", ALL_APPS)
     rejected = propose(desktop, token, "life-reject-001", app_id="no-thanks", name="No thanks")
-    assert rejected["state"] == "pending" and rejected["approval_url"].startswith("/#/approvals/writes/")
+    assert rejected["state"] == "pending" and rejected["approval_url"] == f"/#/approvals/writes:{rejected['request_id']}"
     status, card = desktop.decide(rejected["request_id"], "reject")
     assert status == 200 and card["state"] == "rejected"
     asked = propose(desktop, token, "life-install-001")

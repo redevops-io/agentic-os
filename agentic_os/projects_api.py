@@ -1602,7 +1602,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     _LOCAL_GRANTS = set(_GRANTS)             # an installed app's own agents: also what its screen may give, once known (below)
     # the installed app: its own screen, behind the local session, is where a person connects agents and decides
     desktop_ui = bool(getattr(app.state, "desktop_ui", False))
-    writes_link = ((lambda rid: f"/#/approvals/writes/{rid}") if desktop_ui else (lambda rid: _approval_link("writes", rid)))
+    writes_link = ((lambda rid: f"/#/approvals/writes:{rid}") if desktop_ui else (lambda rid: _approval_link("writes", rid)))
 
     def _writer_authority_key(requester: str) -> str:
         """Where a requester's stored authority is, named as the gateway names it."""

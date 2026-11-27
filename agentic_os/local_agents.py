@@ -32,9 +32,11 @@ ENV_DIR = "AGENTIC_OS_LOCAL_AGENTS_DIR"
 #: what ANY way of connecting an agent can grant: reading. The command line grants nothing else, so an agent that can run
 #: commands cannot give itself more.
 GRANTABLE = ("projects.read", "missions.read", "sources.read", "dashboards.read")
-#: permissions that let an agent change something (proposals a person must approve, and an application's own records). Only
-#: the person at the app gives these, on its screen (projects/desktop_api.py), and only for tools this installation serves.
+#: permissions of the tools that work with applications and media. Only the person at the app gives these, on its screen
+#: (projects/desktop_api.py), and only for tools this installation serves.
 ACTING = ("apps.use", "apps.records.read", "apps.records.write", "apps.install", "media.read", "media.edit", "media.generate")
+#: those of them that let an agent change or make something (records and new files at once; everything else as a proposal)
+WRITING = frozenset({"apps.records.write", "apps.install", "media.edit", "media.generate"})
 #: dashboards.read is NOT a default: the dashboards hold test results and business figures, so it is granted by naming it.
 DEFAULT_GRANTS = ("projects.read", "missions.read", "sources.read")
 TOKEN_PREFIX = "rla_"                                   # rAIls local agent
@@ -128,7 +130,7 @@ class LocalAgentStore:
         offered = tuple(g for g in dict.fromkeys(allowed) if g in GRANTABLE or g in ACTING)     # never anything else
         unknown = [g for g in wanted if g not in offered]
         if unknown or not wanted:
-            hint = (" (permissions that change something are given only on the app's own screen)"
+            hint = (" (permissions for applications and media are given only on the app's own screen)"
                     if any(g in ACTING for g in unknown) else "")
             raise LocalAgentError(f"not grantable here: {unknown or 'nothing was named'}; grantable: {', '.join(offered)}{hint}")
         records = self._load()

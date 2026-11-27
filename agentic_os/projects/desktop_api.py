@@ -113,7 +113,7 @@ def mount(app: Any, *, center: Optional[ApprovalCenter], agents: Optional[Any], 
         store = _agent_store()
         return {"agents": [r.public() for r in store.list()], "clients": list(CLIENTS), "default_days": L.DEFAULT_DAYS,
                 "max_days": L.MAX_DAYS, "gateway": L.discover_gateway(store.dir),
-                "grantable": [{"grant": g, "meaning": text, "changes": g not in L.GRANTABLE} for g, text in grantable().items()]}
+                "grantable": [{"grant": g, "meaning": text, "changes": g in L.WRITING} for g, text in grantable().items()]}
 
     @app.post("/api/local-agents")
     def _connect(request: Request, body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
