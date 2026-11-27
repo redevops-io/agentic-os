@@ -192,6 +192,8 @@ TOOL_ACTIONS["governed-writes"] = {
     "market.sites": "read", "market.monitor": "read", "market.research": "write", "market.list_research": "read",
     "market.get_research": "read", "market.evidence": "read", "market.request_watch": "write", "market.request_change_plan": "write",
     "market.verify_plan": "read", "market.request_status": "read",
+    "apps.list": "read", "apps.get": "read", "apps.state.list": "read", "apps.state.add": "write", "apps.state.update": "write",
+    "apps.request_install": "write", "apps.request_status": "read",
 }
 
 PUBLIC_CANDIDATES: tuple[tuple[str, str], ...] = (

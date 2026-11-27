@@ -1496,7 +1496,12 @@ def mount_approvals(app: "FastAPI", prov: "ProjectionProvider") -> Dict[str, Any
     from agentic_os.projects.approval_pages import ApprovalPages
     labels = getattr(app.state, "agent_label", None)
     center = ApprovalCenter(writes=writes, hub=hub, proposals=_proposals(app), agent_label=labels or (lambda principal: ""))
-    pages = ApprovalPages(center, public_base=_approvals_public_base())
+    extensions = []
+    store = getattr(app.state, "app_store", None)
+    if store is not None and writes is not None:
+        from agentic_os.projects import app_pages
+        extensions.append(lambda pages_, app_: app_pages.mount(pages_, app_, store, writes))
+    pages = ApprovalPages(center, public_base=_approvals_public_base(), extensions=extensions)
     app.state.approval_pages = pages
     return pages.mount(app)
 
@@ -1646,6 +1651,15 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         from agentic_os.agent_gateway import app_record_capabilities
         from agentic_os.governed_writes.apps import writers_from_env
         app_writers = writers_from_env()
+        # portable application definitions (agentic_os.app_definitions): off unless asked for, and their state lives with
+        # the governed writes, which is also where installing one is decided
+        app_store = None
+        _apps_dir = os.environ.get("AGENTIC_OS_WRITES_DIR", "").strip()
+        if _apps_dir and os.environ.get("AGENTIC_OS_APPS", "").strip() == "1":
+            from agentic_os.app_definitions import AppStore
+            app_store = AppStore(_apps_dir, catalog=lambda: {m.name: m for m in registry.all()})
+            app_writers = {**app_writers, "apps": app_store}
+        app.state.app_store = app_store
         from agentic_os import app_gate as _app_gate
         if app_writers and _app_gate.permissions_requested():
             # permissions were requested: this plane joins them like an app (it refuses to start if the gate cannot be
@@ -1680,6 +1694,10 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             from agentic_os.agent_gateway import market_capabilities
             market_capabilities.register(registry, app_writers, app_writes,
                                          approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+        if app_store is not None:
+            from agentic_os.agent_gateway import app_definition_capabilities
+            app_definition_capabilities.register(registry, app_store, app_writes,
+                                                 approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
         if "erpnext" in app_writers:
             from agentic_os.agent_gateway import economics_capabilities
             from agentic_os.integrations.chatwoot import chatwoot_from_env
@@ -1830,6 +1848,12 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                                      f"{payment_correction.ENV_ENABLED}=1 and {payment_correction.ENV_STATEMENTS})")
                 elif not records.tenant_may_use_app(probe, "erpnext") or not records.tenant_holds_financial(probe, "erpnext"):
                     cannot[grant] = f"the tenant {tenant} is not granted ERPNext and its financial data here (app:erpnext, egress:financial)"
+            from agentic_os.agent_gateway import app_definition_capabilities as app_tools
+            for grant in app_tools.GRANTS:
+                if "apps" not in app_writers or app_writes is None:
+                    cannot[grant] = "applications are not enabled on this deployment (AGENTIC_OS_APPS=1 with AGENTIC_OS_WRITES_DIR)"
+                elif not records.tenant_may_use_app(probe, "apps"):
+                    cannot[grant] = f"the tenant {tenant} is not granted applications here (app:apps in AGENTIC_OS_TENANT_LIMITS)"
             from agentic_os.agent_gateway import market_capabilities as market_tools
             from agentic_os.agent_gateway import media_capabilities as media_tools
             for grant, app_name in {**media_tools.GRANT_APP, **market_tools.GRANT_APP}.items():
