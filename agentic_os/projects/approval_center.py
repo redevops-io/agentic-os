@@ -83,6 +83,7 @@ class Card:
     expires_at: Any = None
     expiry_note: str = ""
     digest: str = ""                                 # what a decision must name
+    attestation: str = ""                            # a statement the approver must tick to approve ("" = none)
     decisions: List[str] = field(default_factory=list)               # what THIS person may do now
     blocked: str = ""                                # why a decision is not offered although one is awaited
     waiting: bool = False
@@ -174,9 +175,14 @@ class ApprovalCenter:
                                         "rows": [[_text(line.get(c, "")) for c in columns] for line in value]})
                 else:
                     card.changes.append((key.replace("_", " "), _text(value)))
+        evidence = v.get("evidence") or {}
+        card.changes += [(str(k), _text(val)) for k, val in evidence.get("show", [])]
+        if not card.waiting and v.get("attested"):
+            card.changes.append(("The approver attested", _text(v["attested"])))
         card.affected = self._affected(app, action, inputs or {}, v)
         if card.waiting:
             card.digest = v.get("digest", "")
+            card.attestation = str(evidence.get("attestation", ""))
             authorization = v.get("authorization") or {}
             why = person.refusal(WRITE_PERMISSION) or ("a requester does not decide changes" if person.role == "requester" else "")
             if authorization.get("verdict") == "denied":
@@ -202,7 +208,13 @@ class ApprovalCenter:
         def add(label: str, kind: str = "", record: str = "") -> None:
             url = app_link(app, kind, record) if record else ""
             out.append({"label": label, **({"url": url} if url else {})})
-        if action == "erp.request_comment" and inputs:
+        if action == "economics.request_payment_correction":
+            if inputs:
+                add(f"Payment Entry {inputs['payment_entry']} (is cancelled by this, and kept)", "Payment Entry", str(inputs["payment_entry"]))
+                add(f"Bank reference {inputs['reference']}")
+            if made:
+                add(f"Payment Entry {made} (its replacement)", "Payment Entry", made)
+        elif action == "erp.request_comment" and inputs:
             add(f"{inputs['doctype']} {inputs['name']}", inputs["doctype"], inputs["name"])
             if made:
                 add(f"Comment {made} (created)")
@@ -351,7 +363,7 @@ class ApprovalCenter:
             raise DecisionRefused(404 if e.status == 404 else 502, "the product did not answer for this record") from None
         raise missing
 
-    def decide(self, person: Person, source: str, record_id: str, *, decision: str, digest: str) -> Card:
+    def decide(self, person: Person, source: str, record_id: str, *, decision: str, digest: str, attested: bool = False) -> Card:
         card = self.card(person, source, record_id)                 # read fresh: another tenant's does not exist
         if decision not in card.decisions:
             raise DecisionRefused(403 if card.waiting else 409,
@@ -361,7 +373,8 @@ class ApprovalCenter:
         if source == WRITES:
             from agentic_os.governed_writes.service import WriteError  # noqa: PLC0415
             try:
-                self.writes.decide(record_id, approve=decision == "approve", digest=digest, approver=person.principal, tenant=person.tenant)
+                self.writes.decide(record_id, approve=decision == "approve", digest=digest, approver=person.principal, tenant=person.tenant,
+                                   attested=attested)
             except WriteError as e:
                 raise DecisionRefused({"not_found": 404, "conflict": 409, "unavailable": 503}.get(e.code, 403), e.detail) from None
         else:

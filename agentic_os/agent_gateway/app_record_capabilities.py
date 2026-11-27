@@ -92,7 +92,7 @@ def manifests() -> Tuple[CapabilityManifest, ...]:
             status_tool(app), f"What became of the changes you proposed to {APP_NAMES[app]}: one by id, or your recent ones",
             CapabilityKind.DIRECT, permissions=(grant,), risk_tier=RiskTier.READ,
             input_schema=_schema(request_id=_REQUEST_ID, limit=_LIMIT), data_classes=(DataClass.INTERNAL,)))
-    for action in ACTIONS.values():
+    for action in (a for a in ACTIONS.values() if not a.served_by):
         schema = {**action.input_schema, "properties": {**action.input_schema["properties"], "idempotency_key": _KEY},
                   "required": [*action.input_schema["required"], "idempotency_key"]}
         out.append(CapabilityManifest(

@@ -13,7 +13,7 @@ from __future__ import annotations
 import html
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import quote
 
 
@@ -123,13 +123,40 @@ class ErpnextWriter(_Http):
     def read_list(self, doctype: str, fields: List[str], filters: Optional[list] = None, limit: int = 0) -> List[dict]:
         """A strict read for ``agentic_os.economics``: it RAISES when the collection cannot be read, so unreadable is never
         mistaken for empty."""
+        from agentic_os.integrations.erpnext import ErpnextClient  # noqa: PLC0415
         params = {"fields": json.dumps(list(fields)), "limit_page_length": str(limit)}
         if filters:
             params["filters"] = json.dumps(filters)
+        if doctype in ErpnextClient.CHILD_PARENT:         # ERPNext will not give a child table's columns without its parent
+            params["parent"] = ErpnextClient.CHILD_PARENT[doctype]
         data = self._call("GET", self._path(doctype), params=params).get("data")
         if not isinstance(data, list):
             raise NotApplied(f"the application's list of {doctype} could not be read")
         return data
+
+    # ── only for the payment correction (payment_correction.py): cancel, and an amendment that is drafted, then submitted ──
+    def cancel(self, doctype: str, name: str) -> None:
+        self._call("POST", "/api/method/frappe.client.cancel", body={"doctype": doctype, "name": name})
+
+    def add_lineage_note(self, doctype: str, name: str, text: str, footer: str) -> None:
+        """A comment on a voucher, through Frappe's own comment method: it asks only for access to that voucher, so an
+        accounts-only API user can write it (creating a Comment record directly needs more). Signed as that user."""
+        user = self._call("GET", "/api/method/frappe.auth.get_logged_user").get("message")
+        if not user:
+            raise NotApplied("the application did not say which user this is")
+        self._call("POST", "/api/method/frappe.desk.form.utils.add_comment", body={
+            "reference_doctype": doctype, "reference_name": name, "comment_email": str(user), "comment_by": str(user),
+            "content": f"<p>{html.escape(text)}</p><p><em>{html.escape(footer)}</em></p>"})
+
+    def create_draft(self, doctype: str, body: Mapping[str, Any]) -> str:
+        data = self._call("POST", self._path(doctype), body={**body, "docstatus": 0}).get("data") or {}
+        if not data.get("name"):
+            raise OutcomeUnknown("the application did not say what it created")
+        return str(data["name"])
+
+    def submit(self, doctype: str, name: str) -> None:
+        """Submit the draft as it stands now, so ERPNext runs its own submission rules."""
+        self._call("POST", "/api/method/frappe.client.submit", body={"doc": json.dumps({**self.document(doctype, name), "doctype": doctype})})
 
     def create_draft_purchase_order(self, *, supplier: str, schedule_date: str, items: List[dict], company: str = "") -> str:
         """A DRAFT (``docstatus`` 0): it orders nothing and books nothing until a person submits it in ERPNext."""

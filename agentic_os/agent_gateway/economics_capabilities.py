@@ -1,14 +1,18 @@
 """Economic intelligence and decision reconciliation for external agents: investigate what happened to money and retrieve
-the evidence the caller may see. READ-ONLY: it changes nothing and proposes no correction.
+the evidence the caller may see. Reading changes nothing. The one change it can PROPOSE (``governed_writes.payment_correction``,
+off unless the deployment enables it) is refused unless the bank's own statement justifies it; a person approves it.
 
 | Capability | What it answers |
 |---|---|
 | ``economics.discrepancies`` | payments whose amount differs from the bank statement under the same reference, and corrections already visible in the books |
 | ``economics.explain_adjustment`` | what was done to one invoice (discounts, cancellation, credit notes) and what its documents claim about approval |
 | ``economics.evidence`` | the messages and CRM notes that mention it, as references with excerpts, within the caller's source scopes |
+| ``economics.request_payment_correction`` | propose cancelling and re-entering one payment (only where enabled; ``economics.propose``) |
+| ``economics.request_status`` | what became of the caller's proposals |
 
 A difference is not by itself an error: a bank fee, a currency exchange, a partial settlement, timing or how a receipt is
-allocated can each explain it. So nothing here says what should be changed.
+allocated can each explain it. So a difference alone never says what should be changed: only the correction's own checks of the
+bank statement (``payment_correction.assess``) can say one may be proposed, and a person still decides.
 
 Access: ``economics.read`` (named, never default) AND the financial-data grant on the agent and its tenant, and the tenant
 must be granted ERPNext. Evidence additionally follows the SOURCE: a conversation needs ``support.read`` and the tenant's
@@ -25,16 +29,19 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from agentic_os.economics import correlate, evidence, reconcile
 from agentic_os.economics.contracts import Extraction
 from agentic_os.economics.erpnext_events import extract
-from agentic_os.governed_writes import authorization
+from agentic_os.governed_writes import authorization, payment_correction
+from agentic_os.governed_writes.actions import ACTIONS
 
 from . import app_record_capabilities as records
 from .contracts import ApprovalPolicy, CapabilityKind, CapabilityManifest, DataClass, GatewayPrincipal, RiskTier
 from .registry import CapabilityRegistry, HandlerResult
 
-READ = "economics.read"
+READ, PROPOSE = "economics.read", "economics.propose"
+CORRECTION = "economics.request_payment_correction"
 GRANTS: Dict[str, str] = {
     READ: "Investigate payment differences and invoice adjustments, read-only (also needs the financial-data grant). Evidence from "
           "support and CRM is shown only with the grant for that source",
+    PROPOSE: "Propose correcting a payment the bank statement shows for another amount. Nothing happens until a person approves it",
 }
 NOT_AN_ERROR = ("A difference is not by itself an error: a bank fee, a currency exchange, a partial settlement, timing or how a "
                 "receipt is allocated can explain it. What, if anything, to change is for a person to decide.")
@@ -52,7 +59,18 @@ def _schema(required=(), **properties) -> Dict[str, Any]:
 def manifests() -> Tuple[CapabilityManifest, ...]:
     read = lambda name, text, schema, classes: CapabilityManifest(  # noqa: E731
         name, text, CapabilityKind.DIRECT, permissions=(READ,), risk_tier=RiskTier.READ, input_schema=schema, data_classes=classes)
+    action = ACTIONS[CORRECTION]
     return (
+        CapabilityManifest("economics.request_status", "What became of the corrections you proposed: one by id, or your recent ones",
+                           CapabilityKind.DIRECT, permissions=(PROPOSE,), risk_tier=RiskTier.READ,
+                           input_schema=_schema(request_id=records._REQUEST_ID, limit=records._LIMIT), data_classes=(DataClass.INTERNAL,)),
+        CapabilityManifest(CORRECTION, f"{action.description}. This only PROPOSES it: a person must approve before anything changes; "
+                                       "follow it with economics.request_status",
+                           CapabilityKind.DIRECT, permissions=(PROPOSE,), risk_tier=RiskTier.BOUNDED_WRITE, side_effecting=True,
+                           approval_policy=ApprovalPolicy.AUTO, idempotent=True, provider="erpnext",
+                           input_schema={**action.input_schema, "properties": {**action.input_schema["properties"], "idempotency_key": records._KEY},
+                                         "required": [*action.input_schema["required"], "idempotency_key"]},
+                           data_classes=(DataClass.INTERNAL,)),
         read("economics.discrepancies", "Payments whose amount differs from the bank statement under the same reference, and payments "
              "already cancelled and entered again. A difference is not by itself an error. " + _UNTRUSTED, _schema(), (DataClass.INTERNAL,)),
         read("economics.explain_adjustment", "What was done to one sales invoice: discounts, cancellation, credit notes, payment "
@@ -89,10 +107,26 @@ def _events(client: Any) -> Extraction:
     return extract(client)
 
 
-def _discrepancies(client: Any, _i: Mapping[str, Any]) -> Dict[str, Any]:
+def _correctable(writer: Any, tenant: str, d: Any) -> Dict[str, Any]:
+    """Whether the bank's own statement justifies proposing the correction of this one, and with which values."""
+    try:
+        found = payment_correction.assess(writer, tenant, d.reference, d.payment, d.posted, d.bank)
+    except Exception as e:  # noqa: BLE001
+        return {"may_be_proposed": False, "why_not": [str(e)[:300] if type(e).__name__ == "NotApplied" else type(e).__name__]}
+    if not found.ok:
+        return {"may_be_proposed": False, "why_not": found.reasons[:10]}
+    return {"may_be_proposed": True, "inputs": {"reference": d.reference, "payment_entry": d.payment, "posted_amount": float(d.posted),
+                                                "bank_amount": float(d.bank)}}
+
+
+def _discrepancies(client: Any, _i: Mapping[str, Any], writer: Any = None, tenant: str = "") -> Dict[str, Any]:
+    """``writer`` is given where the caller may propose the correction: each difference then says whether one is justified."""
     found, done = reconcile.find(client), reconcile.corrections(client)
     # ``ambiguous`` (agentic_os.economics.reconcile) says why no single payment can be named where the reference is shared
     rows = [d.to_json() for d in found.events[:MAX_ITEMS]]
+    if writer is not None:
+        for row, d in zip(rows, found.events):
+            row["correction"] = _correctable(writer, tenant, d)
     return {"discrepancies": rows, "discrepancy_count": len(found.events),
             "corrections": [c.to_json() for c in done.events[:MAX_ITEMS]],
             "gaps": [*found.gaps, *done.gaps], "note": NOT_AN_ERROR}
@@ -177,9 +211,10 @@ def _evidence(client: Any, readers: Mapping[str, Any], principal: GatewayPrincip
 
 
 # ── registration ─────────────────────────────────────────────────────────────────
-def register(registry: CapabilityRegistry, writers: Mapping[str, Any], readers: Optional[Mapping[str, Any]] = None) -> CapabilityRegistry:
-    """``writers`` are the connected applications (ERPNext is required; only read here); ``readers`` the strict evidence
-    readers by source (``chatwoot``, ``twenty``)."""
+def register(registry: CapabilityRegistry, writers: Mapping[str, Any], readers: Optional[Mapping[str, Any]] = None,
+             writes: Any = None, approval_url: Optional[Callable[[str], str]] = None) -> CapabilityRegistry:
+    """``writers`` are the connected applications (ERPNext is required); ``readers`` the strict evidence readers by source
+    (``chatwoot``, ``twenty``). The correction is offered only where governed writes exist AND corrections are enabled."""
     if "erpnext" not in writers:
         return registry
     from .capabilities import mask_emails  # noqa: PLC0415
@@ -209,8 +244,14 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], readers: 
             return HandlerResult(ok=True, output=mask_emails(out), data_classes=classes)
         return run
 
+    correcting = writes is not None and payment_correction.enabled()
+
+    def judged(req):
+        may = correcting and PROPOSE in req.principal.scopes
+        return _discrepancies(erp, req.arguments, writers["erpnext"] if may else None, req.principal.tenant)
+
     handlers = {
-        "economics.discrepancies": reader("economics.discrepancies", lambda req: _discrepancies(erp, req.arguments),
+        "economics.discrepancies": reader("economics.discrepancies", judged,
                                           (DataClass.INTERNAL, DataClass.FINANCIAL)),
         "economics.explain_adjustment": reader("economics.explain_adjustment", lambda req: _explain(erp, req.arguments),
                                                (DataClass.INTERNAL, DataClass.FINANCIAL)),
@@ -218,9 +259,62 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], readers: 
                                      (DataClass.CUSTOMER_CONTENT, DataClass.FINANCIAL)),
     }
 
+    def propose(req, envelope) -> HandlerResult:
+        from agentic_os.governed_writes.service import WriteError  # noqa: PLC0415
+        no = refused(req, CORRECTION)
+        if no is not None:
+            return no
+        inputs = {k: v for k, v in dict(req.arguments).items() if k != "idempotency_key"}
+        try:
+            view = writes.request(tenant=req.principal.tenant, requester=req.principal.principal.id, action=CORRECTION, inputs=inputs,
+                                  idempotency_key=str(req.arguments.get("idempotency_key") or req.idempotency_key or ""))
+        except WriteError as e:
+            return HandlerResult(ok=False, error=(e.detail if e.code == "denied" else f"{e.code}: {e.detail}")[:900])
+        if approval_url is not None:
+            view = {**view, "approval_url": approval_url(view["request_id"])}
+        return HandlerResult(ok=True, output=mask_emails(view), data_classes=(DataClass.INTERNAL,), evidence_refs=(view["request_id"],))
+
+    def follow(req, envelope) -> HandlerResult:
+        from agentic_os.governed_writes.service import WriteError  # noqa: PLC0415
+        no = refused(req, "economics.request_status")
+        if no is not None:
+            return no
+        mine = {"tenant": req.principal.tenant, "requester": req.principal.principal.id}
+        wanted = req.arguments.get("request_id")
+        try:
+            if wanted:
+                out: Any = writes.get(str(wanted), **mine)
+                if out["action"] != CORRECTION:
+                    return HandlerResult(ok=False, error="not_found: no such request")
+            else:
+                out = {"requests": [v for v in writes.list(app="erpnext", limit=200, **mine) if v["action"] == CORRECTION]
+                       [: req.arguments.get("limit", 20)]}
+        except WriteError as e:
+            return HandlerResult(ok=False, error=f"{e.code}: {e.detail}"[:500])
+        return HandlerResult(ok=True, output=mask_emails(out), data_classes=(DataClass.INTERNAL,))
+
+    if correcting:
+        def mentions(tenant: str, reference: str) -> List[str]:
+            """Ids of messages that name the invoice, or are the same customer's and state one of the figures (for the card)."""
+            try:
+                off = [d for d in reconcile.find(erp).events if d.reference == reference]
+                comms, gaps, identity = [], Extraction(), _identity(erp)
+                for source, (app, _grant) in SOURCES.items():
+                    if source in readers and authorization.tenant_may_use_app(tenant, app):
+                        collect = evidence.collect_chatwoot if source == "chatwoot" else evidence.collect_twenty
+                        comms += collect(readers[source], gaps, tenant=tenant, identity=identity, base_uri="",
+                                         scope=f"tenant:{tenant}/source:{source}", now_ms=int(time.time() * 1000))
+                found = sorted({e.communication for e in correlate.correlate_discrepancies(comms, off)})
+                return found + (["(some messages could not be read)"] if gaps.gaps else [])
+            except Exception:  # noqa: BLE001
+                return ["(the messages could not be read: check them yourself)"]
+        writes.mentions = mentions
     for manifest in manifests():
-        registry.register(manifest, handlers[manifest.name])
+        if manifest.name in handlers:
+            registry.register(manifest, handlers[manifest.name])
+        elif correcting:
+            registry.register(manifest, propose if manifest.name == CORRECTION else follow)
     return registry
 
 
-__all__ = ["GRANTS", "READ", "SOURCES", "NOT_AN_ERROR", "manifests", "register"]
+__all__ = ["GRANTS", "READ", "PROPOSE", "CORRECTION", "SOURCES", "NOT_AN_ERROR", "manifests", "register"]

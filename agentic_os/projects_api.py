@@ -1677,7 +1677,8 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             from agentic_os.integrations.chatwoot import chatwoot_from_env
             from agentic_os.integrations.twenty import twenty_from_env
             readers = {k: v for k, v in (("chatwoot", chatwoot_from_env()), ("twenty", twenty_from_env())) if v is not None}
-            economics_capabilities.register(registry, app_writers, readers=readers)
+            economics_capabilities.register(registry, app_writers, readers=readers, writes=app_writes,
+                                            approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
 
     def _agent_label(principal: str) -> str:
         """What an agent calls itself (a connection's client name) or what the operator labelled its token: for a card."""
@@ -1812,9 +1813,13 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                 if not reaches and not records.tenant_holds_financial(probe, "erpnext"):
                     cannot[grant] = f"the tenant {tenant} is not granted any financial data here (egress:financial in AGENTIC_OS_TENANT_LIMITS)"
             from agentic_os.agent_gateway import economics_capabilities as economics
+            from agentic_os.governed_writes import payment_correction
             for grant in economics.GRANTS:
                 if "erpnext" not in app_writers:
                     cannot[grant] = "ERPNext is not connected on this deployment"
+                elif grant == economics.PROPOSE and not (app_writes is not None and payment_correction.enabled()):
+                    cannot[grant] = (f"payment corrections are not enabled on this deployment (AGENTIC_OS_WRITES_DIR, "
+                                     f"{payment_correction.ENV_ENABLED}=1 and {payment_correction.ENV_STATEMENTS})")
                 elif not records.tenant_may_use_app(probe, "erpnext") or not records.tenant_holds_financial(probe, "erpnext"):
                     cannot[grant] = f"the tenant {tenant} is not granted ERPNext and its financial data here (app:erpnext, egress:financial)"
             for grant, app_name in records.GRANT_APP.items():
