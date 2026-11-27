@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.31; no version set)
 
+- **Changed, may need action:** a governed write now needs the requesting agent's **own stored authority** as well as a person's approval (`no_authority` otherwise). It is checked when proposed, when decided and just before the change, so **revoking an agent also stops its waiting requests**. Connections made by OAuth and tokens issued with `--authority-db` already have it. A deployment with `AGENTIC_OS_WRITES_DIR` but no `AGENTIC_OS_AUTHORITY_DB`, or file tokens issued without `--authority-db`, can no longer propose changes: set the store and reconnect or reissue. This is the same envelope the gateway already enforces in the production profile; no second permission system was added.
+
 ## v0.4.31 (app images build again, a consent page that says what it grants, secrets stay in Vault)
 
 - **Fix:** 12 app images (Market Radar among them) could not be built: git was installed after the requirements step that needs it. A test now checks the order.

@@ -295,6 +295,15 @@ application, so two tenants granted the same one see the same data.
 A retry with the same `idempotency_key` returns the **original answer** (the request as it was when proposed), never a second
 request; use `<app>.request_status` for its current state.
 
+**Two separate conditions for a change: authority and approval.** The agent must hold **its own stored authority** for
+the change (`mission-authority/v1` in `AGENTIC_OS_AUTHORITY_DB`: recorded when a person connects it by OAuth or when its
+token is issued with `--authority-db`; exactly the capabilities its grants name, for one tenant, until it expires,
+revocable). **And** a person approves the individual request. An approval creates no authority and cannot replace it.
+The authority is checked when the agent proposes, when a person decides, and again just before the change: revoking an
+agent (`agent_tokens revoke --authority-db`, or ending its connection) leaves its waiting requests impossible to
+approve; a person can still reject them. Developer-mode preauthorization stands in for the approval only, never for the
+authority. A deployment with `AGENTIC_OS_WRITES_DIR` and no authority store refuses every proposal, in every profile.
+
 **Permitted, approval required, or denied.** Every lookup and proposal gets one of three answers, and **an approval only
 ever satisfies "approval required"; it never overrides a denial**:
 
@@ -306,7 +315,7 @@ ever satisfies "approval required"; it never overrides a denial**:
 
 Checked in order: the named grant (by the gateway); `tenant_not_granted` (the tenant lacks `app:<name>` or has expired);
 `permission_denied` (the deployment's permissions plane); `no_approver` (nobody configured could approve, so no request is
-left waiting for nobody). A financial lookup without `egress:financial` returns `missing_grant` and reads nothing: there is
+left waiting for nobody); `no_authority` (a change whose requesting agent has no current stored authority for it). A financial lookup without `egress:financial` returns `missing_grant` and reads nothing: there is
 no export approval to wait for. The checks run when a change is proposed, again when a person approves it (a denial then
 leaves the request waiting; rejecting is always possible), and again just before it is performed.
 

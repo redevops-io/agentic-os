@@ -21,11 +21,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from agentic_os import app_gate
+from agentic_os.agent_gateway.agent_tokens import envelope_key_for_requester
 from agentic_os.governed_writes import authorization
 from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS, Outcome, reserved_marker
 from agentic_os.governed_writes.apps import NotApplied
 from agentic_os.governed_writes.preauthorization import PreauthorizationError, Preauthorizations
 from agentic_os.mission.approval import canonical
+from agentic_os.mission.authority import Action, Verdict
 from agentic_os.mission.executor import Executor
 from agentic_os.mission.operator_sdk import LocalOperatorClient, Operator, capability, pending_approval
 from agentic_os.mission.registry import CapabilityRegistry
@@ -96,6 +98,8 @@ class GovernedWrites:
         registry.register(operator.manifest)
         self.runtime = MissionRuntime(registry, Executor(LocalOperatorClient({OPERATOR: operator})),
                                       store=EventStore(str(root / "events.jsonl")), authority=authority)
+        # a write runs in the authority of the agent that asked for it: its stored envelope, never one made here
+        self.runtime.authority_key = lambda mission: envelope_key_for_requester(str(getattr(mission, "principal", "") or ""))
 
     @staticmethod
     def _fact(action: str) -> str:
@@ -108,15 +112,40 @@ class GovernedWrites:
     def configured(self, app: str) -> bool:
         return app in self.writers
 
-    def authorization(self, action: str, *, requester: str, tenant: str) -> authorization.Authorization:
+    def authority_refusal(self, action: str, *, requester: str, tenant: str, inputs: Optional[Mapping[str, Any]] = None) -> str:
+        """"" when the requesting agent's own stored authority (mission-authority/v1: given when a person connected it or
+        issued its token; scoped to its grants; expiring; revocable) covers this change right now, else why not. A person's
+        approval is a second, separate condition: it does not create this authority and cannot replace it."""
+        guard = self.runtime.authority
+        if guard is None:
+            return ("this deployment keeps no authority records, so no agent can hold authority to change anything: set "
+                    "AGENTIC_OS_AUTHORITY_DB, then connect the agent again (or issue its token with --authority-db)")
+        try:
+            found = guard.check(envelope_key_for_requester(requester), tenant, Action(
+                capability=action, arguments=dict(inputs or {}), risk_tier=1, side_effecting=True))
+        except Exception as e:  # noqa: BLE001 - an authority store that cannot be read refuses
+            return f"the authority records cannot be read ({type(e).__name__})"
+        if found.verdict is Verdict.DENY:
+            return {"no_authority": "this agent holds no authority here (it was never given any, or its token was issued without "
+                                    "--authority-db)",
+                    "revoked": "this agent's authority was revoked",
+                    "expired": "this agent's authority has expired"}.get(found.rule, f"this agent's authority does not cover it: {found.reason}")
+        return ""
+
+    def authorization(self, action: str, *, requester: str, tenant: str,
+                      inputs: Optional[Mapping[str, Any]] = None) -> authorization.Authorization:
         """May this requester of this tenant have this action done? Never changed by an approval."""
         spec = ACTIONS[action]
         if spec.financial and not authorization.tenant_holds_financial(tenant, spec.app):
             return authorization.Authorization(authorization.Verdict.DENIED, "missing_grant",
                                                f"{action} concerns financial data: the tenant {tenant or '(none)'} needs egress:financial "
                                                "(policy_refs in AGENTIC_OS_TENANT_LIMITS)")
-        return authorization.authorize(action, app=spec.app, requester=requester, tenant=tenant,
-                                       someone_else_can_approve=self._single_owner)
+        verdict = authorization.authorize(action, app=spec.app, requester=requester, tenant=tenant,
+                                          someone_else_can_approve=self._single_owner)
+        if verdict.denied:
+            return verdict
+        why = self.authority_refusal(action, requester=requester, tenant=tenant, inputs=inputs)
+        return authorization.Authorization(authorization.Verdict.DENIED, "no_authority", why[:400]) if why else verdict
 
     @property
     def state_dir(self) -> Path:
@@ -151,7 +180,7 @@ class GovernedWrites:
                 row = self._row(mid)
                 if row is None:
                     raise NotApplied("this execution belongs to no request")
-                allowed = self.authorization(name, requester=row["requester"], tenant=row["tenant"])
+                allowed = self.authorization(name, requester=row["requester"], tenant=row["tenant"], inputs=args)
                 if allowed.denied:                               # checked again at the last moment, after the approval
                     raise NotApplied(allowed.error)
                 writer = self.writers.get(action.app)
@@ -198,7 +227,7 @@ class GovernedWrites:
             raise WriteError("invalid", f"the text {marker!r} is reserved for approval records and cannot be written through a proposal")
         if not self.configured(spec.app):
             raise WriteError("unavailable", f"{spec.app} is not connected on this deployment")
-        allowed = self.authorization(action, requester=requester, tenant=tenant)
+        allowed = self.authorization(action, requester=requester, tenant=tenant, inputs=args)
         if allowed.denied:                                       # nothing is created for something that cannot be done
             raise WriteError("denied", allowed.error)
         intent = hashlib.sha256(canonical({"action": action, "inputs": args})).hexdigest()
@@ -356,7 +385,8 @@ class GovernedWrites:
                     raise WriteError("unavailable", f"{row['app']} is not connected now; the request is still waiting")
                 # an approval never overrides a denial: not the requester's (checked again, as things stand now) and not
                 # the deciding person's own, as the Operator seam would judge this execution. The request stays waiting.
-                allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"])
+                allowed = self.authorization(row["action"], requester=row["requester"], tenant=row["tenant"],
+                                             inputs=json.loads(row["inputs"]))
                 if allowed.denied:
                     raise WriteError("denied", allowed.error)
                 own = app_gate.operator_denial(OPERATOR, row["action"], self.operator)
