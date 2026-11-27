@@ -210,6 +210,81 @@ def check_record(fields: List[dict], values: Any) -> Dict[str, Any]:
     return out
 
 
+BUNDLE_SCHEMA = "aos.app-bundle/v1"
+MAX_BUNDLE_BYTES = 2_000_000
+MAX_BUNDLE_RECORDS = 10_000
+_RECORD_ID = re.compile(r"rec_[A-Za-z0-9_-]{1,64}\Z")
+
+
+def content_digest(definition: Mapping[str, Any], state: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical({"definition": definition, "state": state})).hexdigest()
+
+
+def check_bundle(bundle: Any, catalog: Mapping[str, Any]) -> "tuple[dict, dict]":
+    """``(definition, state)`` of a bundle this deployment can take whole; ``DefinitionError`` otherwise. The definition is
+    judged exactly like a proposed one. A record's current fields must have their types; values of fields or collections
+    an earlier version had are carried as they are, as plain scalars."""
+    b = _keys(bundle, "bundle", ("schema", "definition", "state", "from_tenant", "exported_by", "exported_at", "content_sha256"))
+    if b["schema"] != BUNDLE_SCHEMA:
+        raise DefinitionError(f"schema must be {BUNDLE_SCHEMA}")
+    if not isinstance(b["state"], dict) or len(canonical(b["state"])) > MAX_BUNDLE_BYTES:
+        raise DefinitionError(f"the records are at most {MAX_BUNDLE_BYTES} bytes")
+    definition = validate(b["definition"], catalog)
+    if content_digest(definition, b["state"]) != b["content_sha256"]:
+        raise DefinitionError("the content does not match its digest: it was changed or cut after it was exported")
+    collections = {c["name"]: c for c in definition["state"]["collections"]}
+    total = 0
+    for name, rows in b["state"].items():
+        if not isinstance(name, str) or not _NAME.match(name) or not isinstance(rows, list):
+            raise DefinitionError("state is collections of records")
+        total += len(rows)
+        if total > MAX_BUNDLE_RECORDS or (name in collections and len(rows) > collections[name]["max_records"]):
+            raise DefinitionError("there are more records than a collection or a bundle may hold")
+        seen = set()
+        fields = {f["name"]: f for f in collections.get(name, {}).get("fields", [])}
+        for r in rows:
+            _keys(r, "a record", ("id", "values", "revision", "updated_by", "updated_at"))
+            if not isinstance(r["id"], str) or not _RECORD_ID.match(r["id"]) or r["id"] in seen:
+                raise DefinitionError("a record id is missing, malformed or repeated")
+            seen.add(r["id"])
+            if not isinstance(r["revision"], int) or isinstance(r["revision"], bool) or r["revision"] < 1:
+                raise DefinitionError("a record's revision is a whole number from 1")
+            if isinstance(r["updated_at"], bool) or not isinstance(r["updated_at"], (int, float)) or not isinstance(r["updated_by"], str):
+                raise DefinitionError("a record says when and by whom it was last changed")
+            values = r["values"]
+            if not isinstance(values, dict) or len(values) > 60:
+                raise DefinitionError("a record is an object of field values")
+            for key, value in values.items():
+                plain = value is None or isinstance(value, bool) or (isinstance(value, str) and len(value) <= 4000) or (
+                    isinstance(value, (int, float)) and value == value and abs(value) <= 1e15)
+                if not isinstance(key, str) or len(key) > 64 or not plain:
+                    raise DefinitionError("a record's values are short plain values")
+                if key in fields and value not in (None, ""):
+                    check_record([{**fields[key], "required": False}], {key: value})
+    return definition, b["state"]
+
+
+def version_notes(old: Mapping[str, Any], new: Mapping[str, Any], counts: Mapping[str, int]) -> List[str]:
+    """What a person should know that a newer version does to records already kept. Nothing is deleted by any of it."""
+    before = {c["name"]: {f["name"]: f for f in c["fields"]} for c in old["state"]["collections"]}
+    after = {c["name"]: {f["name"]: f for f in c["fields"]} for c in new["state"]["collections"]}
+    notes = []
+    for name, fields in before.items():
+        kept = counts.get(name, 0)
+        if name not in after:
+            notes.append(f"The collection {name} is not in this version: its {kept} record(s) are kept and no longer shown.")
+            continue
+        gone = sorted(set(fields) - set(after[name]))
+        if gone:
+            notes.append(f"{name}: no longer shown: {', '.join(gone)}. Stored values are kept.")
+        for f, spec in after[name].items():
+            if f not in fields and spec.get("required") and kept:
+                notes.append(f"{name}: {f} is new and required; the {kept} earlier record(s) have no value, and changing one must give it.")
+            elif f in fields and (fields[f]["type"] != spec["type"] or fields[f].get("choices") != spec.get("choices")) and kept:
+                notes.append(f"{name}: what {f} may hold changes; stored values are kept as they are, and changing a record must fit the new rule.")
+    return notes
+
+
 class AppStore:
     """The installed applications and their state, per tenant. ``catalog`` returns the capabilities offered now."""
 
@@ -274,6 +349,52 @@ class AppStore:
         return [{"id": r["id"], "values": json.loads(r["data"]), "revision": r["revision"], "updated_by": r["updated_by"],
                  "updated_at": r["updated"]} for r in rows]
 
+    def counts(self, tenant: str, app_id: str) -> Dict[str, int]:
+        """Records kept per collection, including collections the current version no longer has."""
+        with self._lock:
+            rows = self._db.execute("SELECT collection, count(*) AS n FROM records WHERE tenant=? AND app=? GROUP BY collection",
+                                    (tenant, app_id)).fetchall()
+        return {r["collection"]: r["n"] for r in rows}
+
+    # ── moving an application, with its records, to another deployment or tenant: a person's action ──
+    def export_bundle(self, tenant: str, app_id: str, *, by: str) -> Dict[str, Any]:
+        """The installed version and every record kept for it, as one self-checking document (``aos.app-bundle/v1``)."""
+        with self._lock:
+            app = self.current(tenant, app_id)
+            if app is None:
+                raise DefinitionError("there is no such application")
+            state: Dict[str, List[dict]] = {}
+            for r in self._db.execute("SELECT * FROM records WHERE tenant=? AND app=? ORDER BY collection, updated, id", (tenant, app_id)):
+                state.setdefault(r["collection"], []).append({"id": r["id"], "values": json.loads(r["data"]), "revision": r["revision"],
+                                                              "updated_by": r["updated_by"], "updated_at": r["updated"]})
+        return {"schema": BUNDLE_SCHEMA, "definition": app["definition"], "state": state, "from_tenant": tenant, "exported_by": by,
+                "exported_at": self.clock(), "content_sha256": content_digest(app["definition"], state)}
+
+    def import_bundle(self, tenant: str, bundle: Mapping[str, Any], *, by: str) -> Dict[str, Any]:
+        """All of it or nothing, and never over something: refused when this tenant has the application or records of it."""
+        definition, state = check_bundle(bundle, self.catalog())
+        app_id = definition["id"]
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                if self._db.execute("SELECT 1 FROM apps WHERE tenant=? AND id=? UNION ALL SELECT 1 FROM records WHERE tenant=? AND app=? LIMIT 1",
+                                    (tenant, app_id, tenant, app_id)).fetchone():
+                    raise DefinitionError(f"this tenant already has {app_id}: an import never overwrites; install a newer version instead")
+                self._db.execute("INSERT INTO apps VALUES(?,?,?,?,?,?,?,?)",
+                                 (tenant, app_id, definition["version"], json.dumps(definition), digest_of(definition),
+                                  json.dumps(contracts_of(definition, self.catalog())), f"{by} (imported)", self.clock()))
+                for name, rows in state.items():
+                    for r in rows:
+                        # who last changed it is what the other deployment said: marked, so it is not read as this one's record
+                        said = str(r["updated_by"]).split(" (as exported)")[0][:100]
+                        self._db.execute("INSERT INTO records VALUES(?,?,?,?,?,?,?,?)", (tenant, app_id, name, r["id"], json.dumps(r["values"]),
+                                         r["revision"], f"{said} (as exported)", float(r["updated_at"])))
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+        return self.current(tenant, app_id)
+
     def add(self, tenant: str, app_id: str, name: str, values: Any, *, by: str, record_id: str = "") -> Dict[str, Any]:
         """``record_id`` makes a retry return the record already added."""
         col = self.collection(tenant, app_id, name)
@@ -292,7 +413,13 @@ class AppStore:
     def update(self, tenant: str, app_id: str, name: str, record_id: str, values: Any, *, revision: int, by: str) -> Dict[str, Any]:
         col = self.collection(tenant, app_id, name)
         clean = check_record(col["fields"], values)
+        current = {f["name"] for f in col["fields"]}
         with self._lock:
+            stored = self._db.execute("SELECT data FROM records WHERE tenant=? AND app=? AND collection=? AND id=?",
+                                      (tenant, app_id, name, record_id)).fetchone()
+            # values of fields a newer version no longer has are kept: an update replaces what the current version knows
+            kept = {k: v for k, v in (json.loads(stored["data"]) if stored is not None else {}).items() if k not in current}
+            clean = {**kept, **clean}
             changed = self._db.execute("UPDATE records SET data=?, revision=revision+1, updated_by=?, updated=? WHERE tenant=? AND app=?"
                                        " AND collection=? AND id=? AND revision=?",
                                        (json.dumps(clean), by, self.clock(), tenant, app_id, name, record_id, revision)).rowcount
@@ -319,10 +446,19 @@ def prepare_install(ctx: Any, store: AppStore, inputs: Mapping[str, Any]) -> Dic
             raise DefinitionError(f"version {old['version']} is installed: propose a higher version")
     except DefinitionError as e:
         raise NotApplied(f"the definition is not acceptable: {e}") from None
+    show = describe(definition, old, ctx.tenant, catalog, store.counts(ctx.tenant, definition["id"]))
+    return {"definition_sha256": digest_of(definition), "contracts": contracts_of(definition, catalog), "show": show,
+            "summary": f"Install the application {definition['name']} version {definition['version']}"}
+
+
+def describe(definition: Mapping[str, Any], old: Optional[Mapping[str, Any]], tenant: str, catalog: Mapping[str, Any],
+             counts: Mapping[str, int]) -> List[List[str]]:
+    """A definition in words for the person deciding about it: what it is, what each tool gives access to, what may change
+    elsewhere, what an agent needs, what is kept, and what a newer version does to records already kept."""
     proposes = [c["name"] for c in definition["capabilities"] if catalog[c["name"]].side_effecting]
     show = [["Application", f"{definition['name']} ({definition['id']}), version {definition['version']}"
                             + (f", replacing version {old['version']}" if old else "")], ["What it is for", definition["summary"]],
-            ["What approving does", f"Installs this definition for the tenant {ctx.tenant or '(this deployment)'}"
+            ["What approving does", f"Installs this definition for the tenant {tenant or '(this deployment)'}"
                                     + (", in place of the installed version; its records are kept" if old else "")
                                     + ". It gives no agent any permission and changes nothing in any other application."],
             ["Changes to other applications", ("It lists tools that propose or make them: " + ", ".join(proposes) + ". Every change that "
@@ -345,8 +481,11 @@ def prepare_install(ctx: Any, store: AppStore, inputs: Mapping[str, Any]) -> Dic
                 show.append([f"Text in “{view['title']}” (written by the author, not checked)", block["text"]])
             if block["type"] == "form":
                 show.append([f"Button in “{view['title']}” (adds to {block['collection']} at once, without an approval)", block["submit"]])
-    return {"definition_sha256": digest_of(definition), "contracts": contracts_of(definition, catalog), "show": show,
-            "summary": f"Install the application {definition['name']} version {definition['version']}"}
+    if old is not None:
+        show += [["What this version does to records already kept", note]
+                 for note in version_notes(old["definition"], definition, counts)] or [
+                     ["What this version does to records already kept", "Nothing is hidden or restricted."]]
+    return show
 
 
 def perform_install(store: AppStore, inputs: Mapping[str, Any], footer: str, rid: str, ctx: Any):

@@ -17,6 +17,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.31; no version set)
 
+- **Fix:** changing a record of an installed application deleted the stored values of any field a newer version had dropped. They are now kept, and the card of a newer version says what it hides or restricts for records already kept.
+- Installed applications can be moved with their records: a person who may decide exports one from its page and brings it into another tenant or deployment after reviewing it in words (`aos.app-bundle/v1`; all or nothing, never overwriting; unsigned, so only from a source you trust).
+
 - The card for installing an application now says in words what approving does, what each tool gives access to (the platform's description, then the author's reason marked as unchecked), what may change in other applications, the permissions an agent needs, what is kept and who sees it. The exact definition, which was the first row as raw text, is folded underneath.
 
 ## v0.4.31 (app images build again, a consent page that says what it grants, secrets stay in Vault)
