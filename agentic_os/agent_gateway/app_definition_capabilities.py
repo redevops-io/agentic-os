@@ -3,9 +3,15 @@
 | Capability | What it does | Grant |
 |---|---|---|
 | ``apps.list`` / ``apps.get`` | the tenant's applications; one definition with the permissions you still lack and changed capabilities | ``apps.use`` |
-| ``apps.state.list`` / ``apps.state.add`` / ``apps.state.update`` | the application's own records, checked against its definition | ``apps.use`` |
+| ``apps.state.list`` | read the application's own records | ``apps.records.read`` |
+| ``apps.state.add`` / ``apps.state.update`` | add and change them, checked against its definition | ``apps.records.write`` |
 | ``apps.request_install`` | PROPOSE installing or updating an application you wrote | ``apps.install`` |
 | ``apps.request_status`` | what became of your proposals | ``apps.install`` |
+
+Opening an application (``apps.use``) gives no access to its records: reading them and writing them are separate
+permissions, and neither includes the other. People of the tenant reach the records through the application's pages,
+as before. An agent that held ``apps.use`` before these permissions existed has no record access until a person grants
+it: connect it again, or issue it a new token, naming the record permissions. Nothing grants them automatically.
 
 An application's state is the runtime's own data, not a business application's, so writing it needs no approval; every
 capability an application uses is authorized exactly as without it. The tenant needs ``app:apps``.
@@ -25,7 +31,9 @@ from .registry import CapabilityRegistry, HandlerResult
 
 APP = "apps"
 GRANTS: Dict[str, str] = {
-    "apps.use": "Use your tenant's applications and keep their records. Each thing an application does still needs its own permission",
+    "apps.use": "See your tenant's applications and what each one does. Their records, and each thing an application does, need their own permissions",
+    "apps.records.read": "Read the records your tenant's applications keep",
+    "apps.records.write": "Add and change records of your tenant's applications. A record is saved at once, without an approval",
     "apps.install": "Propose installing or updating an application. Nothing is installed until a person approves what it uses",
 }
 GRANT_APP = {grant: APP for grant in GRANTS}
@@ -61,11 +69,11 @@ def manifests() -> Tuple[CapabilityManifest, ...]:
         read("apps.list", "The applications installed for your tenant", "apps.use", _schema()),
         read("apps.get", "One application: its definition, the permissions you still lack to use it, and any capability that changed "
              "since it was approved. " + _UNTRUSTED, "apps.use", _schema(["app_id"], app_id=_ID)),
-        read("apps.state.list", "Records of one collection of an application. " + _UNTRUSTED, "apps.use",
+        read("apps.state.list", "Records of one collection of an application. " + _UNTRUSTED, "apps.records.read",
              _schema(["app_id", "collection"], app_id=_ID, collection=_COLLECTION, limit=records._LIMIT)),
-        write("apps.state.add", "Add a record to an application's collection", "apps.use",
+        write("apps.state.add", "Add a record to an application's collection", "apps.records.write",
               _schema(["app_id", "collection", "values"], app_id=_ID, collection=_COLLECTION, values={"type": "object"})),
-        write("apps.state.update", "Replace a record, naming the revision you read", "apps.use",
+        write("apps.state.update", "Replace a record, naming the revision you read", "apps.records.write",
               _schema(["app_id", "collection", "record_id", "revision", "values"], app_id=_ID, collection=_COLLECTION,
                       record_id={"type": "string", "maxLength": 80, "pattern": r"^[A-Za-z0-9_-]+$"},
                       revision={"type": "integer", "minimum": 1}, values={"type": "object"})),

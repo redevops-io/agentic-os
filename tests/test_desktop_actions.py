@@ -155,7 +155,9 @@ def test_propose_reject_approve_execute_once_read_back_and_record(desktop):
     assert status == 200 and card["state"] == "rejected"
     asked = propose(desktop, token, "life-install-001")
     again = propose(desktop, token, "life-install-001")                       # the same proposal again is the same request
-    assert again["request_id"] == asked["request_id"] and again["replayed"] is True
+    assert again["request_id"] == asked["request_id"]
+    assert [c["id"] for c in desktop.person("/api/approvals")[1]["waiting"]].count(asked["request_id"]) == 1
+    assert len([c for c in desktop.person("/api/approvals")[1]["waiting"] if "Field notes" in c["title"]]) == 1
     assert desktop.invoke(token, "apps.list")["output"]["applications"] == []
     shown = desktop.card(asked["request_id"])
     words = {c["label"]: c["value"] for c in shown["changes"]}
@@ -242,8 +244,9 @@ def test_a_restart_keeps_applications_records_and_waiting_requests_and_runs_noth
     final = desktop.card(waiting["request_id"])
     assert final["state"] == "executed_verified" and not final["waiting"]
     assert desktop.decide(waiting["request_id"], digest=shown["digest"])[0] == 409
-    replay = propose(desktop, token, "restart-000001", version=2, name="Field notes two")
-    assert replay["replayed"] is True and replay["state"] == "executed_verified"
+    replay = propose(desktop, token, "restart-000001", version=2, name="Field notes two")   # after a restart too: the same one
+    assert replay["request_id"] == waiting["request_id"] and replay["state"] == "executed_verified"
+    assert not [c for c in desktop.person("/api/approvals")[1]["waiting"] if "Field notes two" in c["title"]]
 
 
 def test_an_application_moves_with_its_records_to_another_installation(desktop, tmp_path_factory):

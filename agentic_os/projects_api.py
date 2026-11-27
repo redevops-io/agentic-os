@@ -1717,9 +1717,10 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         product_capabilities.register(registry, ProductTools(hub), proposals=_proposals(app),
                                       approval_url=_approval_link)
     app_writers, app_writes = {}, None
-    if agents is not None or oauth is not None:
+    if agents is not None or oauth is not None or (local_agents is not None and desktop_ui):
         # ERP, support and CRM: lookups behind named grants; proposals only where a state directory is configured, and each
-        # one waits in the Mission Runtime's gate for a person (agentic_os.governed_writes)
+        # one waits in the Mission Runtime's gate for a person (agentic_os.governed_writes). The installed app's own agents
+        # count only where its screen exists to decide.
         from agentic_os.agent_gateway import app_record_capabilities
         from agentic_os.governed_writes.apps import writers_from_env
         app_writers = writers_from_env()

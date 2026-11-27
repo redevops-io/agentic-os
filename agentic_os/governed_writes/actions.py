@@ -36,6 +36,7 @@ class WriteAction:
     grant: str = ""                  # the named grant that lets an agent propose it ("" = the application's own, APP_GRANTS)
     served_by: str = ""              # the capability module that offers it ("" = the application record capabilities)
     financial: bool = False          # the tenant must hold the financial-data grant for the application too
+    background: bool = False         # takes minutes: the decision returns, the request id is the job's id and shows its state
     #: (context, writer, inputs) -> the evidence the approver is shown, attests to, and whose digest they approve
     prepare: Optional[Callable[[Any, Any, Mapping[str, Any]], Dict[str, Any]]] = None
 
@@ -298,6 +299,7 @@ ACTIONS: Dict[str, WriteAction] = {a.name: a for a in (
                         width={"type": "integer", "minimum": 256, "maximum": 2048}, height={"type": "integer", "minimum": 256, "maximum": 2048},
                         duration={"type": "number", "minimum": 0.5, "maximum": 15}, seed={"type": "integer", "minimum": 0, "maximum": 2147483647}),
                 lambda i: f"Generate a {i.get('kind')} with a model", _media("perform_generate"), grant="media.generate", served_by="media",
+                background=True,
                 prepare=_prepare_media("prepare_generate")),
 )}
 
