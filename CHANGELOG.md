@@ -17,8 +17,10 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.30; no version set)
 
+- **Fix:** 12 app images (Market Radar among them) could not be built: git was installed after the requirements step that needs it. A test now checks the order.
 - **Fix:** an agent whose corrected retry reused an `idempotency_key` after a failed write got a bare `denied`, which reads like a person refusing. That denial now says it is not, and what to do; every other denial stays unexplained. The application-definition help now says `version` is a whole number and that `capabilities` are tool names.
 - **Fix:** the agent consent page said a connection was read-only while offering grants that make files, keep records and start work without a further approval. It now says what the ticks mean.
+
 ## v0.4.30 (portable applications, developer mode with local-model budgets, more reconciliation for agents)
 
 - **Fix:** `deploy/apps/bootstrap-secrets.sh` no longer writes secrets to a local file when Vault is configured (backend `auto`) and no Python able to reach it is found; it refuses and says how to ask for the file on purpose.
