@@ -35,7 +35,8 @@ _COLLECTION = {"type": "string", "maxLength": 32, "pattern": r"^[a-z][a-z0-9_]{0
 FORMAT_HELP = (f"A definition is {{schema:'{D.SCHEMA}', id, name, version, summary, capabilities:[{{name, why}}], "
                "state:{collections:[{name, max_records, fields:[{name, type: text|long_text|number|boolean|date|choice, required?, choices?}]}]}, "
                "views:[{id, title, blocks:[{type:'text',text} | {type:'records',collection,columns} | {type:'form',collection,submit} | "
-               "{type:'approvals'}]}]}. It holds no code and no HTML.")
+               "{type:'approvals'}]}]}. It holds no code and no HTML. A form saves its record at once, with no approval: do not write "
+               "that it waits for one. Only changes to business applications wait for a person.")
 
 
 def _schema(required=(), **properties) -> Dict[str, Any]:
