@@ -188,7 +188,6 @@
   "tests/test_fork_support_crashing_store.py",
   "tests/test_fr08_profile_file.py",
   "tests/test_gate_state_reset_and_stale_entries.py",
-  "tests/test_gateway_denial_advice.py",
   "tests/test_governance.py",
   "tests/test_identifier_comma_rule.py",
   "tests/test_identifier_contract.py",
