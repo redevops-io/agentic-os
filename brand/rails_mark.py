@@ -13,6 +13,9 @@ Definition (the same for every variant):
 
 Standard library only. One scene description is written both as SVG and as anti-aliased PNG (distance fields, so line
 joins and caps are round in both). No metadata, so output depends only on this file and the platform's zlib.
+
+Copyright (c) 2025-2026 RedevOps. A core component of the repository (see LICENSING.md); it contains no third-party code,
+data or fonts, and nothing in it is traced from another image.
 """
 from __future__ import annotations
 

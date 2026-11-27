@@ -19,7 +19,7 @@ The owner decided on 2026-11-11 to remove the image whose distribution rights ca
 
 ## 2. The launcher icons
 
-Generator: `brand/rails_mark.py` (SHA-256 `5e5aee8e6957582385795d4ebb66bd3166dae241f17d47457818e938a9e89b79`), Python standard library only; the rAIls mark, a square spiral of the integers with a marker on each prime (definition in `brand/README.md`); no letters in the application icons, no fonts, no model output in the files. These files replace the neutral temporary artwork of `scripts/make_neutral_icons.py` (kept for history); the previous letter mark stays out of the repository.
+Generator: `brand/rails_mark.py` (SHA-256 `342c0d47bb1b0f74cdf12625d8c231fc4bf1dd93ae326745572999f60e8970c8`), Python standard library only; the rAIls mark, a square spiral of the integers with a marker on each prime (definition in `brand/README.md`); no letters in the application icons, no fonts, no model output in the files. These files replace the neutral temporary artwork of `scripts/make_neutral_icons.py` (kept for history); the previous letter mark stays out of the repository.
 
 Enforcement: `tests/test_launcher_icons.py` (files equal the generator output; the previous artwork is nowhere in the repository).
 

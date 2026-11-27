@@ -1,7 +1,7 @@
 # Launcher icons: the rAIls mark
 
 These six files are the rAIls mark (a square spiral of the integers with a marker on each prime), drawn by
-`brand/rails_mark.py` (Python standard library only; SHA-256 of the generator `5e5aee8e6957582385795d4ebb66bd3166dae241f17d47457818e938a9e89b79`;
+`brand/rails_mark.py` (Python standard library only; SHA-256 of the generator `342c0d47bb1b0f74cdf12625d8c231fc4bf1dd93ae326745572999f60e8970c8`;
 no fonts, no third-party content, no model output in the files). The owner approved the mark for the desktop
 application on 2026-11-27; its definition, variants and colours are in `brand/README.md`. Nothing here is a
 statement about rights or clearance either way.

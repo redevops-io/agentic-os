@@ -26,7 +26,7 @@ The sections are: `## licences` (agent `licences`), `## pins` (agent `pins`), `#
 | D-LIC-8 | Replacement of `hero.jpg` and its provenance | owner | neutral generated image |
 | D-LIC-9 | NSIS, WiX, Tauri (and WebView2) notices | owner/counsel | crate texts shipped; NSIS and WiX texts now in the Windows notices (lic2) |
 | D-LIC-10 | Licence acceptance pages and Appropriate Legal Notices in the UI | owner | no acceptance page, no UI notice |
-| D-LIC-11 | Launcher icons and mark: authorship and rights | owner | temporary neutral artwork (RC3 development; RC2 shipped the previous icons) |
+| D-LIC-11 | Launcher icons and mark: authorship and rights | owner | temporary neutral artwork (RC3 development; RC2 shipped the previous icons); the rAIls mark replaces it, superseding the 2026-11-12 entry once the owner signs `docs/legal/approved/D-LIC-11_RAILS_MARK_0.6.md` (draft) |
 | D-LIC-12 | Source availability for object code (AGPL section 6) | owner | pointer in `LICENSING.md`, no offer |
 | D-LIC-13 | Components whose package holds no licence file | owner | resolved by fact except redevops-connectors (lic2): connectors is the only entry left in `NOTICES_MISSING.md` |
 | D-LIC-14 | Removing knowledge-frontier from the frozen sidecar | owner | removed by spec exclude (this branch) |
