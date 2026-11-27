@@ -95,8 +95,10 @@ e-mail address or website both systems hold, never by a name.
 **The one correction** (off unless `AGENTIC_OS_PAYMENT_CORRECTIONS=1`, and it needs `AGENTIC_OS_WRITES_DIR`): a received
 payment the bank shows for another amount is **cancelled and entered again** for the bank's amount, as its amendment. It is a
 governed write: the approval card shows the entry to be cancelled and both figures. At execution the books and bank are
-read again and must still show exactly those figures; only a payment allocated to exactly one sales invoice, with equal paid
-and received amounts and no deductions or taxes, is corrected. If the cancellation succeeds and the replacement is not
+read again and must still show exactly those figures. It is corrected only when it is the **one** submitted payment under its
+reference and the bank has **one** submitted deposit there (with a second payment, re-entering one for the bank's total would
+count the money twice; a fee or refund line is not a smaller payment), allocated to exactly one sales invoice, with equal paid
+and received amounts and no deductions or taxes. Otherwise `economics.discrepancies` offers no correction and says why. If the cancellation succeeds and the replacement is not
 confirmed, the request ends **outcome unknown** with what to check; it is never reported as unchanged or retried.
 Success is decided by reading the application again (`economics.reconcile.corrections`).
 

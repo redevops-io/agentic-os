@@ -87,6 +87,16 @@ class Ledger:
         return ErpnextWriter("http://erp.test", "k", "s", transport=httpx.MockTransport(self.handle))
 
 
+def second(led, amount):
+    """Another submitted payment under the same reference."""
+    return {"PAY-9": {**led.payments["PAY-1"], "name": "PAY-9", "paid_amount": amount, "received_amount": amount,
+                      "references": [{"reference_doctype": "Sales Invoice", "reference_name": "S6", "allocated_amount": amount}]}}
+
+
+def bank_line(name, deposit, withdrawal=0):
+    return {"name": name, "deposit": deposit, "withdrawal": withdrawal, "reference_number": "WIRE-C1", "docstatus": 1}
+
+
 class Desk:
     base_url, account_id = "http://desk.test", "1"
 
@@ -186,6 +196,11 @@ def test_discrepancy_to_governed_correction_and_the_application_says_it_reconcil
     (lambda led: led.payments["PAY-1"].update(deductions=[{"amount": 1}]), "deductions or taxes"),
     (lambda led: led.payments["PAY-1"]["references"].append({"reference_doctype": "Sales Invoice", "reference_name": "S6", "allocated_amount": 0}), "exactly one sales invoice"),
     (lambda led: led.payments["PAY-1"].update(received_amount=3700), "another currency"),
+    (lambda led: led.payments.update(second(led, 3380)), "submitted payments carry this reference"),
+    (lambda led: led.rows["Bank Transaction"].append(bank_line("BT-2", 0)), "2 bank lines"),
+    (lambda led: led.rows["Bank Transaction"].__setitem__(slice(None), [bank_line("BT-1", 3800), bank_line("BT-2", 0, 420)]), "2 bank lines"),
+    (lambda led: led.rows["Bank Transaction"][0].update(docstatus=0), "not submitted"),
+    (lambda led: led.rows["Bank Transaction"][0].update(deposit=3800, withdrawal=420), "not a single deposit"),
 ])
 def test_whatever_changed_or_is_not_the_simple_case_is_refused_and_nothing_is_written(world, change, why):
     w = world()
@@ -287,3 +302,28 @@ def test_empty_evidence_says_when_nothing_could_be_tied_to_a_customer(world):
     assert loose["count"] == 3 and any("no identifier does" in why for why in loose["why"]), loose
     hidden = w.call(w.agent(["economics.read", "egress:financial"]), "economics.evidence", invoice="S2")["output"]
     assert hidden["not_tied_to_a_customer"]["count"] == 0 and hidden["not_tied_to_a_customer"]["why"] == []     # nothing about unseen items
+
+
+def test_a_second_payment_under_the_reference_is_never_re_entered_for_the_banks_total(world):
+    """The bank's one line is already matched by PAY-1; a second payment of 500 carries the same reference. Re-entering it
+    "for the bank's amount" would record 3800 twice."""
+    w = world()
+    who = w.agent(FULL)
+    w.ledger.rows["Bank Transaction"][0]["deposit"] = 3800
+    w.ledger.payments.update(second(w.ledger, 500))
+    (d,) = w.call(who, "economics.discrepancies")["output"]["discrepancies"]
+    assert d["payment"] == "PAY-9" and "correction_inputs" not in d and "proposed_correction" not in d and "2 submitted payments" in d["not_correctable_here"], d
+    forced = w.call(who, "economics.request_payment_correction", reference="WIRE-C1", payment_entry="PAY-9", posted_amount=500,
+                    bank_amount=3800, idempotency_key="fix-wire-c1-006")["output"]
+    out = w.decide(forced["request_id"]).json()
+    assert out["state"] == "failed" and "2 submitted payments" in json.dumps(out) and not w.ledger.writes, out
+    assert [(n, p["docstatus"]) for n, p in w.ledger.payments.items()] == [("PAY-1", 1), ("PAY-9", 1)]
+
+
+def test_an_unconfirmed_cancellation_says_to_check_and_enters_nothing(world):
+    w = world()
+    rid = w.call(w.agent(FULL), "economics.request_payment_correction", **FIX, idempotency_key="fix-wire-c1-007")["output"]["request_id"]
+    w.ledger.fail_on = "frappe.client.cancel"
+    out = w.decide(rid).json()
+    assert out["state"] == "outcome_unknown" and "cancellation of Payment Entry PAY-1 was not confirmed" in json.dumps(out), out
+    assert list(w.ledger.payments) == ["PAY-1"]

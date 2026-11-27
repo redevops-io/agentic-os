@@ -94,6 +94,10 @@ def _discrepancies(client: Any, _i: Mapping[str, Any]) -> Dict[str, Any]:
     found, done = reconcile.find(client), reconcile.corrections(client)
     rows = []
     for d in found.events[:MAX_ITEMS]:
+        why = payment_correction.reference_problem(client, d.reference, d.payment, d.bank)
+        if why:                      # several payments or bank lines under one reference: no correction is suggested at all
+            rows.append({**d.to_json(), "not_correctable_here": why})
+            continue
         rows.append({**d.to_json(), "proposed_correction": reconcile.propose(d).to_json(),
                      "correction_inputs": {"reference": d.reference, "payment_entry": d.payment, "posted_amount": float(d.posted),
                                            "bank_amount": float(d.bank)}})
