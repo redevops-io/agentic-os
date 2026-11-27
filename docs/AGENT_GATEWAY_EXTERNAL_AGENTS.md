@@ -86,6 +86,7 @@ payment correction, is off unless the deployment turns it on (below).
 | `economics.explain_adjustment` | discounts, cancellation, credit notes and payment differences of one invoice; any approval claim in a comment, marked unverified |
 | `economics.evidence` | messages and CRM notes that refer to one invoice or customer, as references with excerpts |
 | `economics.findings` | adjustments with no verified authorization, and messages that state a percentage the recorded discount does not reproduce; names the finding kinds it did not evaluate |
+| `economics.bank_reconciliation` | the bank's own statement files compared with the books by reference (matched, timing, fee, split or partial payment, mismatch, reversal not in the books, unmatched); says so when no statement was provided |
 
 **A difference is not by itself an error.** A bank fee, a currency exchange, a partial settlement, timing or how a receipt
 is allocated can each explain it, and a difference alone never leads to a change.

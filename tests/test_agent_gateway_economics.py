@@ -212,7 +212,7 @@ def test_it_is_read_only_and_a_difference_is_never_presented_as_something_to_cor
     """A bank difference alone authorizes nothing: no tool proposes a change, and nothing in the answer says to make one."""
     w = world()
     who = w.agent(FULL)
-    assert offered(w, who) == ["economics.discrepancies", "economics.evidence", "economics.explain_adjustment", "economics.findings"]
+    assert offered(w, who) == ["economics.bank_reconciliation", "economics.discrepancies", "economics.evidence", "economics.explain_adjustment", "economics.findings"]
     out = w.call(who, "economics.discrepancies")
     assert out["status"] == "ok", out
     (d,) = out["output"]["discrepancies"]
@@ -251,4 +251,21 @@ def test_findings_name_what_they_did_not_evaluate_and_show_message_text_only_wit
     full = w.call(w.agent(FULL), "economics.findings", customer="Acme")["output"]
     assert full["customer"] == "Acme" and all(f["customer"] == "Acme" for f in full["findings"])
     assert w.call(w.agent(["economics.read"]), "economics.findings")["status"] == "error"     # no financial grant: nothing read
+    assert not w.ledger.writes
+
+
+def test_bank_reconciliation_compares_the_operators_statement_files_and_says_when_there_are_none(world, monkeypatch, tmp_path):
+    w = world()
+    who = w.agent(FULL)
+    none = w.call(who, "economics.bank_reconciliation")["output"]
+    assert none["reconciled"] is False and none["findings"] == [] and "nothing was compared" in none["note"]          # no statement is not "all matched"
+    folder = tmp_path / "statements" / "acme"
+    folder.mkdir(parents=True)
+    (folder / "oct.csv").write_text("date,amount,reference,description\n2026-09-03,3380,WIRE-C1,incoming\n2026-09-12,1,OTHER,unrelated\n")
+    monkeypatch.setenv("AGENTIC_OS_BANK_STATEMENTS_DIR", str(tmp_path / "statements"))
+    out = w.call(who, "economics.bank_reconciliation")["output"]
+    assert out["reconciled"] is True and out["statements"] == ["oct.csv"] and out["counts"]["amount_mismatch"] == 1
+    (f,) = [x for x in out["findings"] if x["kind"] == "amount_mismatch"]
+    assert (f["reference"], f["booked"], f["banked"]) == ("WIRE-C1", "3800.00", "3380.00") and "not by itself an error" in out["note"]
+    assert w.call(w.agent(["economics.read"]), "economics.bank_reconciliation")["status"] == "error"          # no financial grant: nothing read
     assert not w.ledger.writes
