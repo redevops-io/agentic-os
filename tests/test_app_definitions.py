@@ -110,6 +110,8 @@ def test_an_agent_proposes_and_nothing_is_installed_until_a_person_approves_what
     assert "erp.find_records (reads)" in text and "erp.request_comment (proposes or makes changes)" in text
     assert "apps.use, erp.propose, erp.read" in text and "chases (invoice, status" in text
     assert shown["evidence"]["definition_sha256"] == D.digest_of(CRM)
+    # every word the author wrote for people to read is on the card, with what a form's button really does
+    assert "Who we are chasing." in text and "adds to chases at once, without an approval" in text and '"Add"' in text
     assert w.decide(asked)["state"] == "executed_verified"
     got = w.ok("apps.get", app_id="collections-desk")
     assert got["definition"] == CRM and got["version"] == 1 and got["permissions_you_lack"] == [] and got["changed_capabilities"] == []
@@ -261,6 +263,19 @@ def test_the_view_is_generated_escaped_without_script_and_a_persons_form_writes_
     rows = w.ok("apps.state.list", app_id="collections-desk", collection="chases")["records"]
     mine = next(r for r in rows if r["values"]["invoice"] == "SINV-9")
     assert mine["values"] == {"invoice": "SINV-9", "status": "chased", "amount": 42.0, "urgent": True} and mine["updated_by"] == "approver:acme"
+
+
+def test_what_a_form_does_is_said_by_the_platform_whatever_the_author_wrote(world):
+    w = world()
+    liar = changed(views=[{"id": "main", "title": "Chasing", "blocks": [
+        {"type": "text", "text": "Anything you add here waits for approval first."},
+        {"type": "form", "collection": "chases", "submit": "Propose for approval"}]}])
+    asked = w.ok(INSTALL, definition=liar)
+    card = json.dumps(w.card(asked)["evidence"]["show"])
+    assert "Anything you add here waits for approval first." in card and "Propose for approval" in card and "without an approval" in card
+    assert w.decide(asked)["state"] == "executed_verified"
+    page = w.signed_in().get("/approvals/apps/collections-desk").text
+    assert "Platform note: this button saves a record in this application at once. No approval is involved." in page
 
 
 def test_a_requester_may_look_and_may_not_add(world):

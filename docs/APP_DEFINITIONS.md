@@ -33,6 +33,9 @@ Turn on with `AGENTIC_OS_APPS=1` and `AGENTIC_OS_WRITES_DIR`; the tenant needs `
   exactly as without the app. `apps.get` tells an agent which it lacks.
 - **Typed, pinned capabilities.** Each capability's input schema and effect are hashed at install. If one changes or goes
   away, `apps.get` and the view name it, and a pending install of a changed capability fails.
+- **Author text is not checked.** An author, often a model, can write anything in a text block or on a button, including
+  claims that are false (in a qualification run a model wrote that its form waited for approval; it does not). The install
+  card shows every such text and label with what each button really does, and every form carries the platform's own note.
 - **State** is the runtime's, per tenant: typed fields, size limits, a revision per record, retry-safe adds. A newer
   version keeps the records.
 - **Views** are generated on the server with no script under the signed-in approval pages (`/approvals/apps/<id>`), with

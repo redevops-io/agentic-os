@@ -322,6 +322,13 @@ def prepare_install(ctx: Any, store: AppStore, inputs: Mapping[str, Any]) -> Dic
     show.append(["It keeps", "; ".join(f"{c['name']} ({', '.join(f['name'] for f in c['fields'])}; up to {c['max_records']})"
                                        for c in definition["state"]["collections"]) or "no state"])
     show.append(["A person sees", ", ".join(v["title"] for v in definition["views"])])
+    # every word the author wrote for people to read: it can claim anything, so the approver reads it before it is shown to anyone
+    for view in definition["views"]:
+        for block in view["blocks"]:
+            if block["type"] == "text":
+                show.append([f"Text in “{view['title']}” (written by the author, not checked)", block["text"]])
+            if block["type"] == "form":
+                show.append([f"Button in “{view['title']}” (adds to {block['collection']} at once, without an approval)", block["submit"]])
     return {"definition_sha256": digest_of(definition), "contracts": contracts_of(definition, catalog), "show": show,
             "summary": f"Install the application {definition['name']} version {definition['version']}"}
 

@@ -78,7 +78,10 @@ def view_html(app: Dict[str, Any], view: Dict[str, Any], *, store: D.AppStore, t
             fields = "".join(_input(f) for f in collections[block["collection"]]["fields"])
             out.append(f'<form method="post" action="{_e(here)}/records{_e(query)}" class=card><input type="hidden" name="csrf" value="{_e(csrf)}">'
                        f'<input type="hidden" name="collection" value="{_e(block["collection"])}"><input type="hidden" name="view" value="{_e(view["id"])}">'
-                       f"{fields}<button>{_e(block['submit'])}</button></form>")
+                       f"{fields}<button>{_e(block['submit'])}</button>"
+                       # the runtime's own words: whatever the author wrote around the form, this is what the button does
+                       '<p class=muted>Platform note: this button saves a record in this application at once. No approval is involved. '
+                       'Changes to other applications wait for a person under Approvals.</p></form>')
         else:                                                                 # approvals
             used = {c["name"] for c in definition["capabilities"]}
             waiting = [v for v in (writes.list(tenant=tenant, state="pending", limit=100) if writes is not None else []) if v["action"] in used]
