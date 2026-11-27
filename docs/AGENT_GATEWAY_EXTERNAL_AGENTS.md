@@ -376,6 +376,16 @@ asking again). The ledger holds only a digest of the inputs. The request databas
 `AGENTIC_OS_WRITES_RETENTION_S` (7 days; 0 erases them at once) after a request finishes, so a person can still see what
 was approved, then erases them. One Projects process should own the state directory.
 
+### Long actions run as jobs
+
+A model rendering a video takes minutes. Approving it does not hold the request open: the decision returns as soon as the
+work ends or after about two seconds, whichever is first, with `state: deciding` and
+`job: {job_id, state: running, started_at, heartbeat_at}`. The job id **is** the request id: read the result with
+`GET /api/writes/{id}`, `media.request_status`, or the approval's page, which reloads itself while the job runs. The same
+holds for a run covered by developer mode. The job is the request's own durable record: it cannot be approved or started
+a second time, and if the service stops while it runs, the heartbeat stops and it ends `outcome_unknown`, to be checked
+in the application, never run again.
+
 ## Developer mode: scoped preauthorization
 
 For building and testing against a deployment, a person can preauthorize **one agent** to have a few low-consequence

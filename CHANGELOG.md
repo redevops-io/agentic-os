@@ -17,6 +17,8 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.33; no version set)
 
+- **Long approved actions run as jobs.** Approving a model rendering a video no longer holds the request for minutes: the decision returns within about two seconds with state `deciding` and a `job` whose id is the request id; the same id gives the result (`media.request_status`, the approval's page, which reloads itself while it runs). Others keep reading and proposing meanwhile. Nothing runs twice, and a job whose service stopped ends `outcome_unknown` and is not run again. A caller that expected the final state from the decision call has to read it by the id when the state is `deciding`.
+
 ## v0.4.33 (the install card states who reaches an application's records)
 
 - **Fix:** the card for installing or importing an application said an agent needed every listed permission to see its records. The runtime requires only `apps.use` (the listed permissions govern the tools). The card now says so, and that such agents can also add and change records.

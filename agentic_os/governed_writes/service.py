@@ -8,6 +8,12 @@ Beside the ledger sits one small private database: the inputs (the ledger record
 be erased), the idempotency keys, and the outcome. The inputs are kept for ``retention_s`` after a request finishes, so a
 person can still see exactly what was approved, then erased (0 erases them at once). A request is never
 performed twice: the move from ``pending`` is atomic, and a write whose outcome is unknown is not sent again.
+
+**Long actions** (``WriteAction.background``: a model rendering a video) are not performed inside the decision's own
+call. The request is the job and its id the job's id: the decision claims it, a worker thread performs it through the
+same runtime path, and the call returns as soon as it ends or after ``inline_wait_s``, whichever comes first, with the
+state ``deciding`` and a ``job``. While it runs the worker records a heartbeat. A job whose heartbeat stops (the service
+was stopped or restarted) ends ``outcome_unknown`` and is **not run again**.
 """
 from __future__ import annotations
 
@@ -42,6 +48,8 @@ PENDING, DECIDING = "pending", "deciding"
 FINAL = ("executed_verified", "executed_unverified", "no_change", "previewed", "failed", "outcome_unknown", "rejected", "expired")
 MAX_PENDING_PER_REQUESTER = 50
 _STALE_DECIDING_S = 600.0
+_BEAT_S = 15.0
+_STALE_BEAT_S = 120.0                        # a running job beats every _BEAT_S; this long without one, its worker is gone
 
 
 class WriteError(Exception):
@@ -55,7 +63,9 @@ class WriteError(Exception):
 class GovernedWrites:
     def __init__(self, state_dir: "str | Path", writers: Mapping[str, Any], *, ttl_s: float = 86400.0,
                  clock: Callable[[], float] = time.time, authority: Any = None, retention_s: float = 7 * 86400.0,
-                 single_owner: Optional[Callable[[], bool]] = None) -> None:
+                 single_owner: Optional[Callable[[], bool]] = None, inline_wait_s: float = 2.0) -> None:
+        self.inline_wait_s = max(0.0, float(inline_wait_s))
+        self._jobs: Dict[str, threading.Thread] = {}
         self.mentions: Optional[Callable[[str, str], List[str]]] = None   # set by whoever can read the tenant's messages
         root = Path(state_dir)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -77,9 +87,9 @@ class GovernedWrites:
             record TEXT, read_back TEXT, note TEXT, executed INTEGER, verified INTEGER, finished REAL,
             UNIQUE(tenant, requester, idem))""")
         columns = {r["name"] for r in self._db.execute("PRAGMA table_info(requests)").fetchall()}
-        for column in ("evidence", "attested"):                  # added after the first release of this table
+        for column, kind in (("evidence", "TEXT"), ("attested", "TEXT"), ("heartbeat", "REAL")):   # added after the first release
             if column not in columns:
-                self._db.execute(f"ALTER TABLE requests ADD COLUMN {column} TEXT")
+                self._db.execute(f"ALTER TABLE requests ADD COLUMN {column} {kind}")
         self._journal: Any = None
         self._journal_dir = root
         self.preauthorizations = Preauthorizations(self._db, self.clock)
@@ -268,8 +278,10 @@ class GovernedWrites:
                 (mission.id, tenant, requester, action, spec.app, idempotency_key, digest, intent, json.dumps(args),
                  ((evidence or {}).get("summary") or spec.preview(args))[:300], now, now + self.ttl_s, PENDING,
                  None if evidence is None else json.dumps(evidence)))
-            self._try_preauthorized(mission.id, tenant=tenant, requester=requester, action=action, args=args, evidence=evidence,
-                                    digest=digest)
+        # outside the lock: a covered long action starts a job, and its worker needs the lock to finish
+        self._try_preauthorized(mission.id, tenant=tenant, requester=requester, action=action, args=args, evidence=evidence,
+                                digest=digest)
+        with self._lock:
             return {**self._view(self._row(mission.id)), "replayed": False}
 
     def _try_preauthorized(self, mid: str, *, tenant: str, requester: str, action: str, args: Mapping[str, Any],
@@ -278,16 +290,19 @@ class GovernedWrites:
         ``decide`` a person's click uses. Anything that refuses leaves the request waiting for a person."""
         if evidence and evidence.get("attestation"):             # what a person must attest to, nothing stands in for
             return
-        grant = self.preauthorizations.claim(tenant=tenant, requester=requester, action=action, inputs=args, evidence=evidence)
+        with self._lock:
+            grant = self.preauthorizations.claim(tenant=tenant, requester=requester, action=action, inputs=args, evidence=evidence)
         if grant is None:
             return
         who = f"preauthorization:{grant['id']} (granted by {grant['granted_by']})"
         try:
             done = self.decide(mid, approve=True, digest=digest, approver=who, tenant=tenant)
         except WriteError as e:
-            self.preauthorizations.record(grant["id"], mid, f"not decided: {e.code}: {e.detail}", give_back=grant["charged"])
+            with self._lock:
+                self.preauthorizations.record(grant["id"], mid, f"not decided: {e.code}: {e.detail}", give_back=grant["charged"])
             return
-        self.preauthorizations.record(grant["id"], mid, done["state"])
+        with self._lock:
+            self.preauthorizations.record(grant["id"], mid, done["state"])
 
     # ── developer mode: only a person's routes call these ─────────────────────────
     def preauthorize(self, **fields: Any) -> Dict[str, Any]:
@@ -303,7 +318,8 @@ class GovernedWrites:
         now = self.clock()
         if row["state"] == PENDING and now >= row["expires"]:
             self._finish(row["id"], "expired", from_state=PENDING, note="nobody decided in time; nothing was changed")
-        elif row["state"] == DECIDING and now - (row["decided"] or now) > _STALE_DECIDING_S:
+        elif row["state"] == DECIDING and now - (row["heartbeat"] or row["decided"] or now) > (
+                _STALE_BEAT_S if row["heartbeat"] else _STALE_DECIDING_S):
             self._finish(row["id"], "outcome_unknown", from_state=DECIDING,
                          note="the service stopped while performing it; check the application before asking again")
         else:
@@ -312,10 +328,11 @@ class GovernedWrites:
 
     def _finish(self, request_id: str, state: str, *, from_state: str = DECIDING, note: str = "", outcome: Optional[Outcome] = None) -> None:
         o = outcome or Outcome(False, False)
-        self._db.execute("UPDATE requests SET state=?, finished=?, inputs=CASE WHEN ? THEN inputs END, note=?, record=?, read_back=?,"
-                         " executed=?, verified=? WHERE id=? AND state=?",
-                         (state, self.clock(), int(self.retention_s > 0), note or o.note, o.record, o.read_back,
-                          None if state == "outcome_unknown" else int(o.executed), int(o.verified), request_id, from_state))
+        with self._lock:
+            self._db.execute("UPDATE requests SET state=?, finished=?, inputs=CASE WHEN ? THEN inputs END, note=?, record=?, read_back=?,"
+                             " executed=?, verified=? WHERE id=? AND state=?",
+                             (state, self.clock(), int(self.retention_s > 0), note or o.note, o.record, o.read_back,
+                              None if state == "outcome_unknown" else int(o.executed), int(o.verified), request_id, from_state))
 
     def _erase_old(self) -> None:
         """Remove the inputs of requests that finished longer ago than the retention."""
@@ -330,6 +347,8 @@ class GovernedWrites:
                "verified": bool(row["verified"]), "record": row["record"] or "", "read_back": row["read_back"] or "", "note": row["note"] or ""}
         if row["state"] == PENDING:
             out["executed"] = False
+        if row["state"] == DECIDING and row["heartbeat"]:       # a long action, running: this id is the job's id
+            out["job"] = {"job_id": row["id"], "state": "running", "started_at": row["decided"], "heartbeat_at": row["heartbeat"]}
         if for_approver:                                       # for a person: exactly what would be, or was, written
             out["inputs"] = None if row["inputs"] is None else json.loads(row["inputs"])    # None: erased after the retention
             if row["evidence"]:                                 # kept with the decision: what the approver saw and attested to
@@ -396,8 +415,47 @@ class GovernedWrites:
                                      (DECIDING, approver, self.clock(), statement if approve else None, request_id, PENDING)).rowcount
             if taken != 1:
                 raise WriteError("conflict", "someone else is deciding this request")
-            self._perform(request_id, json.loads(row["inputs"]), approve=approve, approver=approver)
+            if not (approve and ACTIONS[row["action"]].background):
+                self._perform(request_id, json.loads(row["inputs"]), approve=approve, approver=approver)
+                return self._view(self._row(request_id))
+            job = self._start_job(request_id, json.loads(row["inputs"]), approver=approver)
+        job.join(self.inline_wait_s)                          # outside the lock: others read and propose while it runs
+        with self._lock:
             return self._view(self._row(request_id))
+
+    # ── long actions ─────────────────────────────────────────────────────────────
+    def _start_job(self, request_id: str, args: dict, *, approver: str) -> threading.Thread:
+        """Perform a claimed request on a worker, beating while it lives. Called with the lock held."""
+        self._db.execute("UPDATE requests SET heartbeat=? WHERE id=?", (self.clock(), request_id))
+        ended = threading.Event()
+
+        def beat() -> None:
+            while not ended.wait(_BEAT_S):
+                with self._lock:
+                    self._db.execute("UPDATE requests SET heartbeat=? WHERE id=? AND state=?", (self.clock(), request_id, DECIDING))
+
+        def work() -> None:
+            try:
+                self._perform(request_id, args, approve=True, approver=approver)
+            except BaseException as e:  # noqa: BLE001 - a worker must never leave its job looking alive
+                self._finish(request_id, "outcome_unknown", note=f"the worker stopped ({type(e).__name__}); check the application")
+                raise
+            finally:
+                ended.set()
+                self._jobs.pop(request_id, None)
+
+        worker = threading.Thread(target=work, name=f"write-job-{request_id}", daemon=True)
+        self._jobs[request_id] = worker
+        threading.Thread(target=beat, name=f"write-beat-{request_id}", daemon=True).start()
+        worker.start()
+        return worker
+
+    def wait_for(self, request_id: str, timeout: Optional[float] = None) -> bool:
+        """Wait for this process's job for a request to end. True when it is not (or no longer) running here."""
+        worker = self._jobs.get(request_id)
+        if worker is not None:
+            worker.join(timeout)
+        return worker is None or not worker.is_alive()
 
     def _perform(self, mid: str, args: dict, *, approve: bool, approver: str) -> None:
         try:
