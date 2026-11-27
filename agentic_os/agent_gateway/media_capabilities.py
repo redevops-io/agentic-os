@@ -179,6 +179,10 @@ def register(registry: CapabilityRegistry, operators: Mapping[str, Any], writes:
     def done(out: Any, **kw: Any) -> HandlerResult:
         return HandlerResult(ok=True, output=mask_emails(out), data_classes=(DataClass.CUSTOMER_CONTENT,), **kw)
 
+    def call(req, capability: str, inputs: Mapping[str, Any], key: str) -> Dict[str, Any]:
+        """Every call names the tenant it is for, so the media service holds its files apart too, not only this ledger."""
+        return video.invoke(capability, {**inputs, "_tenant": req.principal.tenant}, key)
+
     def owned(tenant: str, public: str) -> Dict[str, Any]:
         entry = ledger.get(tenant, media.asset_id(public))
         if entry is None:
@@ -205,7 +209,7 @@ def register(registry: CapabilityRegistry, operators: Mapping[str, Any], writes:
             problems = "; ".join(str(p) for p in ((result.get("validation") or {}).get("problems") or []))
             return HandlerResult(ok=False, error=f"{tool} did not make a file: {result.get('error') or problems or result.get('status')}"[:700])
         ref = dict(arts[0])
-        facts = video.invoke("visual.inspect", {"asset": ref["asset"]}, f"{key_for(req, tool)}:inspect:{ref['asset']}")
+        facts = call(req, "visual.inspect", {"asset": ref["asset"]}, f"{key_for(req, tool)}:inspect:{ref['asset']}")
         record = {**ref, **entry, "by": req.principal.principal.id, "ai_generated": bool(facts.get("ai_generated")),
                   **{k: v for k, v in (facts.get("media") or {}).items() if k in ("duration", "width", "height", "has_audio")}}
         ledger.record(req.principal.tenant, record)
@@ -226,7 +230,7 @@ def register(registry: CapabilityRegistry, operators: Mapping[str, Any], writes:
 
     # ── media ──
     def library(req) -> HandlerResult:
-        out = video.invoke("visual.library", {}, key_for(req, "media.library") + f":{writes.clock()}")
+        out = call(req, "visual.library", {}, key_for(req, "media.library") + f":{writes.clock()}")
         if out.get("status") != "ok":
             return HandlerResult(ok=False, error=f"unavailable: {out.get('error')}"[:500])
         return done({"items": out.get("items", [])})
@@ -236,14 +240,14 @@ def register(registry: CapabilityRegistry, operators: Mapping[str, Any], writes:
 
     def inspect(req) -> HandlerResult:
         entry = owned(req.principal.tenant, req.arguments["asset"])
-        facts = video.invoke("visual.inspect", {"asset": entry["asset"]}, key_for(req, "media.inspect") + f":{writes.clock()}")
+        facts = call(req, "visual.inspect", {"asset": entry["asset"]}, key_for(req, "media.inspect") + f":{writes.clock()}")
         made_from = [f"generated {media.public_id(x[10:])}" if x.startswith("generated ") else x
                      for x in ledger.sources(req.principal.tenant, entry["asset"])]
         return done({**shown(entry), "media": facts.get("media", {}), "made_from": made_from})
 
     def bring_in(req) -> HandlerResult:
         name = str(req.arguments["item"])
-        out = video.invoke("visual.import", {"item": name}, key_for(req, "media.import"))
+        out = call(req, "visual.import", {"item": name}, key_for(req, "media.import"))
         return made(req, "media.import", out, how="import", library_item=name, parents=[])
 
     def compose(req) -> HandlerResult:
@@ -254,14 +258,14 @@ def register(registry: CapabilityRegistry, operators: Mapping[str, Any], writes:
             if not isinstance(public, str):
                 raise ValueError("each input is an asset id")
             mine[name] = owned(req.principal.tenant, public)["asset"]
-        out = video.invoke("visual.compose", {"plan": plan, "inputs": mine}, key_for(req, "media.compose"))
+        out = call(req, "visual.compose", {"plan": plan, "inputs": mine}, key_for(req, "media.compose"))
         return made(req, "media.compose", out, how="compose", parents=sorted(set(mine.values())))
 
     def export(req) -> HandlerResult:
         a = req.arguments
         source = owned(req.principal.tenant, a["asset"])
         send = {"asset": source["asset"], "target": a["target"], **{k: a[k] for k in ("fit", "brand_mark") if a.get(k)}}
-        out = video.invoke("visual.export", send, key_for(req, "media.export"))
+        out = call(req, "visual.export", send, key_for(req, "media.export"))
         return made(req, "media.export", out, how="export", target=a["target"], ai_label=str(out.get("ai_label") or ""), parents=[source["asset"]])
 
     # ── social ──
