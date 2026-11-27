@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.30; no version set)
 
+- **Fix:** an agent whose corrected retry reused an `idempotency_key` after a failed write got a bare `denied`, which reads like a person refusing. That denial now says it is not, and what to do; every other denial stays unexplained. The application-definition help now says `version` is a whole number and that `capabilities` are tool names.
 - **Fix:** the agent consent page said a connection was read-only while offering grants that make files, keep records and start work without a further approval. It now says what the ticks mean.
 ## v0.4.30 (portable applications, developer mode with local-model budgets, more reconciliation for agents)
 
