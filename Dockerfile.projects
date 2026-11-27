@@ -35,8 +35,13 @@ ENV AGENTIC_OS_PACKAGED=1
 # time with `-e AGENTIC_OS_LOCAL_CAPABILITY=off`; the opt-out is never baked into the image.
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
 # Run unprivileged. The app keeps its state under the service user's home (AGENTIC_OS_HOME / ~).
+# /state is where the combined install mounts its named volume (authority, replay and capture stores). A named volume
+# takes its ownership from the image's directory the first time it is used, so the directory must exist and belong to
+# this user; otherwise the volume is root's and the service cannot open its stores. A volume an earlier root image
+# already filled keeps root's ownership and has to be re-owned once (chown -R 10001:10001).
 RUN groupadd --system --gid 10001 app \
-    && useradd --system --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app
+    && useradd --system --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app \
+    && mkdir -m 0700 /state && chown 10001:10001 /state
 USER 10001:10001
 EXPOSE 8787
 # The static UI shell at / is served without the launch capability (every /api route and /health
