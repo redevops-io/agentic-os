@@ -105,3 +105,38 @@ def test_the_name_keeps_its_casing_and_uses_no_font():
         text = (ASSETS / "svg" / name).read_text()
         assert "<text" not in text and "font" not in text
     assert set("rAIlsApps") <= set(M.GLYPHS) and re.search(r'aria-label="rAIlsApps"', (ASSETS / "svg" / "lockup-railsapps.svg").read_text())
+
+
+# ── licensing facts (the brand/README.md "Notices and licensing" section) ────────────────────────────────────
+def test_the_generators_import_only_the_standard_library():
+    import ast
+    for name in ("rails_mark.py", "channels.py"):
+        tree = ast.parse((Path(__file__).resolve().parent.parent / "brand" / name).read_text())
+        mods = {n.names[0].name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import)}
+        mods |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module and n.level == 0}
+        local = {"rails_mark"}      # channels.py imports its sibling
+        assert mods - local <= set(sys.stdlib_module_names), (name, sorted(mods - local - set(sys.stdlib_module_names)))
+
+
+def test_no_font_no_reference_image_and_no_metadata_in_the_assets():
+    import subprocess
+    root = Path(__file__).resolve().parent.parent
+    tracked = subprocess.run(["git", "-C", str(root), "ls-files", "brand"], capture_output=True, text=True).stdout.split()
+    assert not [f for f in tracked if f.lower().endswith((".ttf", ".otf", ".woff", ".woff2", ".jpg", ".jpeg"))], "a font or a photograph under brand/"
+    assert not [f for f in tracked if "rails-logo" in f.lower()], "the reference image must not be in the repository"
+    for f in tracked:
+        if f.endswith(".png"):
+            data = (root / f).read_bytes()
+            chunks, pos = [], 8
+            while pos < len(data):
+                n = int.from_bytes(data[pos:pos + 4], "big"); chunks.append(data[pos + 4:pos + 8]); pos += 12 + n
+            assert chunks == [b"IHDR", b"IDAT", b"IEND"], f"{f}: metadata chunks {chunks}"
+
+
+def test_the_notices_are_in_the_readme_and_the_sources():
+    root = Path(__file__).resolve().parent.parent
+    readme = (root / "brand" / "README.md").read_text()
+    for needle in ("Copyright (c) 2025-2026 RedevOps.", "core, like `scripts/`", "No trademark", "rAIlsApps"):
+        assert needle in readme, needle
+    for name in ("rails_mark.py", "channels.py"):
+        assert "Copyright (c) 2025-2026 RedevOps." in (root / "brand" / name).read_text()

@@ -1,6 +1,7 @@
 """Channel derivatives of the rAIls mark: the website's assets and the owner's store-upload bundle. Standard library only.
 
 Everything is drawn from the same scenes as ``rails_mark.py`` (one spiral algorithm); a channel only changes padding, background and canvas.
+Copyright (c) 2025-2026 RedevOps. Same terms and the same classification (core) as rails_mark.py; standard library only.
 
     python brand/channels.py site   OUT_DIR     favicon, apple-touch icon, manifest icons, social preview
     python brand/channels.py stores OUT_DIR     Microsoft Store listing art, Snap Store listing art, a preview contact sheet, a manifest

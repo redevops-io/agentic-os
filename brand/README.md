@@ -55,3 +55,14 @@ these; see the store bundle's own checklist.
 Approved explanation: "The rAIls mark is a square spiral of prime numbers. It represents how
 meaningful structure emerges when information is organized and filtered." Approved secondary line: "Intelligence through
 structure."
+
+## Notices and licensing
+
+* Copyright: Copyright (c) 2025-2026 RedevOps. (the line approved for the product, `docs/legal/approved/copyright-line.en.txt` on the release line).
+* Licence category: core, like `scripts/` and `tests/` (see `LICENSING.md`). The generator (`rails_mark.py`, `channels.py`) is Python standard
+  library only; the lettering of the lockups is drawn as strokes, so no font is embedded or required; the outputs carry no metadata; nothing is
+  traced from, or derived from, another image (the reference image supplied for the idea is not in the repository). A test pins each of these facts.
+* Trademark: **rAIls** and **rAIlsApps** are names the publisher, ReDevOps.io LLC, uses for its products, and the spiral is its logo. No trademark
+  registration, application or clearance is claimed or implied; mathematical originality is not clearance. Use the casing **rAIls** and **rAIlsApps**.
+* Rights in the files, as a legal question, are not asserted here; the provenance record of the desktop copy is `docs/legal/ARTWORK_PROVENANCE.md`
+  on the release line (facts only: generator hash and output hashes).
