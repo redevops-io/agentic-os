@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.31; no version set)
 
+- **Changed, may need action:** a governed write now needs the requesting agent's **own stored authority** as well as a person's approval (`no_authority` otherwise). It is checked when proposed, when decided and just before the change, so **revoking an agent also stops its waiting requests**. Connections made by OAuth and tokens issued with `--authority-db` already have it. A deployment with `AGENTIC_OS_WRITES_DIR` but no `AGENTIC_OS_AUTHORITY_DB`, or file tokens issued without `--authority-db`, can no longer propose changes: set the store and reconnect or reissue. This is the same envelope the gateway already enforces in the production profile; no second permission system was added.
 - **Fix:** changing a record of an installed application deleted the stored values of any field a newer version had dropped. They are now kept, and the card of a newer version says what it hides or restricts for records already kept.
 - Installed applications can be moved with their records: a person who may decide exports one from its page and brings it into another tenant or deployment after reviewing it in words (`aos.app-bundle/v1`; all or nothing, never overwriting; unsigned, so only from a source you trust).
 

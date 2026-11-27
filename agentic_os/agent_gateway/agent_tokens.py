@@ -212,6 +212,14 @@ def envelope_key(agent_id: str) -> str:
     return f"gateway-agent:{agent_id}"
 
 
+def envelope_key_for_requester(requester: str) -> str:
+    """The stored authority of the agent that asked for a change, named as its requests name it: ``agent:<id>`` for a file
+    token or a connection, the bare id for an agent connected in the installed app. Anything else maps to a key nobody
+    records, so it holds no authority."""
+    requester = str(requester or "")
+    return envelope_key(requester[len("agent:"):] if requester.startswith("agent:") else requester)
+
+
 def envelope_key_of(principal: GatewayPrincipal) -> str:
     """Which stored authority covers a caller. Only a per-agent principal has one: the shared bearer maps to a key that
     is never written, so in production every call it makes is denied."""
