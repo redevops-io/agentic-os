@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import struct
+import sys
 import zlib
 from pathlib import Path
 
