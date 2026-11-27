@@ -89,43 +89,10 @@ def _events(client: Any) -> Extraction:
     return extract(client)
 
 
-def _shared_references(client: Any) -> Dict[str, str]:
-    """References under which the comparison is not one payment against one bank line: each such "difference" compares a
-    payment with a total that is not necessarily its own."""
-    pays = client.read_list("Payment Entry", ["name", "docstatus", "reference_no"], None, 0)
-    lines = client.read_list("Bank Transaction", ["name", "withdrawal", "reference_number", "docstatus"], None, 0)
-    out: Dict[str, str] = {}
-    live: Dict[str, int] = {}
-    for p in pays:
-        if int(p.get("docstatus") or 0) == 1 and p.get("reference_no"):
-            live[str(p["reference_no"])] = live.get(str(p["reference_no"]), 0) + 1
-    bank: Dict[str, List[Mapping[str, Any]]] = {}
-    for b in lines:
-        if int(b.get("docstatus") or 0) != 2 and b.get("reference_number"):
-            bank.setdefault(str(b["reference_number"]), []).append(b)
-    for ref in set(live) | set(bank):
-        why = []
-        if live.get(ref, 0) > 1:
-            why.append(f"{live[ref]} payments share this reference")
-        if len(bank.get(ref, [])) > 1:
-            why.append(f"{len(bank[ref])} bank lines share this reference")
-        if any(float(b.get("withdrawal") or 0) for b in bank.get(ref, [])):
-            why.append("a withdrawal is netted into the bank total")
-        if why:
-            out[ref] = "; ".join(why)
-    return out
-
-
 def _discrepancies(client: Any, _i: Mapping[str, Any]) -> Dict[str, Any]:
     found, done = reconcile.find(client), reconcile.corrections(client)
-    shared = _shared_references(client)
-    rows = []
-    for d in found.events[:MAX_ITEMS]:
-        row = d.to_json()
-        why = shared.get(d.reference, "")
-        if why:
-            row["ambiguous"] = f"{why}: this is not one payment compared with one receipt"
-        rows.append(row)
+    # ``ambiguous`` (agentic_os.economics.reconcile) says why no single payment can be named where the reference is shared
+    rows = [d.to_json() for d in found.events[:MAX_ITEMS]]
     return {"discrepancies": rows, "discrepancy_count": len(found.events),
             "corrections": [c.to_json() for c in done.events[:MAX_ITEMS]],
             "gaps": [*found.gaps, *done.gaps], "note": NOT_AN_ERROR}
