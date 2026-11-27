@@ -37,10 +37,18 @@ Turn on with `AGENTIC_OS_APPS=1` and `AGENTIC_OS_WRITES_DIR`; the tenant needs `
   claims that are false (in a qualification run a model wrote that its form waited for approval; it does not). The install
   card shows every such text and label with what each button really does, and every form carries the platform's own note.
 - **State** is the runtime's, per tenant: typed fields, size limits, a revision per record, retry-safe adds. A newer
-  version keeps the records.
+  version keeps the records, including values of fields and collections it no longer has (changing a record leaves them
+  in place). The card of a newer version says what it hides or restricts for records already kept.
+- **Moving an application** is a person's action on these pages, not an agent's tool. Someone who may decide for the
+  tenant exports it (`aos.app-bundle/v1`: the installed version and every record, with a digest of the content), and on
+  the other deployment or tenant brings it in: the pages first say in words what it is and what arrives with it, and
+  install only the content that was reviewed, all of it or nothing. The definition is judged against what **that**
+  deployment offers, and an import never overwrites an application or records already there. Who last changed each
+  record is what the other deployment said and is marked "(as exported)". The digest detects damage, not authorship: a
+  bundle is not signed, so import only a file whose origin you trust. Up to 2 MB of records.
 - **Views** are generated on the server with no script under the signed-in approval pages (`/approvals/apps/<id>`), with
   the same session, CSRF token, origin check and content policy. The `approvals` block links to the pending changes the
   app's capabilities proposed. A requester may look; adding a record needs someone who may decide.
 
 Not in v1: charts or computed figures in views, views that call capabilities themselves, per-record permissions, deleting
-records or uninstalling, and importing a definition from another artifact format.
+records or uninstalling, signed bundles, and importing a definition from another artifact format.
