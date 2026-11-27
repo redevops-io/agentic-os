@@ -11,7 +11,8 @@ off unless the deployment enables it) is refused unless the bank's own statement
 | ``economics.request_status`` | what became of the caller's proposals |
 
 A difference is not by itself an error: a bank fee, a currency exchange, a partial settlement, timing or how a receipt is
-allocated can each explain it. So nothing here says what should be changed.
+allocated can each explain it. So a difference alone never says what should be changed: only the correction's own checks of the
+bank statement (``payment_correction.assess``) can say one may be proposed, and a person still decides.
 
 Access: ``economics.read`` (named, never default) AND the financial-data grant on the agent and its tenant, and the tenant
 must be granted ERPNext. Evidence additionally follows the SOURCE: a conversation needs ``support.read`` and the tenant's
