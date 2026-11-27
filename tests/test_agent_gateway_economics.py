@@ -274,3 +274,16 @@ def test_the_approval_card_says_what_will_be_cancelled_and_the_exact_figures(wor
     page = signed.get(asked["approval_url"]).text
     for needle in ("CANCEL Payment Entry PAY-1", "will be CANCELLED", "WIRE-C1", "3800", "3380", "https://erp.example/app/payment-entry/PAY-1"):
         assert needle in page, needle
+
+
+def test_empty_evidence_says_when_nothing_could_be_tied_to_a_customer(world):
+    """A site without customer e-mail or website: names match, identifiers do not, so nothing links and the answer says why."""
+    w = world()
+    for row in w.ledger.rows["Customer"]:
+        del row["email_id"], row["website"]
+    out = w.call(w.agent(FULL), "economics.evidence", invoice="S2")["output"]
+    assert out["evidence"] == [] and out["withheld"]["count"] == 0
+    loose = out["not_tied_to_a_customer"]
+    assert loose["count"] == 3 and any("no identifier does" in why for why in loose["why"]), loose
+    hidden = w.call(w.agent(["economics.read", "egress:financial"]), "economics.evidence", invoice="S2")["output"]
+    assert hidden["not_tied_to_a_customer"]["count"] == 0 and hidden["not_tied_to_a_customer"]["why"] == []     # nothing about unseen items

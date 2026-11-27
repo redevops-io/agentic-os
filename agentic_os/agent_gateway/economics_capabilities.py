@@ -168,7 +168,13 @@ def _evidence(client: Any, readers: Mapping[str, Any], principal: GatewayPrincip
     if customer:
         cited += [c.ref.id for c in visible if c.customer == customer and c.ref.id not in cited]
     items = [{**by_id[r].ref.to_json(), "excerpt": by_id[r].text[:MAX_EXCERPT], "customer": by_id[r].customer or ""} for r in cited[:MAX_ITEMS]]
+    # an empty answer must not read as "nobody said anything": say what could not be tied to a customer, and why (only of
+    # items this caller may see)
+    loose = [c for c in visible if not c.customer]
+    reasons = sorted({c.identity_note or "no e-mail address or website that both systems hold" for c in loose})
     return {("invoice" if invoice else "customer"): invoice or customer, "evidence": items, "evidence_count": len(cited),
+            "not_tied_to_a_customer": {"count": len(loose), "why": reasons[:5],
+                                       "note": "such an item is linked only if it names the document; a name alone never links it"},
             "links": [e.to_json() for e in edges if e.communication in cited[:MAX_ITEMS]], "withheld": {"count": withheld, "by_scope": per_scope,
                                                        "note": "items exist in sources this agent was not granted; nothing of them is shown"},
             "not_read": unread, "gaps": [*ex.gaps, *gaps.gaps][:MAX_ITEMS]}
