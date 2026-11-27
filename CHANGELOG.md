@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.29; no version set)
 
+- Developer mode (off by default): a person who may decide can preauthorize one agent for named, low-consequence actions, a limited number of times within at most 8 hours (`/api/writes/preauthorizations`). Money, generation, publication, attestations and plan judgements always wait for a person; the same authorization and permissions checks run, and every use is recorded.
 ## v0.4.29 (governed media, social and market research; a safe payment correction)
 
 - Economic intelligence: one deposit smaller than the payment no longer excludes a partial settlement until the statement runs past the time a second instalment could arrive; it is reported as unknown.

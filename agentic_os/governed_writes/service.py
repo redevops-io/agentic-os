@@ -24,6 +24,7 @@ from agentic_os import app_gate
 from agentic_os.governed_writes import authorization
 from agentic_os.governed_writes.actions import ACTIONS, APP_GRANTS, Outcome, reserved_marker
 from agentic_os.governed_writes.apps import NotApplied
+from agentic_os.governed_writes.preauthorization import PreauthorizationError, Preauthorizations
 from agentic_os.mission.approval import canonical
 from agentic_os.mission.executor import Executor
 from agentic_os.mission.operator_sdk import LocalOperatorClient, Operator, capability, pending_approval
@@ -79,6 +80,7 @@ class GovernedWrites:
                 self._db.execute(f"ALTER TABLE requests ADD COLUMN {column} TEXT")
         self._journal: Any = None
         self._journal_dir = root
+        self.preauthorizations = Preauthorizations(self._db, self.clock)
         if authority is None:
             from agentic_os.mission.authority import authority_from_env  # noqa: PLC0415
             authority = authority_from_env()
@@ -237,7 +239,31 @@ class GovernedWrites:
                 (mission.id, tenant, requester, action, spec.app, idempotency_key, digest, intent, json.dumps(args),
                  ((evidence or {}).get("summary") or spec.preview(args))[:300], now, now + self.ttl_s, PENDING,
                  None if evidence is None else json.dumps(evidence)))
+            self._try_preauthorized(mission.id, tenant=tenant, requester=requester, action=action, args=args, evidence=evidence,
+                                    digest=digest)
             return {**self._view(self._row(mission.id)), "replayed": False}
+
+    def _try_preauthorized(self, mid: str, *, tenant: str, requester: str, action: str, args: Mapping[str, Any],
+                           evidence: Optional[Mapping[str, Any]], digest: str) -> None:
+        """Developer mode (``preauthorization``): if a person preauthorized exactly this, decide it now, through the same
+        ``decide`` a person's click uses. Anything that refuses leaves the request waiting for a person."""
+        if evidence and evidence.get("attestation"):             # what a person must attest to, nothing stands in for
+            return
+        grant = self.preauthorizations.claim(tenant=tenant, requester=requester, action=action, inputs=args)
+        if grant is None:
+            return
+        who = f"preauthorization:{grant['id']} (granted by {grant['granted_by']})"
+        try:
+            done = self.decide(mid, approve=True, digest=digest, approver=who, tenant=tenant)
+        except WriteError as e:
+            self.preauthorizations.record(grant["id"], mid, f"not decided: {e.code}: {e.detail}", give_back=True)
+            return
+        self.preauthorizations.record(grant["id"], mid, done["state"])
+
+    # ── developer mode: only a person's routes call these ─────────────────────────
+    def preauthorize(self, **fields: Any) -> Dict[str, Any]:
+        with self._lock:
+            return self.preauthorizations.create(**fields)
 
     # ── reading ──────────────────────────────────────────────────────────────────
     def _row(self, request_id: str) -> Optional[sqlite3.Row]:

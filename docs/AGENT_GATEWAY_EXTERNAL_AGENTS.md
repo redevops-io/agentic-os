@@ -322,6 +322,33 @@ asking again). The ledger holds only a digest of the inputs. The request databas
 `AGENTIC_OS_WRITES_RETENTION_S` (7 days; 0 erases them at once) after a request finishes, so a person can still see what
 was approved, then erases them. One Projects process should own the state directory.
 
+## Developer mode: scoped preauthorization
+
+For building and testing against a deployment, a person can preauthorize **one agent** to have a few low-consequence
+changes performed without a separate approval for each. It is off unless `AGENTIC_OS_DEVELOPER_MODE=1` **and** the tenant
+has `writes:preauthorize` and `writes:decide` among its `policy_refs`.
+
+```bash
+curl -sS -X POST "$PROJECTS/api/writes/preauthorizations" -H "Authorization: Bearer $APPROVER_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"agent": "agent:dev1", "actions": ["erp.request_comment"],
+  "match": {"doctype": ["Sales Invoice"]}, "max_uses": 5, "minutes": 60, "reason": "building the follow-up flow"}'
+```
+
+`GET /api/writes/preauthorizations` lists them with every use; `POST .../{id}/revoke` ends one at once.
+
+- **Only a person who may decide** that tenant's changes creates or revokes one. Agents and requester credentials cannot.
+- At most 50 uses within 8 hours, for named actions, optionally limited to exact input values.
+- **Can be covered:** `erp.request_comment`, `erp.request_draft_purchase_order` (a draft), `support.request_private_note`
+  (never sent to the customer), `crm.request_company`, `crm.request_person`, `social.request_post` **only as a draft**,
+  `market.request_watch`.
+- **Never covered:** payment corrections (and anything needing an attestation), model generation, scheduled posts, change
+  plans, and any action added later until it is listed deliberately. A stored record cannot widen this.
+- It changes **who approved**, not what is checked: the same decision path, tenant grants, enterprise permissions gate,
+  execution and read-back. If anything denies it, the request waits for a person and the use is given back. The decision
+  records `preauthorization:<id> (granted by <person>)`.
+- Revoking an approver's credential does not by itself end what they preauthorized: revoke it, or let it expire (8 hours at
+  most). Turning the deployment switch or the tenant's `writes:preauthorize` off stops all of them at once.
+
 ## Tenants
 
 A deployment that declares tenants (`AGENTIC_OS_TENANT_LIMITS`) limits **every** read to what the token's `--tenant` is
