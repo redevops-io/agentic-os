@@ -189,6 +189,9 @@ TOOL_ACTIONS["governed-writes"] = {
     "media.library": "read", "media.assets": "read", "media.inspect": "read", "media.import": "write", "media.compose": "write",
     "media.export": "write", "media.request_generate": "write", "media.request_status": "read",
     "social.channels": "read", "social.posts": "read", "social.request_post": "write", "social.request_status": "read",
+    "market.sites": "read", "market.monitor": "read", "market.research": "write", "market.list_research": "read",
+    "market.get_research": "read", "market.evidence": "read", "market.request_watch": "write", "market.request_change_plan": "write",
+    "market.verify_plan": "read", "market.request_status": "read",
 }
 
 PUBLIC_CANDIDATES: tuple[tuple[str, str], ...] = (

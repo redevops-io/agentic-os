@@ -66,7 +66,8 @@ def _changes(apps):
 
 #: actions with their own applications' fakes are held to the same guarantees in their module's tests
 ELSEWHERE = {"economics.request_payment_correction": "tests/test_payment_correction.py",
-             "social.request_post": "tests/test_agent_gateway_media.py", "media.request_generate": "tests/test_agent_gateway_media.py"}
+             "social.request_post": "tests/test_agent_gateway_media.py", "media.request_generate": "tests/test_agent_gateway_media.py",
+             "market.request_watch": "tests/test_agent_gateway_market.py", "market.request_change_plan": "tests/test_agent_gateway_market.py"}
 
 
 def test_every_action_is_held_to_the_approval_guarantees_somewhere():

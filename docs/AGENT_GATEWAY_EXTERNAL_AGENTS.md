@@ -172,6 +172,33 @@ The tenant needs `app:vibexgen` / `app:postiz`.
   label; all are part of the digest. The file is fetched again at posting time and must hash the same. The post is read back
   from Postiz (state, channel, text, time); the public API does not return the attachment, so that is not re-read.
 
+## Market research
+
+Offered with governed writes, where Market Radar's operator app is connected:
+
+| Setting | What it is |
+|---|---|
+| `MARKET_RADAR_URL`, `MARKET_RADAR_CONTROL_TOKEN` | Market Radar and its `AGENTIC_OS_CONTROL_TOKEN`; both need the same `AGENTIC_OS_APPROVAL_SECRET` |
+| `AGENTIC_OS_MARKET_SITES` | the origins agents may research and watch, comma separated (`https://www.example.com`). An agent cannot name any other address |
+
+The tenant needs `app:market-radar`.
+
+| Capability | Grant | What it does |
+|---|---|---|
+| `market.sites`, `market.monitor` | `market.read` | the listed sites; what changed on watched pages of those sites (others are only counted) |
+| `market.research` | `market.research` | a **research mission** on the Mission Runtime, from the `market_intelligence_research` template: watched changes, site audit, ranked recommendations. Read-only, no approval |
+| `market.list_research`, `market.get_research`, `market.evidence` | `market.read` | the tenant's research, and the findings behind each recommendation with the check that would show it fixed |
+| `market.request_watch`, `market.request_change_plan` | `market.propose` | **proposals** a person approves |
+| `market.verify_plan` | `market.read` | checks an approved plan against the live site |
+
+- **Durable.** Each research is a mission whose events are kept in the writes directory (`market-events.jsonl`). It gets an
+  authority record of its own: the three reading capabilities, no spend, no delegation, one hour.
+- The template's analytics readings belong to another application. Where nothing connected provides them they are left out,
+  and the result names them (`steps_left_out`).
+- A **change plan** can hold only recommendations from research this tenant ran, never text the agent wrote. A person
+  approves the exact list; Market Radar verifies that approval itself (`radar.approve_plan`, bound to the list's digest).
+  Nothing changes the site: `market.verify_plan` says what is live and what is not yet.
+
 ## Security and quality products
 
 Where a deployment registers Edge Sentinel or redevops-qa (`AGENTIC_OS_PRODUCTS`), their tools are capabilities too, each

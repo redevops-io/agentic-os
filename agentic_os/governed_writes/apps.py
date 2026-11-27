@@ -280,6 +280,8 @@ def writers_from_env() -> Dict[str, Any]:
         out["twenty"] = TwentyWriter(env("TWENTY_BASE_URL").rstrip("/"), env("TWENTY_API_KEY"), shadow=shadow_mode_enabled())
     from agentic_os.governed_writes.media import operators_from_env  # noqa: PLC0415 (it imports from this module)
     out.update(operators_from_env())
+    from agentic_os.governed_writes.market import operators_from_env as market_operators  # noqa: PLC0415
+    out.update(market_operators())
     return out
 
 
