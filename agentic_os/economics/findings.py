@@ -40,6 +40,10 @@ class Finding:
                 "evidence": list(self.evidence), "sources": list(self.sources), "note": self.note}
 
 
+def _plain(d: Decimal) -> str:
+    return format(d.normalize(), "f")        # 20, not 2E+1
+
+
 def _contradictions(events: Sequence[EconomicEvent], comms: Sequence[Communication]) -> List[Finding]:
     list_by_invoice = {_invoice_of(e): e.amount for e in events if e.kind in (Kind.SALE, Kind.RETURN) and e.amount}
     out: List[Finding] = []
@@ -58,7 +62,7 @@ def _contradictions(events: Sequence[EconomicEvent], comms: Sequence[Communicati
         stated = {p.normalize() for c in near for p in mentions(c.text).percents}
         if near and not (stated & {p.normalize() for p in pcts}):
             out.append(Finding("contradicts_record", e.id, e.subjects.get("customer"), abs(e.amount), e.currency, [c.ref.id for c in near], e.sources,
-                               f"messages to this customer in the period state {sorted(str(s) for s in stated)} percent; the recorded discount is {sorted(str(p) for p in pcts)} percent"))
+                               f"messages to this customer in the period state {sorted(_plain(s) for s in stated)} percent; the recorded discount is {sorted(_plain(p) for p in pcts)} percent"))
     return out
 
 

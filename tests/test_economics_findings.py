@@ -98,6 +98,8 @@ def test_a_message_percent_the_discount_does_not_reproduce_is_a_contradiction_bu
     wrong = comm("5/1", "5", "company", "We will take 25% off.", "2026-07-31T09:00:00Z")
     out = F.reconcile_both([SALE, DISC], {}, [], [], [wrong])
     assert any(f.kind == "contradicts_record" and f.subject == DISC.id for f in out)
+    note = next(f.note for f in out if f.kind == "contradicts_record")
+    assert "['25']" in note and "['20']" in note and "E+" not in note           # 20 is written 20, never 2E+1
     right = comm("5/2", "5", "company", "We will take 20% off.", "2026-07-31T09:00:00Z")
     assert not any(f.kind == "contradicts_record" for f in F.reconcile_both([SALE, DISC], {}, [], [], [wrong, right]))
     assert not any(f.kind == "contradicts_record" for f in F.reconcile_both([SALE, DISC], {}, [], [], [comm("5/3", "5", "customer", "Thanks.", "2026-07-31T09:00:00Z")]))

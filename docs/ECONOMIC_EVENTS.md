@@ -91,3 +91,7 @@ The temporal engines already exist in Context Runtime (`TemporalStore` and `Temp
 ### One short deposit is not yet a corroborated difference
 
 `causes.explain_difference` no longer reads a single deposit smaller than the payment as "all of it arrived". A second instalment could still be on its way, so `partial_settlement` is `unknown` (and `corroborated` is False) unless the statement runs at least `bank.LATE_DAYS` (5) days past both the payment's posting date and the deposit. `BankFinding` now carries `through` (the statement's last day) and `latest` (the latest deposit date) for that. A deposit larger than the payment excludes a pending instalment at once.
+
+### `economics.findings` (gateway read)
+
+Returns the findings that need no model: `adjustment_without_verified_authorization` and the percentage form of `contradicts_record`, each with message references and excerpts only from sources the agent was granted (others are counted per source). It names `recorded_without_rationale`, `commitment_without_record` and `decision_not_executed` as **not evaluated**, because they need a reading of the messages' meaning; an agent that reads `economics.evidence` and judges them says so as its own judgment. Absence of a finding is never "none".
