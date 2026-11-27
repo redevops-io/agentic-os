@@ -2,6 +2,12 @@
 # authorize_release.sh: the ONE owner-authorization command of release 0.6.0.
 #
 #   scripts/release/authorize_release.sh [--waiver] --doc FILE --pubkey FILE [--dry-run]
+#   scripts/release/authorize_release.sh --record D-LIC-11 --pubkey FILE [--dry-run]
+#
+# --record ID  one standalone decision record (record_decision.py): the record already in the repository is shown, its
+#        digest and the key fingerprint are typed, it is signed with the agent-held legal key, the gate entry gets exactly
+#        the fields the record names, the release gate must accept it (else everything is rolled back), and the signature and
+#        the gate file are committed. Load the key first (`ssh-add <key>`: that is where its passphrase is asked).
 #
 # FILE   the rendered RELEASE_OWNER_APPROVAL_0.6.0.md the owner reviewed (scripts/release/approval.py render ...)
 #        with --waiver: the rendered OWNER_DECISION_WITHOUT_COUNSEL_0.6.0.md (scripts/release/waiver_approval.py render ...): the owner's
@@ -20,17 +26,71 @@
 # --dry-run performs 1, 2 and the checks of 3 to 5 that need no signature, prints what would be written, and changes nothing.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"; ROOT="$(cd "$HERE/../.." && pwd -P)"
-DOC="" PUB="" DRY=0 WAIVER=0
+DOC="" PUB="" DRY=0 WAIVER=0 RECORD=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --doc) DOC="${2:?}"; shift 2 ;;
     --pubkey) PUB="${2:?}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --waiver) WAIVER=1; shift ;;
+    --record) RECORD="${2:?}"; shift 2 ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+if [ -n "$RECORD" ]; then
+  [ -n "$PUB" ] && [ -z "$DOC" ] && [ "$WAIVER" = 0 ] || { echo "usage: authorize_release.sh --record ID --pubkey FILE [--dry-run]" >&2; exit 2; }
+  [ -f "$PUB" ] || { echo "file not found" >&2; exit 2; }
+  PUB="$(cd "$(dirname "$PUB")" && pwd -P)/$(basename "$PUB")"
+  REC=(env -i PATH=/usr/bin:/bin:/opt/homebrew/bin LC_ALL=C python3 -I "$HERE/record_decision.py")
+  fail() { echo "STOP: $*" >&2; exit 1; }
+  cd "$ROOT"
+  [ -z "$(git status --porcelain)" ] || fail "the worktree is not clean"
+  DOCREL="$("${REC[@]}" path --id "$RECORD")" || fail "unknown record"
+  "${REC[@]}" verify --id "$RECORD" || fail "the record is not as expected"
+  WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf "$WORK"' EXIT
+  [ "$(wc -c < "$PUB")" -le 4096 ] || fail "the public key file is too large"
+  grep -q "PRIVATE" "$PUB" && fail "that file looks like a private key (nothing was read from it)"
+  cp "$ROOT/$DOCREL" "$WORK/doc.md"; cp "$PUB" "$WORK/key.pub"; PUB="$WORK/key.pub"
+  DIGEST="$("${REC[@]}" digest --id "$RECORD")"
+  FPR="$(/usr/bin/ssh-keygen -l -f "$PUB" | awk '{print $2}')"
+  [ -n "$FPR" ] || fail "cannot read the public key"
+  [ "$FPR" != "SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA" ] || fail "that is the published release key; use a separate legal-decision key"
+  NAME_WANTED="$("${REC[@]}" name --id "$RECORD")"
+  echo "record   : $DOCREL (read it before approving)"
+  echo "sha256   : $DIGEST"
+  echo "commit   : $(git rev-parse HEAD)"
+  echo "key      : $FPR"
+  if [ "$DRY" = 1 ]; then
+    echo "DRY RUN: would sign the record with the agent-held key, add $DOCREL.sig, update the $RECORD entry of packaging/distribution-gate.json"
+    echo "  (decision_reference, decision_sha256, decided_by, decided_on, ships_meanwhile), check the gate and commit. Nothing was changed."
+    exit 0
+  fi
+  [ -t 0 ] || [ -r /dev/tty ] || fail "needs a terminal: the owner must type the digest and the fingerprint"
+  read -r -p "Type the full sha256 of the record to approve THIS record: " T1 < /dev/tty
+  [ "$T1" = "$DIGEST" ] || fail "the typed digest differs from the record's digest"
+  read -r -p "Type the key fingerprint (SHA256:...) of your legal-decision key (confirm it against your independent record): " T2 < /dev/tty
+  [ "$T2" = "$FPR" ] || fail "the typed fingerprint differs from the key file's"
+  read -r -p "Type the name that signs ($NAME_WANTED): " NAME < /dev/tty
+  [ "$NAME" = "$NAME_WANTED" ] || fail "the typed name differs from the record's"
+  [ -n "${SSH_AUTH_SOCK:-}" ] || fail "no ssh-agent (SSH_AUTH_SOCK is empty): the private key must be in your agent"
+  /usr/bin/ssh-add -L 2>/dev/null | grep -qF "$(awk '{print $2}' "$PUB")" || fail "your agent does not hold that key (ssh-add <key> asks for its passphrase)"
+  [ "$(shasum -a 256 "$WORK/doc.md" | awk '{print $1}')" = "$DIGEST" ] && [ "$("${REC[@]}" digest --id "$RECORD")" = "$DIGEST" ] || fail "the record changed after its digest was shown"
+  env -i PATH=/usr/bin:/bin SSH_AUTH_SOCK="$SSH_AUTH_SOCK" /usr/bin/ssh-keygen -Y sign -f "$PUB" -n redevops-legal-decision@v1 "$WORK/doc.md" || fail "signing failed"
+  cp "$WORK/doc.md.sig" "$ROOT/$DOCREL.sig"
+  "${REC[@]}" apply --id "$RECORD" --date "$(date -u +%F)" >/dev/null || { rm -f "$ROOT/$DOCREL.sig"; fail "the gate entry could not be written; nothing changed"; }
+  if ! "${REC[@]}" check --id "$RECORD" || ! env -i PATH=/usr/bin:/bin:/opt/homebrew/bin LC_ALL=C python3 -I packaging/check-distribution-gate.py --platform all --distribution --about-slots; then
+    git checkout -- packaging/distribution-gate.json; rm -f "$ROOT/$DOCREL.sig"
+    fail "the gate does not accept the signature; everything was rolled back"
+  fi
+  git add "$DOCREL.sig" packaging/distribution-gate.json
+  git commit -q -m "legal: $RECORD signed by the owner (record $DIGEST)
+
+Signer-key-fingerprint: $FPR
+Record-sha256: $DIGEST"
+  echo "COMMITTED: $(git rev-parse HEAD). Next: the licence tests, then the BUILD_COMMIT re-pin so the pin includes this signature. Nothing was pushed."
+  exit 0
+fi
 [ -n "$DOC" ] && [ -n "$PUB" ] || { echo "usage: authorize_release.sh --doc FILE --pubkey FILE [--dry-run]" >&2; exit 2; }
 [ -f "$DOC" ] && [ -f "$PUB" ] || { echo "file not found" >&2; exit 2; }
 DOC="$(cd "$(dirname "$DOC")" && pwd -P)/$(basename "$DOC")"; PUB="$(cd "$(dirname "$PUB")" && pwd -P)/$(basename "$PUB")"
