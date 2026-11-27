@@ -27,7 +27,7 @@ def copy(tmp_path):
     tree = subprocess.run(["git", "-C", str(ROOT), "archive", "HEAD", "packaging", "docs", "scripts", "brand", "LICENSE", "LICENSE.md",
                            "LICENSE-COMMONS-CLAUSE", "LICENSING.md"], capture_output=True, check=True).stdout
     with tarfile.open(fileobj=io.BytesIO(tree)) as tar:
-        tar.extractall(tmp_path / "repo")
+        tar.extractall(tmp_path / "repo", filter="data")
     repo = tmp_path / "repo"
     for rel in ("scripts/release/record_decision.py",):
         shutil.copy(ROOT / rel, repo / rel)                   # the code under test, as it is now

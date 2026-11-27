@@ -9,6 +9,15 @@ No curated changelog is kept. History:
 - Release procedure and known drift between `pyproject.toml`, tags and release objects: [docs/RELEASING.md](docs/RELEASING.md).
 - Downstream pins: `mission-sdk` `COMPATIBILITY.md`.
 
+## Desktop 0.1.7 (approve what agents propose, in the app; portable applications)
+
+- **Approvals, Agents and Applications screens** (Projects UI 0.4.0). The person who opened the app approves or rejects what an agent proposes, using the app's own protected session. The server-rendered approval pages and the command line cannot approve on the desktop.
+- **Agent permissions** are given only on the Agents screen: scoped, expiring (90 days at most) and revocable. `agent connect` on the command line grants reading only. Opening an application no longer reaches its records: `apps.records.read` and `apps.records.write` are separate.
+- **Portable applications** are installed after approval, keep their records across restarts and upgrades, and can be exported and brought into another installation.
+- New rAIls launcher and application icons.
+- Uninstalling keeps your data (`docs/release/DATA_RETENTION.md`).
+- Not in this release: VibeXGen (video and image editing) is not part of the desktop app yet.
+
 ## Desktop 0.1.6 (connect an AI agent from the app)
 
 - **AI agents screen.** The launcher can connect, list and disconnect AI agents. Each agent gets its own credential, read-only by default (projects, missions, sources; dashboards only when named), that stops working after 30 days. The credential is a private file on the device; the launcher never receives, shows or stores it. Disconnecting revokes it in the app (server-side), not just by deleting the file.

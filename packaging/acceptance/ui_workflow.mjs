@@ -99,10 +99,20 @@ if (url) {
   } else unsupported('find narrows the list', 'this build serves no sample cases: there is no list to narrow');
   await check('every main section opens without an error', async () => {
     const seen = [];
-    for (const name of ['Work', 'Activity', 'Automations', 'Connections', 'Settings', 'Today']) {
+    for (const name of ['Approvals', 'Applications', 'Work', 'Activity', 'Automations', 'Connections', 'Settings', 'Today']) {
       const b = p.getByRole('button', { name: new RegExp('^' + name, 'i') }).first(); if (!(await b.count())) continue;
       await b.click(); await p.waitForTimeout(700); const t = await body(); assert(t.length > 200 && !/something went wrong|unexpected error/i.test(t), name + ' did not render'); seen.push(name); }
     assert(seen.length >= 4, 'only ' + seen.join(',') + ' found'); return seen.join(', '); });
+  // ---- the installed app's own screens (Projects UI 0.4 and later). A build without them records the checks as UNSUPPORTED. ----
+  const desktopScreens = [['#/approvals', 'Approvals', /Nothing is waiting/], ['#/agents', 'Connected agents', /Connect an agent/i], ['#/applications', 'Applications', /No application yet/]];
+  const isDesktop = await p.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Approvals/ }).count();
+  for (const [hash, title, says] of desktopScreens) {
+    if (!isDesktop) { unsupported(`the ${title} screen opens, says what it holds and passes WCAG 2 A/AA (axe)`, 'this build has no desktop screens'); continue; }
+    await check(`the ${title} screen opens, says what it holds and passes WCAG 2 A/AA (axe)`, async () => {
+      await p.goto(origin + '/' + hash); await p.getByRole('heading', { level: 1, name: title }).waitFor({ timeout: 15000 }); await p.getByText(says).first().waitFor({ timeout: 15000 });
+      const v = await axe(); assert(v.length === 0, v.join(', ')); return 'no violations'; });
+  }
+  if (isDesktop) await p.goto(origin + '/#/today');
   // ---- Dashboards (Projects UI 0.3 and later). A build without the section records the checks as UNSUPPORTED. ----
   const dashButton = p.getByRole('button', { name: /^Dashboards/i }).first();
   if (!(await dashButton.count())) {

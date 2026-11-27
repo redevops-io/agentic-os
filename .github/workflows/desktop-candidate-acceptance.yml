@@ -13,7 +13,7 @@ on:
       upgrade_from:
         description: "Published release to upgrade from (its installer is installed first where one exists for the platform)"
         required: false
-        default: v0.6.1
+        default: r0prime-v0.1.7
 permissions:
   contents: read
   actions: read
@@ -27,10 +27,10 @@ jobs:
           - {name: macos-arm64 (dmg), runner: macos-15, artifact: redevops-macos-15, find: "*.dmg", previous: "*_aarch64.dmg"}
           - {name: windows-x64 (msi), runner: windows-2022, artifact: redevops-windows-2022, find: "*.msi", previous: "*_x64_en-US.msi"}
           - {name: windows-x64 (nsis exe), runner: windows-2022, artifact: redevops-windows-2022, find: "*-setup.exe", previous: "*_x64-setup.exe"}
-          - {name: linux-amd64 (deb), runner: ubuntu-24.04, artifact: redevops-ubuntu-24.04, find: "*.deb", previous: ""}
-          - {name: linux-amd64 (AppImage), runner: ubuntu-24.04, artifact: redevops-ubuntu-24.04, find: "*.AppImage", previous: ""}
+          - {name: linux-amd64 (deb), runner: ubuntu-24.04, artifact: redevops-ubuntu-24.04, find: "*.deb", previous: "*_amd64.deb"}
+          - {name: linux-amd64 (AppImage), runner: ubuntu-24.04, artifact: redevops-ubuntu-24.04, find: "*.AppImage", previous: "*_amd64.AppImage"}
           - {name: linux-arm64 (deb), runner: ubuntu-24.04-arm, artifact: redevops-ubuntu-24.04-arm, find: "*.deb", previous: "*_arm64.deb"}
-          - {name: linux-arm64 (AppImage), runner: ubuntu-24.04-arm, artifact: redevops-ubuntu-24.04-arm, find: "*.AppImage", previous: ""}
+          - {name: linux-arm64 (AppImage), runner: ubuntu-24.04-arm, artifact: redevops-ubuntu-24.04-arm, find: "*.AppImage", previous: "*_aarch64.AppImage"}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     env:
@@ -74,8 +74,13 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "previous installer exit code $($p.ExitCode)" }
           $side = Get-ChildItem -Path "$env:ProgramFiles", "$env:LOCALAPPDATA" -Recurse -Filter 'redevops-sidecar.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           "SIDECAR=$($side.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Linux - unpack the previous AppImage
+        if: runner.os == 'Linux' && endsWith(env.OLD, '.AppImage')
+        run: |
+          mkdir -p prevroot && cp "$OLD" prevroot/previous.AppImage && cd prevroot && chmod +x previous.AppImage && ./previous.AppImage --appimage-extract >/dev/null
+          echo "SIDECAR=$(find "$PWD/squashfs-root" -name redevops-sidecar -type f | head -1)" >> "$GITHUB_ENV"
       - name: Linux - install the previous .deb
-        if: runner.os == 'Linux' && env.OLD != ''
+        if: runner.os == 'Linux' && endsWith(env.OLD, '.deb')
         run: |
           sudo apt-get update -qq && sudo apt-get install -y "./$OLD"
           echo "SIDECAR=/usr/bin/redevops-sidecar" >> "$GITHUB_ENV"
@@ -83,6 +88,10 @@ jobs:
         if: env.OLD != ''
         shell: bash
         run: python packaging/acceptance/state_probe.py "$SIDECAR" "$RUNNER_TEMP/aa-state" state_before.json
+      - name: The previous version saves real data - a note, and a connected agent
+        if: env.OLD != ''
+        shell: bash
+        run: python packaging/acceptance/data_probe.py seed "$SIDECAR" "$RUNNER_TEMP/aa-data" seed.json
 
       # ── the candidate, installed over it ──────────────────────────────────────────────────────────────────
       - name: macOS - install the candidate (over the previous version when there is one)
@@ -121,6 +130,11 @@ jobs:
         if: env.OLD != ''
         shell: bash
         run: python packaging/acceptance/state_probe.py "$SIDECAR" "$RUNNER_TEMP/aa-state" state_after.json --expect-kept state_before.json
+      - name: The saved data and connection survive; the installed candidate's governed actions work and persist
+        shell: bash
+        run: |
+          SEED=""; [ -f seed.json ] && SEED=seed.json
+          python packaging/acceptance/data_probe.py verify "$SIDECAR" "$RUNNER_TEMP/aa-data" data_probe.json $SEED
       - name: Native checks of the installed candidate (process and API level)
         shell: bash
         env:
@@ -175,6 +189,23 @@ jobs:
         run: |
           sudo apt-get remove -y "$(dpkg-deb -f "$NEW" Package)"
           test ! -e /usr/bin/redevops-sidecar
+      - name: Windows - uninstall the NSIS installation
+        if: runner.os == 'Windows' && endsWith(env.NEW, '.exe')
+        shell: pwsh
+        run: |
+          $un = Join-Path (Split-Path $env:SIDECAR) 'uninstall.exe'
+          if (-not (Test-Path $un)) { throw "no uninstaller next to the sidecar: $un" }
+          Start-Process $un -ArgumentList '/S' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path $env:SIDECAR); $i++) { Start-Sleep 2 }
+          if (Test-Path $env:SIDECAR) { throw 'the sidecar is still on disk after uninstall' }
+      - name: macOS and AppImage - remove the application (the way a person uninstalls it)
+        if: runner.os == 'macOS' || endsWith(env.NEW, '.AppImage')
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then rm -rf "$HOME"/aa-install/*.app; else rm -rf squashfs-root "$NEW"; fi
+          test ! -e "$SIDECAR"
+      - name: After uninstalling, the person's data is still there
+        shell: bash
+        run: python packaging/acceptance/data_probe.py retained "$RUNNER_TEMP/aa-data" retained.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -186,4 +217,7 @@ jobs:
             launcher_gui.json
             state_before.json
             state_after.json
+            seed.json.checks.json
+            data_probe.json
+            retained.json
           if-no-files-found: warn
