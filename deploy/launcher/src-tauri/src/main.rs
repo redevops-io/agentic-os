@@ -738,7 +738,7 @@ mod tests {
             .collect()
     }
 
-    // ---- the compiled default window icon (RC3, D-LIC-11: temporary neutral artwork) -----------------------
+    // ---- the compiled default window icon (the rAIls mark; D-LIC-11 history: the "Re" artwork must not return) -------
 
     /// Minimal zlib/DEFLATE decoder (stored, fixed and dynamic blocks; after RFC 1951 / zlib's puff.c), so the
     /// test can decode `icons/32x32.png` without adding a dependency to the launcher.
@@ -888,12 +888,12 @@ mod tests {
         (w, h, px)
     }
 
-    /// RC3 / D-LIC-11: the window icon compiled into the binary (tauri-codegen embeds `bundle.icon`'s first
-    /// `.png` as the default window icon on macOS and Linux) is the temporary neutral 32x32 artwork, decoded
+    /// The window icon compiled into the binary (tauri-codegen embeds `bundle.icon`'s first
+    /// `.png` as the default window icon on macOS and Linux) is the rAIls mark's 32x32 icon, decoded
     /// RGBA for RGBA. A fingerprint of the previous artwork's pixels (taken from its decoded 32x32 RGBA, kept
     /// as a hash only) must not match.
     #[test]
-    fn the_compiled_default_window_icon_is_the_temporary_neutral_32x32() {
+    fn the_compiled_default_window_icon_is_the_rails_mark_32x32() {
         const OLD_RGBA_SHA256: &str = "c5070069b55e5bf69732713095d04e0f9e8079f13d0ffeec3f4d43acccd8b82c";
         let ctx = context();
         let icon = ctx.default_window_icon().expect("a default window icon is compiled in");

@@ -57,7 +57,7 @@ def render() -> str:
          "| Earlier image (no longer shipped) | an image whose C2PA metadata named a third-party generator (\"Black Forest Labs API\"); not retained |",
          "| Visible effect | the built UI contains a sample-data item with the path `/hero.jpg` as its preview; with the image removed that picture cannot load (the server answers 404); how the sample view then looks has not been inspected visually. Runtime data from the API carries no preview. |", "",
          "## 2. The launcher icons", "",
-         f"Generator: `scripts/make_neutral_icons.py` (SHA-256 `{sha(ROOT / 'scripts/make_neutral_icons.py')}`), Python standard library only; a rounded square with a slate gradient, one pale diamond and one round cut-out; no letters, no fonts, no model output.",
+         f"Generator: `brand/rails_mark.py` (SHA-256 `{sha(ROOT / 'brand/rails_mark.py')}`), Python standard library only; the rAIls mark, a square spiral of the integers with a marker on each prime (definition in `brand/README.md`); no letters in the application icons, no fonts, no model output in the files. These files replace the neutral temporary artwork of `scripts/make_neutral_icons.py` (kept for history); the previous letter mark stays out of the repository.", "",
          "Enforcement: `tests/test_launcher_icons.py` (files equal the generator output; the previous artwork is nowhere in the repository).", "",
          "| File | " + " | ".join(f"`{d}`" for d in ICON_DIRS) + " |", "|---|" + "---|" * len(ICON_DIRS)]
     for f in ICON_FILES:
@@ -71,7 +71,7 @@ def render() -> str:
     for g in UNVERIFIED_GLOBS:
         for f in tracked(g):
             L.append(f"| `{f}` | `{sha(ROOT / f)}` |")
-    L += ["", "## 4. How to regenerate", "", "`python scripts/make_neutral_icons.py`, then `python scripts/build_artwork_provenance.py` (the hero image has no generator any more).", ""]
+    L += ["", "## 4. How to regenerate", "", "`python brand/rails_mark.py <out dir>` and copy its icon outputs as `deploy/launcher/src-tauri/icons/README.md` says, then `python scripts/build_artwork_provenance.py` (the hero image has no generator any more).", ""]
     return "\n".join(L)
 
 
