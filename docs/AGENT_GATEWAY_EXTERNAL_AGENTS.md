@@ -106,7 +106,8 @@ An agent looks records up, **proposes** a change, and checks what became of it. 
 | `support.propose` | `support.request_private_note`, `support.request_status` |
 | `crm.records.read` | `crm.find_companies`, `crm.find_people` |
 | `crm.propose` | `crm.request_company`, `crm.request_person`, `crm.request_status` |
-| `egress:financial` | needed, besides `erp.read`, to receive invoice, order and quotation records |
+| `egress:financial` | needed, besides `erp.read`, to receive invoice, order and quotation records, and to see money on dashboards. The agent **and** its tenant must hold it |
+| `demo:financial` | dashboard money from sources declared synthetic only (a public demonstration); it unlocks no record lookup |
 
 The writes are deliberately narrow: a comment, a **draft** purchase order (a person still submits it in ERPNext), a
 **private** note, a company or contact **only if none has that domain or e-mail**. Nothing messages a customer, submits,
@@ -209,6 +210,7 @@ granted there, the same list that scopes that tenant's own sign-in:
 | `project:*` | all projects, with their status, missions, pending approvals and sources |
 | `project:<id>` | those projects in the project list, and their listing only. Missions, approvals and sources are not reliably separable by project, so a tenant that may not see every project gets none of them |
 | `dashboards:<source>` or `dashboards:*` | figures counted from those sources, within the tenant's projects (needs the `dashboards.read` grant) |
+| `egress:financial`, `egress:financial:<source>`, `demo:financial` | the money in those sources, for agents that hold a financial grant too (docs/DASHBOARDS.md) |
 
 A tenant with no entry, an expired one, or limits that cannot be read, sees nothing. This includes the shared bearer,
 whose tenant is `demo`. Without `AGENTIC_OS_TENANT_LIMITS` the deployment has one owner and reads are not scoped, except
@@ -222,7 +224,10 @@ tenant. On a deployment with tenant limits, add an entry for each agent tenant.
 `dashboards.list` and `dashboards.get` return the figures the app shows, built with the access of the agent's tenant. A
 table is cut to 10 rows and says how many there are; the records behind a number (the drill-down) are not exposed. E-mail
 addresses are masked. **Names of people and companies in table rows are not masked**: grant `dashboards.read` only to an
-agent that may see them. The shared bearer never has this grant.
+agent that may see them. The shared bearer never has this grant. **Money needs the financial-data grant as well** (the
+agent's and its tenant's): without it ERPNext, economic, billing and Metabase dashboards answer
+`not_authorized (missing_grant)` and are listed under `needs_financial_grant`; CRM and AI-usage figures keep their counts
+and show amounts as withheld.
 
 ## Endpoints
 

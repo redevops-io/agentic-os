@@ -25,7 +25,7 @@ CLEAR = ("AGENT_GATEWAY_TOKEN", "AGENT_GATEWAY_AUDIT_PATH", "AGENT_GATEWAY_MCP",
          "AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "AGENTIC_OS_PRODUCTS", "AGENTIC_OS_WRITES_DIR", "AGENTIC_OS_WRITES_TTL_S",
          "OPERATOR_BASIC_AUTH", "OUTREACH_BASIC_AUTH", "OPERATOR_BASIC_AUTH_USER", "OPERATOR_BASIC_AUTH_PASS", "AGENTIC_OS_PERMISSIONS",
          "CR_PERMISSIONS", "PERMISSIONS_KEY", "PERMISSIONS_DIR")
-LIMITS = {"acme": {"policy_refs": ["app:erpnext", "app:chatwoot", "app:twenty", "writes:decide"]},
+LIMITS = {"acme": {"policy_refs": ["app:erpnext", "app:chatwoot", "app:twenty", "writes:decide", "egress:financial"]},
           "globex": {"policy_refs": ["project:*", "writes:decide"]}}
 ALL = ["erp.read", "erp.propose", "support.read", "support.propose", "crm.records.read", "crm.propose"]
 INVOICE = {"doctype": "Sales Invoice", "name": "SINV-1"}
@@ -220,3 +220,15 @@ def test_without_a_state_directory_there_are_lookups_but_no_proposals_or_decisio
     names = offered(c, who)
     assert "erp.find_records" in names and not any(n.split(".", 1)[1].startswith("request_") for n in names if "." in n)
     assert c.get("/api/writes", headers=APPROVER).status_code == 404
+
+
+def test_the_agents_tenant_must_hold_the_financial_grant_too(world, monkeypatch):
+    c, agent, fake = world[0], world[1], world[2]
+    limits = {**LIMITS, "acme": {"policy_refs": [r for r in LIMITS["acme"]["policy_refs"] if r != "egress:financial"]}}
+    monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps(limits))
+    out = invoke(c, agent(["erp.read", "egress:financial"]), "erp.get_record", **INVOICE)
+    assert out["status"] == "error" and out["error"].startswith("not_authorized (missing_grant)") and "tenant" in out["error"], out
+    assert "Acme" not in json.dumps(out) and not fake.posts
+    limits["acme"]["policy_refs"].append("egress:financial:erpnext")
+    monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps(limits))
+    assert invoke(c, agent(["erp.read", "egress:financial"]), "erp.get_record", **INVOICE)["status"] == "ok"

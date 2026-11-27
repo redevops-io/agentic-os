@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Body, Header, HTTPException, Request
 
 from .access import Access
-from .service import DashboardService, Forbidden, NotFound, parse_filters
+from .service import DashboardService, Forbidden, NeedsFinancialGrant, NotFound, parse_filters
 from .store import StoreError
 
 CAP_INGEST = "dashboards.ingest_qa"
@@ -80,6 +80,8 @@ def make_router(svc: DashboardService) -> APIRouter:
             return fn()
         except NotFound:
             raise HTTPException(404, {"error": "not_found", "detail": "no such dashboard, project or record list"})
+        except NeedsFinancialGrant as e:
+            raise HTTPException(403, {"error": "missing_grant", "detail": str(e)})
         except Forbidden:
             raise HTTPException(403, {"error": "forbidden", "detail": "you do not have access to this dashboard or project"})
         except StoreError as e:

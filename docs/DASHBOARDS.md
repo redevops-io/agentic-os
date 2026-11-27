@@ -112,7 +112,8 @@ sends no SQL of its own, and nothing here is required on a desktop or WASM insta
 No new authority. The caller is the principal Projects already resolves; a tenant bearer sees what
 `AGENTIC_OS_TENANT_LIMITS` grants (`dashboards:<source>`, `project:<id>`, or `*`); an Enterprise overlay may answer
 `provider.dashboard_access(principal)` instead; an `access` section in the dashboards file names what an anonymous caller
-and each principal may see, and with it present anything not granted is refused. An aggregate covers only records the
+and each principal may see, and with it present anything not granted is refused. **Financial data additionally needs the
+financial-data grant** (below). An aggregate covers only records the
 caller may read, and a caller scoped to some projects is told the totals are partial.
 
 Write routes (`PUT`/`DELETE /api/dashboards/views`, `POST /api/dashboards/{id}/track`, `POST /api/dashboards/qa/results`)
@@ -122,6 +123,33 @@ A deployment that enables business sources should not be reachable anonymously a
 (`agentic_os/projects/operator_gate.py`) puts a sign-in in front of the whole app: the operator's Basic credential or a
 control-plane bearer on every request, 503 when none is configured. A public evaluation deployment keeps the gate off and
 enables no business source.
+
+### Financial data needs its own grant
+
+Seeing a source is not seeing its money. The rule is one module (`agentic_os/financial_access.py`) used by the
+dashboards, their drill-downs and trends, Sidekick explanations, the agent gateway and ERPNext record lookups, so anything
+built on those reads inherits it.
+
+* **Refused whole** without the grant: `erpnext`, the economic events, `lago` and `metabase` (a saved question may hold
+  anything). **Money removed** from `twenty` (deal amounts) and `ai_usage` (recorded and projected spend): counts, stages,
+  tokens and durations remain, and each money figure reads "withheld", never zero and never "not recorded".
+* **Grants:** `egress:financial` (every source the caller may read), `egress:financial:<source>` (one), or
+  `demo:financial` (**only** sources the operator declared `data: synthetic` under `sources`).
+* **Who holds it:** the operator, the admin token, the desktop owner and a declared single owner. A tenant holds what its
+  `policy_refs` name. In an `access` section it is the `financial` key (`"*"`, a list, or `demo`). An Enterprise overlay
+  returns it as `financial` in `dashboard_access`; an answer without it grants none. **Anonymous callers can only be given
+  `demo`.** An agent needs the grant itself **and** its tenant must hold it.
+* A refusal says what is missing: HTTP 403 `missing_grant`, and the catalog lists such dashboards under
+  `needs_financial_grant`.
+
+A public demonstration over synthetic data:
+
+```yaml
+sources:
+  erpnext: {data: synthetic}
+access:
+  anonymous: {projects: "*", sources: [erpnext], financial: demo}
+```
 
 ## Self-improvement
 

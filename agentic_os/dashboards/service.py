@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from agentic_os import financial_access
+
 from . import access as accessmod
 from .access import Access
 from .build import Build
@@ -77,6 +79,10 @@ class NotFound(LookupError):
 
 class Forbidden(PermissionError):
     pass
+
+
+class NeedsFinancialGrant(Forbidden):
+    """Refused for want of the financial-data grant alone; its message says what to ask for."""
 
 
 def parse_filters(q: Mapping[str, Any], *, now: float) -> Filters:
@@ -148,10 +154,13 @@ class DashboardService:
         return self.cache.get(sid).status.state
 
     def catalog(self, acc: Access) -> Dict[str, Any]:
-        shown, hidden = [], []
+        shown, hidden, locked = [], [], []
         self.cache.warm([sid for df in DEFINITIONS for sid in df.needs_any if acc.source(sid)])
         for df in DEFINITIONS:
             states = {sid: self._source_state(sid, acc) for sid in df.needs_any}
+            if all(st in (NOT_CONNECTED, UNAUTHORIZED) for st in states.values()) and self._only_money_missing(df, acc):
+                locked.append({"id": df.id, "title": df.title, "detail": financial_access.refusal(f"the {df.title} dashboard")})
+                continue
             if any(st not in (NOT_CONNECTED, UNAUTHORIZED) for st in states.values()):
                 shown.append({"id": df.id, "title": df.title, "priority": df.priority, "group": df.group, "about": df.about,
                               "sources": [{"id": sid, "label": SOURCE_META[sid][0], "state": st} for sid, st in states.items() if st != NOT_CONNECTED]})
@@ -173,9 +182,13 @@ class DashboardService:
                     entry["needs"] = needs
                 hidden.append(entry)
         projects = [p for p in self.projects() if acc.project(str(p["id"]))]
-        return {"dashboards": shown, "not_connected": hidden, "projects": projects,
+        return {"dashboards": shown, "not_connected": hidden, "needs_financial_grant": locked, "projects": projects,
                 "access": {"principal": acc.principal, "scoped": acc.scoped, "basis": acc.basis},
                 "history": {"durable": self.store.durable}, "config_errors": len(self.config.errors), "generated_at": self.clock()}
+
+    def _only_money_missing(self, df: Any, acc: Access) -> bool:
+        enabled = [sid for sid in df.needs_any if self.cache.enabled(sid)]
+        return bool(enabled) and all(acc.lacks_money(sid) for sid in enabled)
 
     # ── build / drill ─────────────────────────────────────────────────────────────────────────────
     def build(self, dashboard_id: str, filters: Filters, acc: Access, *, fresh: bool = False) -> Dashboard:
@@ -184,6 +197,8 @@ class DashboardService:
             raise NotFound(dashboard_id)
         states = [st for st in (self._source_state(sid, acc) for sid in df.needs_any) if st != NOT_CONNECTED]
         if states and all(st == UNAUTHORIZED for st in states):
+            if self._only_money_missing(df, acc):
+                raise NeedsFinancialGrant(financial_access.refusal(f"the {df.title} dashboard"))
             raise Forbidden(dashboard_id)
         if filters.project and not acc.project(filters.project):
             raise Forbidden(filters.project)
@@ -331,6 +346,8 @@ class DashboardService:
             return None
         try:
             d = self.build(did, filters or parse_filters({}, now=self.clock()), acc)
+        except NeedsFinancialGrant as e:
+            return {"text": str(e), "topic": "Dashboards"}
         except (Forbidden, NotFound):
             return {"text": "You do not have access to that dashboard.", "topic": "Dashboards"}
         srcs = "; ".join(f"{s.label} ({s.state}{', read ' + _ago(d.generated_at - s.observed_at) if s.observed_at else ''})" for s in d.sources) or "no source"
@@ -361,4 +378,5 @@ def _ago(seconds: float) -> str:
     return "just now" if s < 60 else f"{s // 60} min ago" if s < 3600 else f"{s // 3600} h ago"
 
 
-__all__ = ["DashboardService", "Definition", "DEFINITIONS", "BY_ID", "NotFound", "Forbidden", "parse_filters", "MAX_DRILL"]
+__all__ = ["DashboardService", "Definition", "DEFINITIONS", "BY_ID", "NotFound", "Forbidden", "NeedsFinancialGrant", "parse_filters",
+           "MAX_DRILL"]

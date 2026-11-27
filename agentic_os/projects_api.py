@@ -1585,14 +1585,21 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     class _Dashboards:
         """The dashboards the app builds, read for an agent that was granted ``dashboards.read`` by name: the figures and their
         sources, never the records behind a number. They are built with the access of the AGENT'S TENANT, exactly as for that
-        tenant's own sign-in, so one tenant's agent cannot count another's records."""
+        tenant's own sign-in, so one tenant's agent cannot count another's records. Money needs the financial-data grant on
+        BOTH the agent and its tenant (``agentic_os/financial_access.py``)."""
         @staticmethod
         def _access(svc, principal):
             from agentic_os.agent_gateway.scope import tenant_is_current
             if not (principal.principal.id.startswith("agent:") and tenant_is_current(principal.tenant)):
                 return None
             acc = svc.access(f"requester:{principal.tenant}")
-            return None if acc.basis == "deployment" else acc          # never the unscoped fallback
+            if acc.basis == "deployment":
+                return None                                            # never the unscoped fallback
+            from dataclasses import replace
+            from agentic_os import financial_access as fa
+            tenant_holds = None if acc.grant.financial is None else frozenset(fa.name_of(s) for s in acc.grant.financial)
+            held = fa.both(tenant_holds, fa.covered(principal.scopes, svc.config.synthetic_sources()))
+            return replace(acc, grant=replace(acc.grant, financial=None if held is None else tuple(sorted(held))))
 
         def catalog(self, principal):
             svc = getattr(prov, "dashboards_service", None)
@@ -1601,11 +1608,12 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                 return {"dashboards": [], "not_connected": [], "projects": []}
             c = svc.catalog(acc)
             return {"dashboards": c["dashboards"], "projects": c.get("projects", []),
+                    "needs_financial_grant": c.get("needs_financial_grant", []),
                     "not_connected": [{k: d.get(k) for k in ("id", "title", "why")} for d in c["not_connected"]]}
 
         def get(self, principal, dashboard_id, days=30, project=""):
             from agentic_os.dashboards.contracts import Filters
-            from agentic_os.dashboards.service import Forbidden, NotFound
+            from agentic_os.dashboards.service import Forbidden, NeedsFinancialGrant, NotFound
             svc = getattr(prov, "dashboards_service", None)
             if svc is None:
                 return {"error": "the dashboards are not available in this build"}
@@ -1616,6 +1624,8 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                 return svc.build(dashboard_id, Filters(project=project, days=max(1, min(366, int(days)))), acc).to_dict()
             except NotFound:
                 return {"error": "no such dashboard or project"}
+            except NeedsFinancialGrant as e:
+                return {"error": str(e)}
             except Forbidden:
                 return {"error": "not permitted"}
 
@@ -1790,6 +1800,11 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                 elif not any(tenant_may_use(probe, s.id) for s in mine):
                     cannot[grant] = f"the tenant {tenant} is not granted that product here (products:<id> in AGENTIC_OS_TENANT_LIMITS)"
             from agentic_os.agent_gateway import app_record_capabilities as records
+            from agentic_os import financial_access as fa
+            for grant in (fa.GRANT, fa.DEMO_GRANT):
+                reaches = acc is not None and acc.basis != "deployment" and (acc.grant.financial is None or acc.grant.financial)
+                if not reaches and not records.tenant_holds_financial(probe, "erpnext"):
+                    cannot[grant] = f"the tenant {tenant} is not granted any financial data here (egress:financial in AGENTIC_OS_TENANT_LIMITS)"
             for grant, app_name in records.GRANT_APP.items():
                 if app_name not in app_writers:
                     cannot[grant] = f"{records.APP_NAMES[app_name]} is not connected on this deployment"

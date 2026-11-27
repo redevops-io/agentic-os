@@ -52,6 +52,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from agentic_os import financial_access
+
 SCHEMA = "aos.dashboards/v1"
 ENV = "AGENTIC_OS_DASHBOARDS"
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
@@ -62,7 +64,7 @@ _MATCH = {"qa_targets", "qa_suites", "sentinel_assets", "missions", "products"}
 _SUITE = {"id", "project", "name", "environment", "platforms", "targets", "profiles", "tests", "product"}
 _TEST = {"id", "requirements", "platforms", "title"}
 _REQ = {"id", "title", "project", "priority"}
-_GRANT = {"projects", "sources"}
+_GRANT = {"projects", "sources", "financial"}
 
 
 class ConfigError(ValueError):
@@ -115,13 +117,16 @@ class RequirementSpec:
 class Grant:
     projects: Optional[Tuple[str, ...]] = None      # None = all
     sources: Optional[Tuple[str, ...]] = None       # None = all
+    #: whose FINANCIAL data (agentic_os/financial_access.py): None = all, () = none. Never implied by ``sources``.
+    financial: Optional[Tuple[str, ...]] = ()
 
     def to_dict(self) -> Dict[str, Any]:
         return {"projects": "*" if self.projects is None else list(self.projects),
-                "sources": "*" if self.sources is None else list(self.sources)}
+                "sources": "*" if self.sources is None else list(self.sources),
+                "financial": "*" if self.financial is None else list(self.financial)}
 
 
-ALL = Grant()
+ALL = Grant(financial=None)
 NONE = Grant(projects=(), sources=())
 
 
@@ -174,6 +179,10 @@ class DashboardsConfig:
                 return p.id
         return ""
 
+    def synthetic_sources(self) -> Tuple[str, ...]:
+        """The sources the operator declared to hold synthetic data only: all a demonstration grant reaches."""
+        return tuple(sorted(sid for sid, opts in self.sources.items() if (opts or {}).get("data") == financial_access.SYNTHETIC))
+
     def source_project(self, source_id: str) -> str:
         return str((self.sources.get(source_id) or {}).get("project") or "")
 
@@ -202,7 +211,19 @@ def _str(v: Any, what: str, default: str = "", limit: int = 120) -> str:
     return v.strip()
 
 
-def _grant(raw: Any, what: str) -> Grant:
+def _financial(raw: Any, what: str, synthetic: Tuple[str, ...], *, anonymous: bool) -> Optional[Tuple[str, ...]]:
+    """``demo`` (the declared-synthetic sources), ``"*"`` or a list of source names. An anonymous caller gets ``demo`` or
+    nothing: real financial data is never given to people nobody has identified."""
+    if raw in (None, [], ""):
+        return ()
+    if raw == "demo":
+        return synthetic
+    if anonymous:
+        raise ConfigError(f"{what}.financial: an anonymous caller may only be given `demo` (the sources declared `data: synthetic`)")
+    return None if raw == "*" else _ids(raw, f"{what}.financial")
+
+
+def _grant(raw: Any, what: str, synthetic: Tuple[str, ...] = (), *, anonymous: bool = False) -> Grant:
     if not isinstance(raw, Mapping):
         raise ConfigError(f"{what}: must be a mapping")
     _closed(raw, _GRANT, what)
@@ -210,7 +231,8 @@ def _grant(raw: Any, what: str) -> Grant:
     def one(key: str) -> Optional[Tuple[str, ...]]:
         v = raw.get(key, [])
         return None if v == "*" else _ids(v, f"{what}.{key}")
-    return Grant(projects=one("projects"), sources=one("sources"))
+    return Grant(projects=one("projects"), sources=one("sources"),
+                 financial=_financial(raw.get("financial"), what, synthetic, anonymous=anonymous))
 
 
 def parse_config(doc: Any, *, source: str = "") -> DashboardsConfig:
@@ -268,6 +290,9 @@ def parse_config(doc: Any, *, source: str = "") -> DashboardsConfig:
         if proj and proj not in cfg.projects:
             cfg.errors.append(f"sources.{sid}: project {proj!r} is not declared")
             continue
+        if opts.get("data") not in (None, financial_access.SYNTHETIC):
+            cfg.errors.append(f"sources.{sid}: data may only be declared `{financial_access.SYNTHETIC}`")
+            opts = {k: v for k, v in opts.items() if k != "data"}
         cfg.sources[sid] = dict(opts)
 
     qa = doc.get("qa") or {}
@@ -329,14 +354,14 @@ def parse_config(doc: Any, *, source: str = "") -> DashboardsConfig:
                 raise ConfigError("access must be a mapping")
             _closed(acc, {"anonymous", "principals"}, "access")
             if "anonymous" in acc:
-                cfg.anonymous = _grant(acc["anonymous"], "access.anonymous")
+                cfg.anonymous = _grant(acc["anonymous"], "access.anonymous", cfg.synthetic_sources(), anonymous=True)
             pr = acc.get("principals") or {}
             if not isinstance(pr, Mapping):
                 raise ConfigError("access.principals must be a mapping")
             for name, g in pr.items():
                 if not isinstance(name, str) or not re.match(r"^[A-Za-z0-9._:@-]{1,120}$", name):
                     raise ConfigError("access.principals: a principal name is malformed")
-                cfg.principals[name] = _grant(g, f"access.principals.{name}")
+                cfg.principals[name] = _grant(g, f"access.principals.{name}", cfg.synthetic_sources())
         except ConfigError as e:
             cfg.errors.append(str(e))
             cfg.anonymous, cfg.principals = NONE, {}      # a broken access section grants nothing
