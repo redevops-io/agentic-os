@@ -1,9 +1,13 @@
 # Publishes the release images redevops-runtime and redevops-projects to ghcr.io/redevops-io, built from a release TAG of this repository.
-# Manual dispatch only, from the protected branch: a person types the confirmation. See docs/release/OCI_RELEASE_RUNBOOK.md (sections 3 to 6, option A: keyless signing).
-# Consumers verify with:
+# Manual dispatch only, ON THE TAG (`gh workflow run oci-release.yml --ref vX.Y.Z -f ref=vX.Y.Z -f "confirm=PUBLISH vX.Y.Z"`): the build is of an
+# immutable commit, so main may move on while it runs. The tagged commit must be contained in the protected branch main.
+# See docs/release/OCI_RELEASE_RUNBOOK.md (sections 3 to 6, option A: keyless signing).
+# Consumers verify BOTH the signature and that the tagged commit is contained in main (the workflow that ran is the tag's own, so its
+# checks alone prove nothing about review; releases before 0.4.28 were signed @refs/heads/main):
 #   cosign verify ghcr.io/redevops-io/<name>@sha256:<index digest> \
-#     --certificate-identity 'https://github.com/redevops-io/agentic-os/.github/workflows/oci-release.yml@refs/heads/main' \
+#     --certificate-identity 'https://github.com/redevops-io/agentic-os/.github/workflows/oci-release.yml@refs/tags/vX.Y.Z' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+#   gh api repos/redevops-io/agentic-os/compare/<tagged commit>...main -q .status      # "ahead" or "identical"
 name: oci-release
 on:
   workflow_dispatch:
@@ -44,7 +48,7 @@ jobs:
         run: |
           [ "$CONFIRM" = "PUBLISH $REF" ] || { echo "the confirmation does not match: type PUBLISH $REF"; exit 1; }
           case "$REF" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "ref must be a release tag like v0.6.1"; exit 1;; esac
-          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "dispatch from the protected branch main only (got $GITHUB_REF)"; exit 1; }
+          [ "$GITHUB_REF" = "refs/tags/$REF" ] || { echo "dispatch on the release tag itself (--ref $REF); got $GITHUB_REF"; exit 1; }
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           ref: refs/tags/${{ inputs.ref }}
@@ -56,7 +60,9 @@ jobs:
           COMMIT="$(git rev-parse HEAD)"
           # The signed provenance names GITHUB_SHA, the commit this workflow RAN FROM, not the tag it checked out. If the
           # two differ the image cannot be verified against its release, so nothing is built.
-          [ "$COMMIT" = "$GITHUB_SHA" ] || { echo "::error::main is at $GITHUB_SHA but $REF is $COMMIT: dispatch while main is at the tag (or cut a new release)"; exit 1; }
+          [ "$COMMIT" = "$GITHUB_SHA" ] || { echo "::error::this run is at $GITHUB_SHA but $REF is $COMMIT: dispatch on the tag"; exit 1; }
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$COMMIT" origin/main || { echo "::error::$REF ($COMMIT) is not contained in main: only reviewed, merged commits are released"; exit 1; }
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
           echo "short=${COMMIT:0:12}" >> "$GITHUB_OUTPUT"
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"

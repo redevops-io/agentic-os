@@ -81,7 +81,7 @@ the agent and its tenant, **and** the tenant's `app:erpnext`.
 
 | Capability | What it returns |
 |---|---|
-| `economics.discrepancies` | payments whose amount differs from the bank statement under the same reference, marked **ambiguous** where several payments or bank lines (or a netted withdrawal) share it; payments already cancelled and entered again |
+| `economics.discrepancies` | payments whose amount differs from the bank statement under the same reference, marked **ambiguous** where no single payment can be named (several payments or bank lines, different parties, or a withdrawal under the reference); payments already cancelled and entered again |
 | `economics.explain_adjustment` | discounts, cancellation, credit notes and payment differences of one invoice; any approval claim in a comment, marked unverified |
 | `economics.evidence` | messages and CRM notes that refer to one invoice or customer, as references with excerpts |
 

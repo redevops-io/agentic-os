@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Cut a kernel release, and verify a published one before anything is deployed from it.
 
-    python3 scripts/cut_release.py check   vX.Y.Z                       is origin/main ready to be this version?
-    python3 scripts/cut_release.py publish vX.Y.Z --notes NOTES.md [--title T]
-    python3 scripts/cut_release.py verify  vX.Y.Z                       the PUBLISHED release and its assets
+    python3 scripts/cut_release.py candidate vX.Y.Z --commit SHA        run integration-checks on that commit
+    python3 scripts/cut_release.py check     vX.Y.Z --commit SHA        is that commit ready to be this version?
+    python3 scripts/cut_release.py publish   vX.Y.Z --commit SHA --notes NOTES.md [--title T]
+    python3 scripts/cut_release.py verify    vX.Y.Z                     the PUBLISHED release and its assets
+
+A release is of ONE COMMIT contained in main (default: origin/main as it is when the command starts). Everything after the
+tag is built from the tag, which does not move, so nobody has to hold merges while a release is cut.
 
 Run it from a clone of the repository with the kernel's Python environment (needs git, gh, node and npm). Every step stops the run when it fails: no command is
 piped into another, and an exit status is never replaced by a later one. ``publish`` creates the release as a DRAFT, downloads
@@ -80,21 +84,39 @@ def run_problems(runs: List[Dict], required: Sequence[str] = REQUIRED_RUNS) -> L
     return problems
 
 
-def check(tag: str, runner: Runner = run) -> str:
-    """The commit to release: origin/main, at this version, with every workflow on it passed."""
-    version = version_of(tag)
+def release_commit(commit: str, runner: Runner = run) -> str:
+    """The full id of the commit to release, which must be contained in main."""
     runner(["git", "fetch", "--quiet", "--tags", "origin", "main"])
-    commit = str(runner(["git", "rev-parse", "origin/main"])).strip()
+    full = str(runner(["git", "rev-parse", "--verify", (commit or "origin/main") + "^{commit}"])).strip()
+    runner(["git", "merge-base", "--is-ancestor", full, "origin/main"])          # fails the release: not merged into main
+    return full
+
+
+def candidate(tag: str, commit: str, runner: Runner = run) -> str:
+    """Run the checks that do not run on a push (integration-checks) on exactly this commit, from a branch that stays at it."""
+    version_of(tag)
+    full = release_commit(commit, runner)
+    branch = f"rc/{tag}"
+    runner(["git", "push", "--quiet", "origin", f"{full}:refs/heads/{branch}"])
+    runner(["gh", "workflow", "run", "integration-checks.yml", "--repo", REPO, "--ref", branch])
+    print(f"ok   integration-checks dispatched on {branch} at {full[:8]}")
+    return full
+
+
+def check(tag: str, runner: Runner = run, commit: str = "") -> str:
+    """The commit to release: contained in main, at this version, with every workflow on it passed."""
+    version = version_of(tag)
+    commit = release_commit(commit, runner)
     for path, pattern in (("pyproject.toml", r'^version = "([^"]+)"'), ("agentic_os/__init__.py", r'^__version__ = "([^"]+)"')):
         found = re.search(pattern, str(runner(["git", "show", f"{commit}:{path}"])), re.M)
         if not found or found.group(1) != version:
-            raise ReleaseError(f"{path} on origin/main says {found.group(1) if found else 'no version'}, not {version}")
+            raise ReleaseError(f"{path} at {commit[:8]} says {found.group(1) if found else 'no version'}, not {version}")
     listing = json.loads(str(runner(["gh", "api", f"repos/{REPO}/actions/runs?head_sha={commit}&per_page=100"])))
     if listing.get("total_count", 0) > len(listing.get("workflow_runs", [])):
         raise ReleaseError("more workflow runs than one page holds: cannot tell that all of them passed")
     problems = run_problems(listing.get("workflow_runs", []))
     if problems:
-        raise ReleaseError(f"origin/main ({commit[:8]}) is not ready:\n  " + "\n  ".join(problems))
+        raise ReleaseError(f"{commit[:8]} is not ready:\n  " + "\n  ".join(problems))
     return commit
 
 
@@ -169,10 +191,10 @@ def verify(tag: str, runner: Runner = run) -> str:
     return commit
 
 
-def publish(tag: str, notes: pathlib.Path, title: str, runner: Runner = run) -> None:
+def publish(tag: str, notes: pathlib.Path, title: str, runner: Runner = run, commit: str = "") -> None:
     if not notes.is_file() or not notes.read_text().strip():
         raise ReleaseError(f"{notes}: write the release notes first")
-    commit = check(tag, runner)
+    commit = check(tag, runner, commit)
     remote = str(runner(["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}^{{}}"])).split()
     if remote and remote[0] != commit:
         raise ReleaseError(f"{tag} already exists at {remote[0][:8]}, not {commit[:8]}: tags are never moved")
@@ -200,17 +222,13 @@ def publish(tag: str, notes: pathlib.Path, title: str, runner: Runner = run) -> 
 
 
 def images(tag: str, commit: str, runner: Runner = run, pause: Callable[[float], None] = time.sleep) -> None:
-    """Build and sign the images (only while main is still the tagged commit) and wait for them to succeed."""
-    runner(["git", "fetch", "--quiet", "origin", "main"])
-    if str(runner(["git", "rev-parse", "origin/main"])).strip() != commit:
-        raise ReleaseError(f"main moved past {tag}: the images must be built while main is the tagged commit; cut a new release")
-
+    """Build and sign the images FROM THE TAG and wait for them to succeed. main may have moved on."""
     def ids() -> "set[int]":
         return {r["databaseId"] for r in json.loads(str(runner(
             ["gh", "run", "list", "--repo", REPO, "--workflow", IMAGES_WORKFLOW, "--commit", commit, "--json", "databaseId"])))}
 
     before = ids()
-    runner(["gh", "workflow", "run", IMAGES_WORKFLOW, "--repo", REPO, "--ref", "main", "-f", f"ref={tag}", "-f", f"confirm=PUBLISH {tag}"])
+    runner(["gh", "workflow", "run", IMAGES_WORKFLOW, "--repo", REPO, "--ref", tag, "-f", f"ref={tag}", "-f", f"confirm=PUBLISH {tag}"])
     new: "set[int]" = set()
     for _ in range(30):
         pause(6)
@@ -230,14 +248,17 @@ def images(tag: str, commit: str, runner: Runner = run, pause: Callable[[float],
 
 def main(argv: "List[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("check", "publish", "images", "verify"))
+    parser.add_argument("command", choices=("candidate", "check", "publish", "images", "verify"))
     parser.add_argument("tag")
+    parser.add_argument("--commit", default="", help="the commit to release (default: origin/main now)")
     parser.add_argument("--notes", type=pathlib.Path)
     parser.add_argument("--title", default="")
     args = parser.parse_args(argv)
     try:
-        if args.command == "check":
-            print(f"ok   origin/main {check(args.tag)} is ready to be {args.tag}")
+        if args.command == "candidate":
+            candidate(args.tag, args.commit)
+        elif args.command == "check":
+            print(f"ok   {check(args.tag, commit=args.commit)} is ready to be {args.tag}")
         elif args.command == "verify":
             verify(args.tag)
         elif args.command == "images":
@@ -245,7 +266,7 @@ def main(argv: "List[str] | None" = None) -> int:
         else:
             if args.notes is None:
                 parser.error("publish needs --notes")
-            publish(args.tag, args.notes, args.title)
+            publish(args.tag, args.notes, args.title, commit=args.commit)
     except ReleaseError as exc:
         print(f"FAIL {exc}", file=sys.stderr)
         return 1

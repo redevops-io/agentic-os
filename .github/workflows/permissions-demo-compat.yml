@@ -38,7 +38,9 @@ permissions:
 # commit, because the copies are exactly the thing that drifted apart here before.
 
 concurrency:
-  group: permissions-demo-compat-${{ github.ref }}
+  # a pull request drops its superseded runs; every pushed or dispatched commit keeps its own: a later merge never
+  # cancels the checks of a commit that is being released
+  group: permissions-demo-compat-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:

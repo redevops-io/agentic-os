@@ -15,10 +15,18 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.27; no version set)
+## Unreleased (after v0.4.28; no version set)
+
+## v0.4.28 (financial data needs the financial-data grant)
 
 - **Changed (breaking for access):** financial data now needs the financial-data grant everywhere it can be read: dashboards, drill-downs, trends, Sidekick explanations, `dashboards.get` for agents and ERPNext record lookups. ERPNext, the economic events, Lago and Metabase are refused without it; CRM deal amounts and AI spend are removed and shown as withheld. Add `egress:financial` (or `egress:financial:<source>`) to a tenant's `policy_refs` **and** to the agents that need it; add `financial` to the principals in a dashboards `access` section. Anonymous callers can only be given the new `demo:financial` grant, which reaches only sources declared `data: synthetic`. The operator, admin token, desktop owner and a declared single owner are unaffected. See docs/DASHBOARDS.md.
 - Fixed: metric history was attached to a figure the caller was not allowed to see.
+- Economic intelligence for external agents, read-only: `economics.discrepancies`, `economics.explain_adjustment` and `economics.evidence` (references and excerpts within each source's grants; what is withheld is only counted). A difference is not presented as an error and no change is proposed.
+- Reconciliation compares payments and bank lines per reference: several payments, several lines, different parties or a withdrawal under one reference are reported as ambiguous and get no correction proposal.
+- A tenant approver can answer an agent's OAuth consent page in a browser, through the approval-page sign-in.
+- Fixed: with enterprise permissions on, every governed write and application lookup by an external agent was denied (the agent was described with the kernel's `Identity`, which the real `context_runtime_enterprise` authorizer treats as no principal). It failed closed. The enterprise package must also register `governed-writes` as a fleet resource.
+- Fixed (social app): a failed live render could read "Sent to vibexgen ✓" or "Queued"; a failed live trend search returned built-in sample data; a failed draft read "Drafted ✓" and the reel's draft read `queued`; a recording no worker took read `recording` for ever.
+- Releases are of one commit contained in main and images are built from its tag (`cut_release.py ... --commit`); no merge holds, and a later merge no longer cancels a commit's CI. Image signatures from 0.4.28 name `oci-release.yml@refs/tags/vX.Y.Z`.
 - Economic intelligence: a message that states no figure is linked to an adjustment by what it is about (topic and one-order/several-orders labels from a model that only labels; the code decides), ambiguous matches are kept; `findings.py` (five reconciliation kinds), `bank.py` (independent statement CSV vs received payments), `mail.py` (read-only IMAP and messenger adapters), `Slack.read_history`, and per-source access scopes (`evidence.visible_to`). Docs: docs/ECONOMIC_EVENTS.md.
 
 ## v0.4.27 (failed sign-ins never keep a correct credential out)

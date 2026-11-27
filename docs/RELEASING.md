@@ -26,48 +26,38 @@ gh release list --repo redevops-io/agentic-os --limit 5
 `git`, `gh`, `node` and `npm`). Do not run the publishing commands by hand: v0.4.24 was published with a browser archive
 that did not load, because a failing check was piped into `tail`.
 
+**A release is of one commit contained in main**, named by its id; everything after the tag is built from the tag, which
+does not move. **Nobody holds merges** while a release is cut: what is not in the commit ships next time, and a later merge
+does not cancel the commit's checks.
+
 ```bash
-python3 scripts/cut_release.py check   vX.Y.Z                    # origin/main is this version and every run on it passed
-python3 scripts/cut_release.py publish vX.Y.Z --notes NOTES.md   # build, probe, tag, DRAFT, re-download, check, publish, images
-python3 scripts/cut_release.py verify  vX.Y.Z                    # the published assets: run before deploying from a release
+C="$(git rev-parse origin/main)"     # the merge commit of the release PR, taken right after merging it
+python3 scripts/cut_release.py candidate vX.Y.Z --commit $C                  # integration-checks on exactly that commit (branch rc/vX.Y.Z)
+python3 scripts/cut_release.py check     vX.Y.Z --commit $C                  # it is this version and every run on it passed
+python3 scripts/cut_release.py publish   vX.Y.Z --commit $C --notes NOTES.md # build, probe, tag, DRAFT, re-download, check, publish, images
+python3 scripts/cut_release.py verify    vX.Y.Z                              # the published assets: run before deploying from a release
 ```
 
 `publish` makes the release public only after the assets downloaded back from the draft match their checksum, hold what
 the tagged source builds and run in WebAssembly Python. It then builds and signs the images and waits for success. If the
-image run fails after publication, fix the cause and run `images vX.Y.Z` while `main` is still the tagged commit.
+image run fails after publication, fix the cause and run `images vX.Y.Z` (the build is of the tag).
 The checklist below covers preparing the version (steps 1 to 3); the script replaces steps 4 to 6.
 
 ## Checklist
 
-1. Start from an up-to-date `main` with a green `tests` workflow.
-   Run the `integration-checks` workflow on `main` as well (`gh workflow run integration-checks.yml --ref main`) and wait for it:
-   it runs the Support, Billing and Outreach apps against real, throwaway Chatwoot, Lago and Twenty instances. A failure there is a
-   release blocker for the app it names; the unit tests use stand-ins and cannot show it.
+1. Start from an up-to-date `main`. `integration-checks` (the Support, Billing and Outreach apps against real, throwaway
+   Chatwoot, Lago and Twenty instances; the unit tests use stand-ins and cannot show it) must pass on the commit being
+   released: `cut_release.py candidate` runs it there. A failure is a release blocker for the app it names.
 2. Pick the next version `X.Y.Z` (the tag will be `vX.Y.Z`; it must be greater than the latest existing tag).
 3. In a release PR, set `version = "X.Y.Z"` in `pyproject.toml` so it equals the tag you are about to create.
    In the same PR set `ARG KERNEL_REF=vX.Y.Z` in every `apps/*/Dockerfile` and the pin in
    `apps/infra/requirements.txt` (`tests/test_app_dockerfiles.py` enforces they equal the pyproject version).
    Merge it.
-4. Tag the merge commit and push the tag:
-   ```bash
-   git checkout main && git pull
-   git tag -a vX.Y.Z -m "vX.Y.Z"
-   git push origin vX.Y.Z
-   ```
-   Do not use an `apps-v*` tag for this: that prefix triggers the desktop-launcher build
-   (`.github/workflows/native-packaging.yml`).
-5. Create the GitHub Release for the tag so "Latest release" is not stale:
-   ```bash
-   gh release create vX.Y.Z --repo redevops-io/agentic-os \
-     --title "vX.Y.Z" --generate-notes --latest --verify-tag
-   ```
-   Use `--notes-file <file>` instead of `--generate-notes` for hand-written notes.
-6. Verify all three agree:
-   ```bash
-   gh release list --repo redevops-io/agentic-os --limit 1   # shows vX.Y.Z, Latest
-   git describe --tags --abbrev=0                            # vX.Y.Z
-   grep -m1 '^version' pyproject.toml                        # version = "X.Y.Z"
-   ```
+4. Release the merge commit with the script above (`candidate`, `check`, `publish`). It tags, creates the release as a
+   draft, checks the downloaded assets, publishes and builds the images from the tag. Do not use an `apps-v*` tag: that
+   prefix triggers the desktop-launcher build (`.github/workflows/native-packaging.yml`).
+5. If the script stops, fix the cause and run the same command again: an existing tag at that commit is reused, never moved.
+6. `cut_release.py verify vX.Y.Z` before deploying from the release.
 7. Bump the `agentic-os` tag pins in downstream repos separately, via their own PRs.
 
 ## Desktop releases (branch `release/0.6.0`, tags `r0prime-vX.Y.Z`)

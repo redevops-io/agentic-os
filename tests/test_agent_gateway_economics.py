@@ -212,7 +212,7 @@ def test_it_is_read_only_and_a_difference_is_never_presented_as_something_to_cor
     out = w.call(who, "economics.discrepancies")
     assert out["status"] == "ok", out
     (d,) = out["output"]["discrepancies"]
-    assert (d["reference"], d["posted"], d["bank"], d["invoices"]) == ("WIRE-C1", "3800.00", "3380.00", ["S5"]) and "ambiguous" not in d
+    assert (d["reference"], d["posted"], d["bank"], d["invoices"], d["ambiguous"]) == ("WIRE-C1", "3800.00", "3380.00", ["S5"], "")
     text = json.dumps(out["output"]).lower()
     assert not re.search(r"cancel payment|record it again|correction_inputs|proposed_correction", text), text
     assert "not by itself an error" in out["output"]["note"]
@@ -221,9 +221,9 @@ def test_it_is_read_only_and_a_difference_is_never_presented_as_something_to_cor
 
 
 @pytest.mark.parametrize("change,why", [
-    (lambda led: led.payments.update(second(led, 500)), "2 payments share this reference"),
-    (lambda led: led.rows["Bank Transaction"].append(bank_line("BT-2", 200)), "2 bank lines share this reference"),
-    (lambda led: led.rows["Bank Transaction"][0].update(deposit=3800, withdrawal=420), "a withdrawal is netted"),
+    (lambda led: led.payments.update(second(led, 500)), "2 payments are submitted under this reference"),
+    (lambda led: led.rows["Bank Transaction"].append(bank_line("BT-2", 200)), "2 bank lines carry this reference"),
+    (lambda led: led.rows["Bank Transaction"][0].update(deposit=3800, withdrawal=420), "is a withdrawal"),
 ])
 def test_a_difference_that_compares_a_payment_with_a_total_is_marked_ambiguous(world, change, why):
     w = world()
