@@ -121,9 +121,11 @@ class OperatorGateMiddleware:
                 return await self.app(scope, receive, send)
         # a person who follows a deep link without a session is sent to sign in, not shown a bare refusal
         if scope["type"] == "http" and self.session_check is not None and scope.get("method") == "GET" and not auth \
-                and (rel == "/approvals" or rel.startswith("/approvals/")) and ".." not in rel.split("/"):
+                and (rel in ("/approvals", "/oauth/authorize") or rel.startswith("/approvals/")) and ".." not in rel.split("/"):
+            from urllib.parse import quote  # noqa: PLC0415
             from .approval_pages import safe_next  # noqa: PLC0415  (only a path of those pages ever reaches the header)
-            target = (root.rstrip("/") + "/approvals/signin?next=" + safe_next(rel)).encode("ascii", "ignore")
+            then = rel + "?" + scope.get("query_string", b"").decode("latin-1") if rel == "/oauth/authorize" else rel
+            target = (root.rstrip("/") + "/approvals/signin?next=" + quote(safe_next(then), safe="/")).encode("ascii", "ignore")
             await send({"type": "http.response.start", "status": 303, "headers": [(b"location", target), (b"cache-control", b"no-store")]})
             await send({"type": "http.response.body", "body": b""})
             return

@@ -143,8 +143,13 @@ def from_env(environ=None, *, audit=None) -> Optional[OAuthGateway]:
 def approver_of(single_owner: str = "") -> Optional[Tuple[str, str]]:
     """``(person, tenant)`` for the signed-in person of this request who may give an agent access, or ``None``. Giving
     access is a decision, so a requester whose tenant has an approver is not one."""
-    from agentic_os.products.principal import current_principal, may_decide  # noqa: PLC0415
-    who = current_principal(single_owner)
+    from agentic_os.products.principal import current_principal  # noqa: PLC0415
+    return consenting(current_principal(single_owner))
+
+
+def consenting(who: Optional[str]) -> Optional[Tuple[str, str]]:
+    """``(person, tenant)`` when this identified person may give an agent access, else ``None``."""
+    from agentic_os.products.principal import may_decide  # noqa: PLC0415
     if not may_decide(who):
         return None
     role, _, tenant = who.partition(":")
@@ -233,9 +238,10 @@ Its name is what it calls itself; check where it will be sent back to: <code>{e(
 
 
 def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "",
-          unavailable=lambda tenant: {}) -> Dict[str, Any]:
+          unavailable=lambda tenant: {}, session_person=lambda request: None, sign_in=lambda request, then: None) -> Dict[str, Any]:
     """Add the routes to ``app`` and return their route policies. ``unavailable(tenant)`` names the grants that could not
-    work for that tenant on this deployment, each with the reason."""
+    work for that tenant on this deployment, each with the reason. ``session_person(request)`` names the person signed in
+    to the approval pages by this browser, if any: how a person without a browser-sendable credential consents."""
     from agentic_os.app_kit.route_authz import RoutePolicy  # noqa: PLC0415
     from agentic_os.mission.approval import default_replay_guard  # noqa: PLC0415
     server, issuer, guard = oauth.server, oauth.issuer, default_replay_guard()
@@ -250,6 +256,18 @@ def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "",
         if who is None:
             raise HTTPException(401, {"error": "access_denied", "error_description": "sign in to this deployment first"})
         return who
+
+    def consent_person(request: Request) -> Tuple[Tuple[str, str], bool]:
+        """The person answering a consent page, and whether the browser's SESSION says so. A request that carries its own
+        ``Authorization`` is judged by that alone; only one without it may be recognised by the session."""
+        if "authorization" not in request.headers:
+            signed_in = session_person(request)
+            if signed_in:
+                who = consenting(signed_in)
+                if who is None:
+                    raise HTTPException(401, {"error": "access_denied", "error_description": "your sign-in may not give an agent access"})
+                return who, True
+        return require_person(), False
 
     @app.get("/.well-known/oauth-authorization-server")
     @app.get("/.well-known/openid-configuration")       # where an MCP client looks when the issuer has a path
@@ -282,7 +300,12 @@ def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "",
 
     @app.get("/oauth/authorize")
     def authorize_page(request: Request):
-        who = require_person()
+        if "authorization" not in request.headers and approver_of(single_owner()) is None and not session_person(request):
+            query = request.url.query
+            to = sign_in(request, "/oauth/authorize?" + query) if query else None
+            if to:                                      # a person who followed a client's link: sign in, then come back here
+                return RedirectResponse(to, 303, headers=no_store)
+        who, _ = consent_person(request)
         if not _ticket_key():
             return error("server_error", "consent needs AGENTIC_OS_APPROVAL_SECRET on this deployment", 503)
         q = {k: request.query_params.getlist(k) for k in request.query_params.keys()}
@@ -310,10 +333,11 @@ def mount(app: Any, oauth: OAuthGateway, *, single_owner=lambda: "",
 
     @app.post("/oauth/authorize")
     async def authorize_answer(request: Request):
-        who = require_person()
+        who, by_session = consent_person(request)
         origin = request.headers.get("origin", "")
         own = urlsplit(issuer)
-        if origin and origin != f"{own.scheme}://{own.netloc}":
+        # a cookie is sent by the browser on its own, so an answer resting on it must SAY it came from this site
+        if (origin or by_session) and origin != f"{own.scheme}://{own.netloc}":
             return error("access_denied", "this answer came from another site", 403)
         form = _form(await request.body())
         person, tenant = who
