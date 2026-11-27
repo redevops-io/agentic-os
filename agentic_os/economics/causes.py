@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence
 
-from .bank import BankFinding, Posting
+import datetime as _dt
+
+from .bank import LATE_DAYS, BankFinding, Posting
 
 KINDS = ("fee", "fx", "partial_settlement", "allocation", "reversal", "timing")
 
@@ -83,7 +85,20 @@ def explain_difference(reference: str, difference: Decimal, posting: Optional[Po
     if by.get("partial_payment"):
         add(Cause("partial_settlement", "supported", abs(p.difference or Decimal("0.00")), p.lines, p.note))
     else:
-        add(Cause("partial_settlement", "excluded" if mine else "unknown", None, [l for x in mine for l in x.lines], "all of the payment arrived" if mine else "the reference is not on the statement"))
+        short = by.get("amount_mismatch")
+        if short and "currency" not in short.note and short.banked is not None and short.booked is not None and short.banked < short.booked:
+            # one deposit smaller than the payment: a second instalment may still be on its way. The statement can exclude that only by running LATE_DAYS past both the posting and the deposit.
+            need = max(posting.date if posting else "", short.latest or "")
+            try:
+                closed = bool(posting and short.through and short.latest and _dt.date.fromisoformat(short.through) >= _dt.date.fromisoformat(need) + _dt.timedelta(days=LATE_DAYS))
+            except ValueError:
+                closed = False
+            if closed:
+                add(Cause("partial_settlement", "excluded", None, short.lines, f"the statement runs to {short.through}, {LATE_DAYS}+ days past the payment and the deposit, and shows no further deposit under this reference"))
+            else:
+                add(Cause("partial_settlement", "unknown", None, short.lines, "one deposit is smaller than the payment and the statement does not run far enough past it to rule out a second instalment"))
+        else:
+            add(Cause("partial_settlement", "excluded" if mine else "unknown", None, [l for x in mine for l in x.lines], "all of the payment arrived" if mine else "the reference is not on the statement"))
     if posting is not None and posting.unallocated not in (None, Decimal("0.00")):
         add(Cause("allocation", "supported", abs(posting.unallocated), [posting.name], f"the payment holds {posting.unallocated} not allocated to any invoice"))
     else:
