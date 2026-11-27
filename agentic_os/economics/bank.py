@@ -51,6 +51,7 @@ class Posting:
     reference: str
     party: str
     invoices: Sequence[str] = ()
+    unallocated: Optional[Decimal] = None   # what the payment holds that no invoice has been allocated (None = not read)
 
 
 @dataclass(frozen=True)
@@ -112,8 +113,16 @@ def parse_statement(text: str, name: str, ex: Extraction, *, currency: str = "US
     return out
 
 
+def posting_from_entry(doc: Mapping[str, Any]) -> Posting:
+    """A ``Posting`` from a Payment Entry document as ERPNext returns it (``name``, ``posting_date``, ``paid_amount``, ``reference_no``, ``party``, ``unallocated_amount``, and the
+    ``references`` child rows). Used when the caller already holds the document and does not want ``read_postings`` to read it again."""
+    inv = tuple(str(r.get("reference_name")) for r in (doc.get("references") or []) if r.get("reference_doctype") == "Sales Invoice" and r.get("reference_name"))
+    return Posting(str(doc.get("name") or ""), str(doc.get("posting_date") or "")[:10], money(doc.get("paid_amount")), str(doc.get("paid_to_account_currency") or doc.get("currency") or "USD"),
+                   _ref(doc.get("reference_no")), str(doc.get("party") or ""), inv, money(doc["unallocated_amount"]) if doc.get("unallocated_amount") is not None else None)
+
+
 def read_postings(client: Any, ex: Extraction) -> List[Posting]:
-    pays = _read(client, ex, "Payment Entry", ["name", "docstatus", "party", "paid_amount", "reference_no", "payment_type", "posting_date", "paid_to_account_currency"], [["docstatus", "=", 1]])
+    pays = _read(client, ex, "Payment Entry", ["name", "docstatus", "party", "paid_amount", "reference_no", "payment_type", "posting_date", "paid_to_account_currency", "unallocated_amount"], [["docstatus", "=", 1]])
     refs = _read(client, ex, "Payment Entry Reference", ["parent", "reference_doctype", "reference_name"], None)
     if pays is None:
         ex.gap("bank", "payments could not be read", "no comparison can be made")
@@ -123,7 +132,8 @@ def read_postings(client: Any, ex: Extraction) -> List[Posting]:
         if r.get("reference_doctype") == "Sales Invoice":
             by_pay.setdefault(str(r["parent"]), []).append(str(r["reference_name"]))
     return [Posting(str(p["name"]), str(p.get("posting_date") or "")[:10], money(p.get("paid_amount")), str(p.get("paid_to_account_currency") or "USD"), _ref(p.get("reference_no")),
-                    str(p.get("party") or ""), tuple(by_pay.get(str(p["name"]), []))) for p in pays if int(p.get("docstatus") or 0) == 1 and p.get("payment_type") == "Receive"]
+                    str(p.get("party") or ""), tuple(by_pay.get(str(p["name"]), [])),
+                    money(p["unallocated_amount"]) if p.get("unallocated_amount") is not None else None) for p in pays if int(p.get("docstatus") or 0) == 1 and p.get("payment_type") == "Receive"]
 
 
 def _days(a: str, b: str) -> int:
