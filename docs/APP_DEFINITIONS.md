@@ -36,6 +36,9 @@ Turn on with `AGENTIC_OS_APPS=1` and `AGENTIC_OS_WRITES_DIR`; the tenant needs `
 - **Author text is not checked.** An author, often a model, can write anything in a text block or on a button, including
   claims that are false (in a qualification run a model wrote that its form waited for approval; it does not). The install
   card shows every such text and label with what each button really does, and every form carries the platform's own note.
+- **Who can read and change records:** people of the tenant on the application's pages, and every agent of the tenant
+  with `apps.use`. The other permissions an application needs govern its tools, not its records; do not keep in records
+  what an `apps.use` agent of that tenant should not see.
 - **State** is the runtime's, per tenant: typed fields, size limits, a revision per record, retry-safe adds. A newer
   version keeps the records, including values of fields and collections it no longer has (changing a record leaves them
   in place). The card of a newer version says what it hides or restricts for records already kept.
