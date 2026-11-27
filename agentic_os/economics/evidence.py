@@ -173,11 +173,16 @@ def collect_twenty(client: Any, ex: Extraction, *, tenant: str, identity: Identi
     return out
 
 
-def visible_to(comms: Iterable[Communication], granted: Iterable[str]) -> Tuple[List[Communication], int]:
+def visible_to(comms: Iterable[Communication], granted: Iterable[str]) -> Tuple[List[Communication], int, Dict[str, int]]:
     """What a caller may read: a communication is visible only when its own ``access_scope`` is EXACTLY one the caller holds. A scope never covers a longer one (the source does not
-    include its private notes, a mailbox does not include another mailbox, a channel does not include another channel). Returns the visible ones and how many were withheld; the count
-    is the whole of what is said about the rest. Apply this BEFORE correlating, explaining or caching, so withheld text is never ranked, shown to a model or cached for someone else."""
+    include its private notes, a mailbox does not include another mailbox, a channel does not include another channel). Returns the visible ones, how many were withheld, and that count
+    per scope: those counts are the whole of what is said about the rest ("a message exists"; no id, no excerpt). Apply this BEFORE correlating, explaining or caching, so withheld text
+    is never ranked, shown to a model or cached for someone else."""
     held = set(granted)
     comms = list(comms)
     ok = [c for c in comms if c.ref.access_scope in held]
-    return ok, len(comms) - len(ok)
+    per: Dict[str, int] = {}
+    for c in comms:
+        if c.ref.access_scope not in held:
+            per[c.ref.access_scope] = per.get(c.ref.access_scope, 0) + 1
+    return ok, len(comms) - len(ok), per

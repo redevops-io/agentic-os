@@ -106,3 +106,24 @@ def test_a_message_percent_the_discount_does_not_reproduce_is_a_contradiction_bu
 def test_a_commitment_and_its_record_that_differ_in_currency_are_a_contradiction():
     out = F.reconcile_both([], {}, [_cm("a", [OK.ref.id], amount="2000")], [R.Match("a", "inconsistent", ["CN-1:sale"], note="EUR vs USD")], [OK])
     assert [f.kind for f in out] == ["contradicts_record"] and out[0].sources == ["CN-1:sale"]
+
+
+def test_a_message_about_one_order_is_tied_to_the_clearly_nearest_event_but_not_when_two_are_about_equally_near_or_it_concerns_several():
+    d1, s1 = ev("INV-1:discount", Kind.DISCOUNT, "-300", "2026-09-08"), ev("INV-1:sale", Kind.SALE, "3000", "2026-09-08")
+    d2, s2 = ev("INV-2:discount", Kind.DISCOUNT, "-300", "2026-09-29"), ev("INV-2:sale", Kind.SALE, "3000", "2026-09-29")
+    msg = comm("7/1", "7", "customer", "Please confirm the founding rate for our first order.", "2026-09-02T09:00:00Z")
+    t = {msg.ref.id: "terms"}
+    one = [e for e in correlate.correlate([msg], [s1, d1, s2, d2], topics=t, scopes={msg.ref.id: "single"}) if e.relation == "may_explain"]
+    assert [(e.target, e.status) for e in one] == [("INV-1:discount", "linked")] and "nearest" in one[0].note and "scope" in one[0].method
+    several = [e for e in correlate.correlate([msg], [s1, d1, s2, d2], topics=t, scopes={msg.ref.id: "several"}) if e.relation == "may_explain"]
+    assert {e.status for e in several} == {"ambiguous"}
+    d3, s3 = ev("INV-3:discount", Kind.DISCOUNT, "-300", "2026-09-04"), ev("INV-3:sale", Kind.SALE, "3000", "2026-09-04")
+    tie = [e for e in correlate.correlate([msg], [s1, d1, s3, d3], topics=t, scopes={msg.ref.id: "single"}) if e.relation == "may_explain"]
+    assert {e.status for e in tie} == {"ambiguous"}                                  # 6 days and 2 days apart: closer than the margin, nothing is forced
+
+
+def test_classify_returns_topics_and_scopes_for_shown_messages_only():
+    def model(messages):
+        return json.dumps({"labels": [{"id": ASK.ref.id, "topic": "terms", "scope": "single"}, {"id": OK.ref.id, "topic": "terms", "scope": "bogus"}, {"id": "x:y", "topic": "terms", "scope": "single"}]})
+    topics, scopes = R.classify([ASK, OK], model)
+    assert topics == {ASK.ref.id: "terms", OK.ref.id: "terms"} and scopes == {ASK.ref.id: "single"}

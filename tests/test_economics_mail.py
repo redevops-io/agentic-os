@@ -94,8 +94,8 @@ def test_the_same_email_read_from_two_mailboxes_is_one_message_and_the_other_sco
 def test_a_mailbox_a_private_note_and_a_channel_are_never_covered_by_a_broader_grant():
     a = parse(eml("buyer@granite-works.example", "sales@meridian.example", "Hi", "x", "<1@x>"), "mailbox:sales@meridian.example/INBOX")
     b = parse(eml("buyer@granite-works.example", "dana@meridian.example", "Hi", "y", "<2@x>"), "mailbox:dana@meridian.example/INBOX")
-    ok, withheld = evidence.visible_to([a, b], {"mailbox:sales@meridian.example/INBOX"})
-    assert ok == [a] and withheld == 1
+    ok, withheld, per = evidence.visible_to([a, b], {"mailbox:sales@meridian.example/INBOX"})
+    assert ok == [a] and withheld == 1 and per == {"mailbox:dana@meridian.example/INBOX": 1}
     assert evidence.visible_to([a], {"mailbox:sales@meridian.example"})[0] == []          # a prefix is not a grant
     assert evidence.INTERNAL_SUFFIX == "/internal"
 

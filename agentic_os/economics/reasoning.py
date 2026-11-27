@@ -25,7 +25,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .contracts import EconomicEvent, Kind
-from .correlate import TOPICS, CorrelationEdge, mentions
+from .correlate import SCOPES, TOPICS, CorrelationEdge, mentions
 from .evidence import Communication
 
 Complete = Callable[[List[Dict[str, str]]], str]
@@ -164,27 +164,37 @@ def _prompt_topics(thread: Sequence[Communication]) -> List[Dict[str, str]]:
            "enquiry = a request for information (a price list, a document, a status) that is not itself a request for or grant of a concession\n"
            "thanks = gratitude for a favour or concession without saying what it was\n"
            "other = anything else.\n"
-           'Return {"labels": [{"id": message id, "topic": one label}]}.\n'
+           "Also label how many orders it concerns: single = ONE specific order (the first, the next, this week's, one named by date); several = upcoming, future, ongoing or every order; "
+           "unspecified = cannot tell.\n"
+           'Return {"labels": [{"id": message id, "topic": one label, "scope": single|several|unspecified}]}.\n'
            f"<<<MESSAGES\n{body}\nMESSAGES>>>")
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": ask}]
 
 
-def classify_topics(comms: Sequence[Communication], complete: Complete) -> Dict[str, str]:
-    """What each message is about, labelled by a model one conversation at a time. The model only labels; ``correlate`` decides what a label can and cannot link. Messages with
-    instruction-like text are never shown (they get no label), and a label outside ``TOPICS`` or for an id that was not shown is dropped."""
+def classify(comms: Sequence[Communication], complete: Complete) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """(topics, scopes): what each message is about and how many orders it concerns, labelled by a model one conversation at a time. The model only labels; ``correlate`` decides what a
+    label can and cannot link. Messages with instruction-like text are never shown (they get no label), and a label outside ``TOPICS``/``SCOPES`` or for an id that was not shown is dropped."""
     threads: Dict[Tuple[str, str], List[Communication]] = {}
     for c in comms:
         if not untrusted(c.text):
             threads.setdefault((c.ref.provenance.provider, c.ref.thread), []).append(c)
-    out: Dict[str, str] = {}
+    topics: Dict[str, str] = {}
+    scopes: Dict[str, str] = {}
     for _, msgs in sorted(threads.items()):
         msgs.sort(key=lambda m: m.ref.at)
         valid = {m.ref.id for m in msgs}
         ans = _parse_json(complete(_prompt_topics(msgs))) or {}
         for x in ans.get("labels") or []:
-            if isinstance(x, dict) and x.get("id") in valid and x.get("topic") in TOPICS:
-                out[str(x["id"])] = str(x["topic"])
-    return out
+            if isinstance(x, dict) and x.get("id") in valid:
+                if x.get("topic") in TOPICS:
+                    topics[str(x["id"])] = str(x["topic"])
+                if x.get("scope") in SCOPES:
+                    scopes[str(x["id"])] = str(x["scope"])
+    return topics, scopes
+
+
+def classify_topics(comms: Sequence[Communication], complete: Complete) -> Dict[str, str]:
+    return classify(comms, complete)[0]
 
 
 # ── B. commitments ────────────────────────────────────────────────────────────────────────────────────────
