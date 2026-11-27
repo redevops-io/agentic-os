@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.29; no version set)
 
+- **Fix:** `deploy/apps/bootstrap-secrets.sh` no longer writes secrets to a local file when Vault is configured (backend `auto`) and no Python able to reach it is found; it refuses and says how to ask for the file on purpose.
 - Developer mode can cover **local model runs on a budget** (`media.request_generate`): only in a deployment declared an isolated developer environment (`AGENTIC_OS_DEVELOPER_ENVIRONMENT=isolated`), for a tenant with `inference:local`, for a model the media service reports as on-premises and free per use **and** the deployment lists in `AGENTIC_OS_LOCAL_INFERENCE_BACKENDS`, within a budget of video seconds and images. Paid or hosted models, publication and money changes still wait for a person. The approval card now says where a model runs and whether a use is billed.
 - Media calls and downloads name their tenant, so the media service can enforce file ownership itself.
 - Economics for agents: `economics.findings` (deterministic findings, naming the kinds it did not evaluate; message text only within the caller's source grants).

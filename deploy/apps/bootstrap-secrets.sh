@@ -54,6 +54,14 @@ if [ "$BACKEND" = "vault" ]; then
   exit 1
 fi
 
+# `auto` means Vault when Vault is configured, and this fallback cannot write to Vault: writing the local file here
+# would be the same silent downgrade. Saying `file` is how to ask for the local file on purpose.
+if [ "$BACKEND" != "file" ] && [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
+  echo "  error: VAULT_ADDR and VAULT_TOKEN are set, but writing to Vault needs a Python environment with agentic_os" >&2
+  echo "         installed. Nothing was written. Install it, or set REDEVOPS_SECRETS_BACKEND=file to use a local file." >&2
+  exit 1
+fi
+
 echo "  (no local agentic_os install found on PATH - using the local-file-only generator)"
 
 # ---- fallback: Python-free, local-file-only generator (unchanged from before) ----
