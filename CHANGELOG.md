@@ -35,7 +35,16 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.30; no version set)
+## Unreleased (after v0.4.31; no version set)
+
+- **Changed, may need action:** a governed write now needs the requesting agent's **own stored authority** as well as a person's approval (`no_authority` otherwise). It is checked when proposed, when decided and just before the change, so **revoking an agent also stops its waiting requests**. Connections made by OAuth and tokens issued with `--authority-db` already have it. A deployment with `AGENTIC_OS_WRITES_DIR` but no `AGENTIC_OS_AUTHORITY_DB`, or file tokens issued without `--authority-db`, can no longer propose changes: set the store and reconnect or reissue. This is the same envelope the gateway already enforces in the production profile; no second permission system was added.
+
+## v0.4.31 (app images build again, a consent page that says what it grants, secrets stay in Vault)
+
+- **Fix:** 12 app images (Market Radar among them) could not be built: git was installed after the requirements step that needs it. A test now checks the order.
+- **Fix:** an agent whose corrected retry reused an `idempotency_key` after a failed write got a bare `denied`, which reads like a person refusing. That denial now says it is not, and what to do; every other denial stays unexplained. The application-definition help now says `version` is a whole number and that `capabilities` are tool names.
+- **Fix:** the agent consent page said a connection was read-only while offering grants that make files, keep records and start work without a further approval. It now says what the ticks mean.
+- **Fix:** `deploy/apps/bootstrap-secrets.sh` no longer writes secrets to a local file when Vault is configured (backend `auto`) and no Python able to reach it is found; it refuses and says how to ask for the file on purpose.
 
 ## v0.4.30 (portable applications, developer mode with local-model budgets, more reconciliation for agents)
 

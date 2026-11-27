@@ -11,7 +11,10 @@ In order, the first that refuses wins:
    so the local profile needs the grant on ``governed-writes.<tool>``; ENTERPRISE permissions are asked about the agent's own
    identity (user ``agent:<id>``, role ``external-agent``, its tenant). No gate installed means denied;
 4. a change needs a person's approval, and **someone must be able to give it**: otherwise it is denied rather than left waiting
-   for nobody.
+   for nobody;
+5. for a change that is requested through ``GovernedWrites``: **the requesting agent's own stored authority covers it**
+   (``GovernedWrites.authority_refusal``): scoped to the grants a person gave it, expiring, revocable. Approval alone is
+   not authority, and revoking an agent stops its waiting requests.
 
 The gateway's named grants (``erp.propose`` ...) are checked before any of this, by the gateway.
 """
@@ -38,7 +41,7 @@ class Verdict(str, Enum):
 @dataclass(frozen=True)
 class Authorization:
     verdict: Verdict
-    code: str = ""                           # tenant_not_granted | permission_denied | no_approver | unclassified
+    code: str = ""                           # tenant_not_granted | permission_denied | no_approver | unclassified | no_authority
     reason: str = ""
 
     @property

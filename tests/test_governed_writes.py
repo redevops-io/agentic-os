@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
+import time
 
 import pytest
 
 pytest.importorskip("httpx")
 
+from agentic_os.agent_gateway.agent_tokens import record_authority
 from agentic_os.governed_writes.service import ACTIONS, GovernedWrites, WriteError  # noqa: E402
 from tests._writes_fakes import FakeApps  # noqa: E402
 
@@ -40,10 +43,24 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", "s" * 48)
 
 
+#: every grant under which a change can be asked for
+WRITE_GRANTS = ["apps.install", "crm.propose", "economics.propose", "erp.propose", "market.propose", "media.generate",
+                "social.propose", "support.propose"]
+
+
+def connect(agent_id, *, tenant="acme", grants=WRITE_GRANTS, minutes=60, db=None):
+    """Give one agent its stored authority, exactly as connecting it or issuing its token does."""
+    now = time.time()
+    record_authority(db or os.environ["AGENTIC_OS_AUTHORITY_DB"], agent_id, list(grants), tenant=tenant, issued_at=now,
+                     expires_at=now + minutes * 60)
+
+
 class World:
-    def __init__(self, tmp_path, **kw):
+    def __init__(self, tmp_path, agents=("a1", "a2"), **kw):
         self.dir, self.apps, self.now = tmp_path / "writes", FakeApps(), [1_000_000.0]
         self.kw = kw
+        for agent_id in agents:                       # the agents these tests speak as were connected by a person
+            connect(agent_id)
         self.writes = self.start()
 
     def start(self):

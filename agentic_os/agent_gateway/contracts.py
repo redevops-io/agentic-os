@@ -195,6 +195,15 @@ class GatewayStatus(enum.Enum):
     ERROR = "error"
 
 
+#: denial rule -> what the caller is told. Only for rules decided AFTER the capability is visible and permitted, about
+#: the caller's own call; every other denial stays unexplained.
+DENIAL_ADVICE = {
+    "authority:outcome_unknown": "an earlier call of yours with this idempotency_key (or of this same action) did not finish "
+                                 "cleanly, so it is not sent again; this is not a person's decision. First check whether that "
+                                 "call changed anything; if it did not, call again with a NEW idempotency_key",
+}
+
+
 @dataclass(frozen=True)
 class GatewayResult:
     """The protocol-agnostic result. Adapters (MCP/REST) serialize this; the internal metadata
@@ -217,9 +226,12 @@ class GatewayResult:
 
     def client_view(self) -> dict:
         """What the external agent receives — deliberately minimal. Denials never say *why* at the
-        capability level and never reveal a hidden capability's existence (plan §18)."""
+        capability level and never reveal a hidden capability's existence (plan §18). The one reason given
+        (``DENIAL_ADVICE``) is about the caller's own earlier call of a tool it may see and use: without it the
+        refusal cannot be told from a person's "no", and the caller cannot recover."""
         if self.status is GatewayStatus.DENIED:
-            return {"status": "denied", "request_id": self.request_id}
+            advice = DENIAL_ADVICE.get(self.decision.reason)
+            return {"status": "denied", "request_id": self.request_id, **({"reason": advice} if advice else {})}
         if self.status is GatewayStatus.PENDING_APPROVAL:
             return {"status": "pending_approval", "request_id": self.request_id,
                     "mission_id": self.mission_id or None}

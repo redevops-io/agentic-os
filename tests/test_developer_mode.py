@@ -11,7 +11,7 @@ pytest.importorskip("httpx")
 
 from agentic_os.governed_writes import preauthorization as P  # noqa: E402
 from agentic_os.governed_writes.service import ACTIONS, WriteError  # noqa: E402
-from tests.test_governed_writes import CASES, COMMENT, World, _changes, _env  # noqa: E402,F401
+from tests.test_governed_writes import CASES, COMMENT, World, _changes, _env, connect  # noqa: E402,F401
 
 #: every action that exists is either eligible for developer mode or named here as never eligible: a new one must choose
 NEVER = {"economics.request_payment_correction",      # changes the ledger, needs an attestation
@@ -87,7 +87,8 @@ def test_anything_outside_the_grant_waits_for_a_person(tmp_path, monkeypatch, ch
     elif change == "other agent":
         ask = {"requester": "agent:a2"}
     elif change == "other tenant":
-        ask = {"tenant": "globex"}
+        connect("a3", tenant="globex")                # holds real authority there, so only the preauthorization is in question
+        ask = {"tenant": "globex", "requester": "agent:a3"}
     elif change == "other action":
         ask = {"action": "support.request_private_note"}
     elif change == "mode off":

@@ -646,3 +646,30 @@ def test_the_command_says_why_and_exits_nonzero(tmp_path, capsys):
     args = argparse.Namespace(scmd="init", backend="auto", dry_run=False, no_shell_profile=False)
     assert cli._secrets_cmd(args, b=mk(tmp_path, _authority(tmp_path))) != 0
     assert "rendered from Vault" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("backend", ["auto", "", "vault"])
+def test_without_a_python_that_can_reach_vault_a_configured_vault_never_becomes_a_local_file(tmp_path, backend):
+    (tmp_path / "bin").mkdir()
+    for name in ("python3", "python"):                      # an interpreter that cannot import agentic_os
+        fake = tmp_path / "bin" / name
+        fake.write_text("#!/bin/sh\nexit 1\n")
+        fake.chmod(0o755)
+    env = {"HOME": str(tmp_path), "REDEVOPS_SECRETS_BACKEND": backend, "REDEVOPS_SECRETS_NO_SHELL_PROFILE": "1",
+           "VAULT_ADDR": "http://127.0.0.1:1", "VAULT_TOKEN": "test-token"}
+    r = _run_shell_bootstrap(env, check=False)
+    assert r.returncode != 0 and "needs a Python environment with agentic_os" in r.stderr, (r.stdout, r.stderr)
+    assert not (tmp_path / ".config/redevops/secrets.env").exists()
+    assert "test-token" not in r.stdout + r.stderr
+
+
+def test_asking_for_the_local_file_still_works_without_python_even_with_vault_set(tmp_path):
+    (tmp_path / "bin").mkdir()
+    for name in ("python3", "python"):
+        fake = tmp_path / "bin" / name
+        fake.write_text("#!/bin/sh\nexit 1\n")
+        fake.chmod(0o755)
+    r = _run_shell_bootstrap({"HOME": str(tmp_path), "REDEVOPS_SECRETS_BACKEND": "file", "VAULT_ADDR": "http://127.0.0.1:1",
+                              "VAULT_TOKEN": "test-token"}, check=False)
+    assert "local-file-only generator" in r.stdout and (tmp_path / ".config/redevops/secrets.env").exists(), (r.stdout, r.stderr)
+
