@@ -15,7 +15,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.33; no version set)
+## Unreleased (after v0.4.34; no version set)
+
+## v0.4.34 (record permissions; long approved actions run as jobs)
 
 - **Changed, may need action:** opening an application no longer reaches its records. `apps.use` now only lists applications and shows their definitions; reading records needs `apps.records.read`, adding and changing them needs `apps.records.write`, and neither includes the other. No agent is granted them automatically: reconnect it or issue it a new token naming them (see `docs/APP_DEFINITIONS.md`). People reaching records on an application's pages are not affected.
 - **Long approved actions run as jobs.** Approving a model rendering a video no longer holds the request for minutes: the decision returns within about two seconds with state `deciding` and a `job` whose id is the request id; the same id gives the result (`media.request_status`, the approval's page, which reloads itself while it runs). Others keep reading and proposing meanwhile. Nothing runs twice, and a job whose service stopped ends `outcome_unknown` and is not run again. A caller that expected the final state from the decision call has to read it by the id when the state is `deciding`.
