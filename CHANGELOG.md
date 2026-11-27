@@ -15,7 +15,9 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.29; no version set)
+## Unreleased (after v0.4.30; no version set)
+
+## v0.4.30 (portable applications, developer mode with local-model budgets, more reconciliation for agents)
 
 - Developer mode can cover **local model runs on a budget** (`media.request_generate`): only in a deployment declared an isolated developer environment (`AGENTIC_OS_DEVELOPER_ENVIRONMENT=isolated`), for a tenant with `inference:local`, for a model the media service reports as on-premises and free per use **and** the deployment lists in `AGENTIC_OS_LOCAL_INFERENCE_BACKENDS`, within a budget of video seconds and images. Paid or hosted models, publication and money changes still wait for a person. The approval card now says where a model runs and whether a use is billed.
 - Media calls and downloads name their tenant, so the media service can enforce file ownership itself.
