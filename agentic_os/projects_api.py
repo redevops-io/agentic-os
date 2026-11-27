@@ -1702,7 +1702,10 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             from agentic_os.agent_gateway import economics_capabilities
             from agentic_os.integrations.chatwoot import chatwoot_from_env
             from agentic_os.integrations.twenty import twenty_from_env
+            from agentic_os.agent_gateway import economics_sources
             readers = {k: v for k, v in (("chatwoot", chatwoot_from_env()), ("twenty", twenty_from_env())) if v is not None}
+            readers.update(economics_sources.from_env())
+            app.state.economics_readers = readers
             economics_capabilities.register(registry, app_writers, readers=readers, writes=app_writes,
                                             approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
 
@@ -1848,6 +1851,15 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                                      f"{payment_correction.ENV_ENABLED}=1 and {payment_correction.ENV_STATEMENTS})")
                 elif not records.tenant_may_use_app(probe, "erpnext") or not records.tenant_holds_financial(probe, "erpnext"):
                     cannot[grant] = f"the tenant {tenant} is not granted ERPNext and its financial data here (app:erpnext, egress:financial)"
+            for source in sorted(economics.OWN_SCOPES):             # a mailbox or channels: connected, granted, and this tenant's
+                app_name, grant = economics.SOURCES[source]
+                reader = getattr(app.state, "economics_readers", {}).get(source)
+                if grant in cannot:
+                    continue
+                if reader is None:
+                    cannot[grant] = f"no {source} source is connected on this deployment"
+                elif not records.tenant_may_use_app(probe, app_name) or not reader.serves(tenant):
+                    cannot[grant] = f"the {source} source here is not the tenant {tenant}'s (app:{app_name}, and the source names its tenant)"
             from agentic_os.agent_gateway import app_definition_capabilities as app_tools
             for grant in app_tools.GRANTS:
                 if "apps" not in app_writers or app_writes is None:

@@ -192,7 +192,8 @@ def test_a_source_the_tenant_is_not_granted_is_not_even_read(world, monkeypatch)
     monkeypatch.setattr(Crm, "read_all", lambda self, obj: reads.append("crm") or [])
     out = w.call(w.agent(FULL, tenant="deskless"), "economics.evidence", invoice="S2")["output"]
     assert reads == [] and out["withheld"]["count"] == 0 and sorted(out["not_read"]) == [
-        "chatwoot: this tenant is not granted it, so it was not read", "twenty: this tenant is not granted it, so it was not read"]
+        "chatwoot: this tenant is not granted it, so it was not read", "mail: not connected on this deployment",
+        "messenger: not connected on this deployment", "twenty: this tenant is not granted it, so it was not read"]
 
 
 def test_empty_evidence_says_when_nothing_could_be_tied_to_a_customer(world):
