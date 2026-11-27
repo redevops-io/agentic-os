@@ -138,6 +138,16 @@ class ErpnextWriter(_Http):
     def cancel(self, doctype: str, name: str) -> None:
         self._call("POST", "/api/method/frappe.client.cancel", body={"doctype": doctype, "name": name})
 
+    def add_lineage_note(self, doctype: str, name: str, text: str, footer: str) -> None:
+        """A comment on a voucher, through Frappe's own comment method: it asks only for access to that voucher, so an
+        accounts-only API user can write it (creating a Comment record directly needs more). Signed as that user."""
+        user = self._call("GET", "/api/method/frappe.auth.get_logged_user").get("message")
+        if not user:
+            raise NotApplied("the application did not say which user this is")
+        self._call("POST", "/api/method/frappe.desk.form.utils.add_comment", body={
+            "reference_doctype": doctype, "reference_name": name, "comment_email": str(user), "comment_by": str(user),
+            "content": f"<p>{html.escape(text)}</p><p><em>{html.escape(footer)}</em></p>"})
+
     def create_draft(self, doctype: str, body: Mapping[str, Any]) -> str:
         data = self._call("POST", self._path(doctype), body={**body, "docstatus": 0}).get("data") or {}
         if not data.get("name"):

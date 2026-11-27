@@ -350,7 +350,7 @@ def _lineage(writer: Any, entry: Mapping[str, Any], replacement: str, footer: st
     failed = []
     for name, text in texts:
         try:
-            writer.add_comment("Payment Entry", name, f"{text} Evidence sha256 {digest}.", footer)
+            writer.add_lineage_note("Payment Entry", name, f"{text} Evidence sha256 {digest}.", footer)
         except (NotApplied, OutcomeUnknown):
             failed.append(name)
     return failed

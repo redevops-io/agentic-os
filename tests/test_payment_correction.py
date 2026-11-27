@@ -75,6 +75,8 @@ class Books(Ledger):
         path, method = unquote(request.url.path), request.method
         body = json.loads(request.content) if request.content else {}
         if method == "GET":
+            if path == "/api/method/frappe.auth.get_logged_user":
+                return httpx.Response(200, json={"message": "corrections-api@co.example"})
             if path == "/api/resource/Sales Invoice/INV-9":
                 return httpx.Response(200, json={"data": {"name": "INV-9", "docstatus": 1, "outstanding_amount": self.outstanding()}})
             return super().handle(request)
@@ -91,10 +93,11 @@ class Books(Ledger):
                 self.payments[name] = {"deductions": [], "taxes": [], "unallocated_amount": 0, **body, "name": name}
                 return httpx.Response(200, json={"data": self.payments[name]})
             return self._step("create", make)
-        if path == "/api/resource/Comment":
+        if path == "/api/method/frappe.desk.form.utils.add_comment":     # (a direct Comment insert needs more rights)
             def note():
+                assert body["comment_by"] == body["comment_email"] == "corrections-api@co.example"
                 self.comments_made.append((body["reference_name"], body["content"]))
-                return httpx.Response(200, json={"data": {"name": f"C-{len(self.comments_made)}"}})
+                return httpx.Response(200, json={"message": {"name": f"C-{len(self.comments_made)}"}})
             return self._step("comment", note)
         return httpx.Response(405, json={})
 
