@@ -28,7 +28,7 @@ WRITES = "writes"
 #: what a tenant credential needs among its tenant's policy_refs: the same permissions the decision routes require
 WRITE_PERMISSION, PRODUCT_PERMISSION = "writes:decide", "projects:write"
 _APPS = {"erpnext": "ERPNext", "chatwoot": "Support (Chatwoot)", "twenty": "CRM (Twenty)", "postiz": "Social (Postiz)",
-         "vibexgen": "VibeXGen"}
+         "vibexgen": "VibeXGen", "market-radar": "Market Radar"}
 _PUBLIC_URL = {"erpnext": "ERPNEXT_PUBLIC_URL", "chatwoot": "CHATWOOT_PUBLIC_URL", "twenty": "TWENTY_PUBLIC_URL"}
 
 

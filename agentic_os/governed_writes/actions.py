@@ -188,6 +188,20 @@ def _prepare_correction(context: Any, w: Any, i: Mapping[str, Any]) -> Dict[str,
     return payment_correction.prepare(context, w, i)
 
 
+def _market(name: str) -> Callable[..., Any]:
+    def run(*args: Any) -> Any:
+        from agentic_os.governed_writes import market  # noqa: PLC0415 (it imports Outcome from here)
+        return getattr(market, name)(*args)
+    return run
+
+
+def _prepare_market(name: str) -> Callable[..., Dict[str, Any]]:
+    def run(context: Any, w: Any, i: Mapping[str, Any]) -> Dict[str, Any]:
+        from agentic_os.governed_writes import market  # noqa: PLC0415
+        return getattr(market, name)(context, w, i)
+    return run
+
+
 def _media(name: str) -> Callable[..., Any]:
     def run(*args: Any) -> Any:
         from agentic_os.governed_writes import media  # noqa: PLC0415 (it imports Outcome from here)
@@ -252,6 +266,17 @@ ACTIONS: Dict[str, WriteAction] = {a.name: a for a in (
                         when=_text(40), asset=_ASSET_ID),
                 lambda i: ("Save a draft social post" if i.get("when") == "draft" else f"Schedule a social post for {i.get('when')}"),
                 _media("perform_post"), grant="social.propose", served_by="media", prepare=_prepare_media("prepare_post")),
+    WriteAction("market.request_watch", "market-radar",
+                "Propose watching a public page of one of the researched sites, so that changes to it are reported",
+                _schema(["url"], url=_text(400), title={"type": "string", "maxLength": 200}),
+                lambda i: f"Start watching {i.get('url')}", _market("perform_watch"), grant="market.propose", served_by="market",
+                prepare=_prepare_market("prepare_watch")),
+    WriteAction("market.request_change_plan", "market-radar",
+                "Propose a plan of changes: recommendations of one of your research missions, by id. A person approves the exact list",
+                _schema(["research_id", "recommendation_ids"], research_id=_text(80, pattern=r"^[A-Za-z0-9_-]+$"),
+                        recommendation_ids={"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "string", "maxLength": 80}}),
+                lambda i: f"Approve a change plan of {len(i.get('recommendation_ids') or [])} recommendation(s)",
+                _market("perform_plan"), grant="market.propose", served_by="market", prepare=_prepare_market("prepare_plan")),
     WriteAction("media.request_generate", "vibexgen",
                 "Propose generating an image or a video with a model, from a prompt (and optionally one of your images)",
                 _schema(["kind", "prompt"], kind={"type": "string", "enum": ["image", "video"]}, prompt=_text(2000),

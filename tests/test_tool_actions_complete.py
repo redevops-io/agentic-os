@@ -68,8 +68,9 @@ def test_the_governed_writes_plane_is_classified_exactly():
     """Its table is exactly what the plane offers, each at what it does: a proposal writes, everything else reads."""
     from agentic_os.agent_gateway.app_record_capabilities import manifests
     from agentic_os.agent_gateway.economics_capabilities import manifests as economics
+    from agentic_os.agent_gateway.market_capabilities import manifests as market
     from agentic_os.agent_gateway.media_capabilities import manifests as media
-    offered = {m.name: ("write" if m.side_effecting else "read") for m in (*manifests(), *economics(), *media())}
+    offered = {m.name: ("write" if m.side_effecting else "read") for m in (*manifests(), *economics(), *media(), *market())}
     assert TOOL_ACTIONS["governed-writes"] == offered
 
 

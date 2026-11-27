@@ -1676,6 +1676,10 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             from agentic_os.agent_gateway import media_capabilities
             media_capabilities.register(registry, app_writers, app_writes,
                                         approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+        if "market-radar" in app_writers:
+            from agentic_os.agent_gateway import market_capabilities
+            market_capabilities.register(registry, app_writers, app_writes,
+                                         approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
         if "erpnext" in app_writers:
             from agentic_os.agent_gateway import economics_capabilities
             from agentic_os.integrations.chatwoot import chatwoot_from_env
@@ -1826,10 +1830,12 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                                      f"{payment_correction.ENV_ENABLED}=1 and {payment_correction.ENV_STATEMENTS})")
                 elif not records.tenant_may_use_app(probe, "erpnext") or not records.tenant_holds_financial(probe, "erpnext"):
                     cannot[grant] = f"the tenant {tenant} is not granted ERPNext and its financial data here (app:erpnext, egress:financial)"
+            from agentic_os.agent_gateway import market_capabilities as market_tools
             from agentic_os.agent_gateway import media_capabilities as media_tools
-            for grant, app_name in media_tools.GRANT_APP.items():
+            for grant, app_name in {**media_tools.GRANT_APP, **market_tools.GRANT_APP}.items():
                 if app_name not in app_writers:
-                    cannot[grant] = f"{ {'vibexgen': 'VibeXGen', 'postiz': 'Postiz'}[app_name]} is not connected on this deployment"
+                    named = {"vibexgen": "VibeXGen", "postiz": "Postiz", "market-radar": "Market Radar"}[app_name]
+                    cannot[grant] = f"{named} is not connected on this deployment"
                 elif app_writes is None:
                     cannot[grant] = "governed writes are not enabled on this deployment (AGENTIC_OS_WRITES_DIR)"
                 elif not records.tenant_may_use_app(probe, app_name):
