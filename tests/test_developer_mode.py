@@ -16,7 +16,8 @@ from tests.test_governed_writes import CASES, COMMENT, World, _changes, _env  # 
 #: every action that exists is either eligible for developer mode or named here as never eligible: a new one must choose
 NEVER = {"economics.request_payment_correction",      # changes the ledger, needs an attestation
          "media.request_generate",                    # spends on a model
-         "market.request_change_plan"}                # records a person's judgement about what to change
+         "market.request_change_plan",                # records a person's judgement about what to change
+         "apps.request_install"}                      # installs an application: what it may use is a person's decision
 LIMITS = {"acme": {"policy_refs": ["app:*", "writes:decide", "writes:preauthorize"]},
           "globex": {"policy_refs": ["app:*", "writes:decide", "writes:preauthorize"]},
           "plain": {"policy_refs": ["app:*", "writes:decide"]}}

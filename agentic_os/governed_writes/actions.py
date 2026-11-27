@@ -202,6 +202,13 @@ def _prepare_market(name: str) -> Callable[..., Dict[str, Any]]:
     return run
 
 
+def _apps(name: str) -> Callable[..., Any]:
+    def run(*args: Any) -> Any:
+        from agentic_os import app_definitions  # noqa: PLC0415
+        return getattr(app_definitions, name)(*args)
+    return run
+
+
 def _media(name: str) -> Callable[..., Any]:
     def run(*args: Any) -> Any:
         from agentic_os.governed_writes import media  # noqa: PLC0415 (it imports Outcome from here)
@@ -277,6 +284,13 @@ ACTIONS: Dict[str, WriteAction] = {a.name: a for a in (
                         recommendation_ids={"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "string", "maxLength": 80}}),
                 lambda i: f"Approve a change plan of {len(i.get('recommendation_ids') or [])} recommendation(s)",
                 _market("perform_plan"), grant="market.propose", served_by="market", prepare=_prepare_market("prepare_plan")),
+    WriteAction("apps.request_install", "apps",
+                "Propose installing an application you defined, or a newer version of one. A person sees what it uses and keeps, "
+                "and approves that exact definition",
+                _schema(["definition"], definition={"type": "object"}),
+                lambda i: f"Install the application {str((i.get('definition') or {}).get('name', ''))[:80]}",
+                lambda w, i, footer, rid, ctx: _apps("perform_install")(w, i, footer, rid, ctx), grant="apps.install",
+                served_by="apps", prepare=lambda ctx, w, i: _apps("prepare_install")(ctx, w, i)),
     WriteAction("media.request_generate", "vibexgen",
                 "Propose generating an image or a video with a model, from a prompt (and optionally one of your images)",
                 _schema(["kind", "prompt"], kind={"type": "string", "enum": ["image", "video"]}, prompt=_text(2000),

@@ -135,8 +135,9 @@ def _form(raw: bytes) -> Dict[str, str]:
 
 
 class ApprovalPages:
-    def __init__(self, center: ApprovalCenter, *, public_base: str = "", sessions: Optional[Sessions] = None) -> None:
+    def __init__(self, center: ApprovalCenter, *, public_base: str = "", sessions: Optional[Sessions] = None, extensions: Any = ()) -> None:
         self.center, self.sessions = center, sessions or Sessions()
+        self.extensions = list(extensions)                 # more pages under /approvals, behind the same session
         self.public_base = public_base.rstrip("/")
 
     # ── what the sign-in gate may let through ────────────────────────────────────
@@ -253,6 +254,10 @@ class ApprovalPages:
             listing = self.center.listing(Person(session.principal))
             return _page("Approvals", who_html(request, session) + "<h1>Approvals</h1>" + list_html(listing, self._base(request)))
 
+        extra: Dict[str, Any] = {}
+        for extend in self.extensions:                     # before the card route, which would take their paths for a record
+            extra.update(extend(self, app))
+
         @app.get("/approvals/{source}/{record_id}")
         def _card(source: str, record_id: str, request: Request):
             session = self._session(request)
@@ -287,6 +292,7 @@ class ApprovalPages:
         # a decision needs a live session, its CSRF token, the same origin, and the person's right to decide that record.
         boundary = lambda name, why: RoutePolicy(name, "operator_boundary", rationale=why)  # noqa: E731
         return {
+            **extra,
             f"POST {PREFIX}/signin": boundary("approvals.sign_in", "verifies a configured credential before any session exists; failures are rate limited"),
             f"POST {PREFIX}/signout": boundary("approvals.sign_out", "ends the caller's own session, named by its cookie and CSRF token"),
             f"POST {PREFIX}/{{source}}/{{record_id}}/decision": boundary(
