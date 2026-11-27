@@ -233,9 +233,12 @@ def consent_page(*, action: str, client_name: str, client_id: str, redirect_uri:
 <style>body{{font:16px/1.5 system-ui,sans-serif;max-width:38rem;margin:3rem auto;padding:0 16px}}label{{display:block;margin:.6rem 0}}
 code{{word-break:break-all}}button{{font:inherit;padding:.5rem 1.2rem;margin-right:.6rem}}</style></head><body>
 <h1>Connect an agent</h1>
-<p><b>{e(client_name or "An application that gave no name")}</b> (<code>{e(client_id)}</code>) asks to read this deployment.
+<p><b>{e(client_name or "An application that gave no name")}</b> (<code>{e(client_id)}</code>) asks to connect to this deployment.
 Its name is what it calls itself; check where it will be sent back to: <code>{e(redirect_uri)}</code></p>
-<p>You are <b>{e(person)}</b>. It will act for the tenant <b>{e(tenant)}</b>, read-only, until you revoke it or for 90 days.</p>
+<p>You are <b>{e(person)}</b>. It will act for the tenant <b>{e(tenant)}</b> until you revoke it or for 90 days.</p>
+<p>It can do only what you tick below. <b>Not all of it is reading</b>: some lines let it make new files, keep records or
+start work without asking again, and each line says which. A change to a connected business application is a proposal that
+waits for a person, unless a person has preauthorized that change.</p>
 <form method="post" action="{e(action)}"><input type="hidden" name="ticket" value="{e(ticket)}">{boxes}
 <p><button name="decision" value="approve">Allow</button><button name="decision" value="deny">Do not allow</button></p></form>
 </body></html>"""
