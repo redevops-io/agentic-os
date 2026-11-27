@@ -3,8 +3,8 @@
 A square spiral of the integers, one continuous path, a marker on each prime. It is drawn from the mathematics by
 [`rails_mark.py`](rails_mark.py) (standard library only); nothing is traced from another image.
 
-**Status: proposed.** The owner approves the primary mark and the compact variant before they are applied to the site,
-the desktop application or store listings. Mathematical originality is not trademark clearance; none is claimed.
+**Status: approved by the owner on 2026-11-27** as generated: the primary mark (11 x 11), the compact variant (7 x 7) and
+the tiny tile (5 x 5). Mathematical originality is not trademark clearance; none is claimed. The approved copy is below.
 
 ## Definition
 
@@ -52,6 +52,6 @@ their size.
 the committed files are the generator's output. Platform and store packages (padding, backgrounds) are derived from
 these; see the store bundle's own checklist.
 
-Suggested explanation (a proposal, not final copy): "The rAIls mark is a square spiral of prime numbers. It represents how
-meaningful structure emerges when information is organized and filtered." Optional line: "Intelligence through
+Approved explanation: "The rAIls mark is a square spiral of prime numbers. It represents how
+meaningful structure emerges when information is organized and filtered." Approved secondary line: "Intelligence through
 structure."
