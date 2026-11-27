@@ -15,8 +15,11 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 - Making the strict permission setting the default (an unset `AGENTIC_OS_PERMISSIONS` refuses to start, `=off` for development) is planned for the next compatibility-breaking release. Until then: the permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent. The app reports `authorization: unenforced` on `/health`; see `docs/PERMISSIONS_MIGRATION.md` section 28 for the exact configuration of an externally reachable deployment.
 
-## Unreleased (after v0.4.28; no version set)
+## Unreleased (after v0.4.29; no version set)
 
+## v0.4.29 (governed media, social and market research; a safe payment correction)
+
+- Economic intelligence: one deposit smaller than the payment no longer excludes a partial settlement until the statement runs past the time a second instalment could arrive; it is reported as unknown.
 - **Fix:** the economics tools offered to agents now read ERPNext child tables with their parent. With an API user that may not list a child table directly, reconciliation could not be read at all, and ERPNext can also answer such a read with names only, which left invoice links and discounts out.
 - Governed payment correction (`economics.request_payment_correction`, grant `economics.propose`), **off by default**. A bank difference alone cannot trigger it: the operator's own statement export must corroborate it and rule out a fee, currency, instalment, allocation, reversal and timing. The approver sees the evidence and attests to it; the original voucher is kept and amended; the ledger is read back; a half-done correction is finished only after a new approval, without a duplicate. See docs/AGENT_GATEWAY_EXTERNAL_AGENTS.md.
 - Market research for external agents (`market.*`) over Market Radar's operator and the Mission Runtime: research missions on operator-listed sites only, evidence behind every recommendation, and two follow-ups a person approves (watch a page; a change plan bound to the list's digest), then checked against the live site. No new mission engine. See docs/AGENT_GATEWAY_EXTERNAL_AGENTS.md.
