@@ -120,6 +120,28 @@ class ErpnextWriter(_Http):
             raise OutcomeUnknown("the application did not say what it created")
         return str(data["name"])
 
+    # ── only for the payment correction (payment_correction.py): strict reads, cancel, and a submitted amendment ───────
+    def read_list(self, doctype: str, fields: List[str], filters: Optional[list] = None, limit: int = 0) -> List[dict]:
+        """RAISES when the collection cannot be read, so unreadable is never mistaken for empty."""
+        params = {"fields": json.dumps(list(fields)), "limit_page_length": str(limit)}
+        if filters:
+            params["filters"] = json.dumps(filters)
+        data = self._call("GET", self._path(doctype), params=params).get("data")
+        if not isinstance(data, list):
+            raise NotApplied(f"the application's list of {doctype} could not be read")
+        return data
+
+    def cancel(self, doctype: str, name: str) -> None:
+        self._call("POST", "/api/method/frappe.client.cancel", body={"doctype": doctype, "name": name})
+
+    def create_submitted(self, doctype: str, body: Dict[str, Any]) -> str:
+        """Insert as a draft, then submit it, so ERPNext runs its own submission rules."""
+        data = self._call("POST", self._path(doctype), body={**body, "docstatus": 0}).get("data") or {}
+        if not data.get("name"):
+            raise OutcomeUnknown("the application did not say what it created")
+        self._call("POST", "/api/method/frappe.client.submit", body={"doc": json.dumps({**data, "doctype": doctype})})
+        return str(data["name"])
+
     def create_draft_purchase_order(self, *, supplier: str, schedule_date: str, items: List[dict], company: str = "") -> str:
         """A DRAFT (``docstatus`` 0): it orders nothing and books nothing until a person submits it in ERPNext."""
         body: Dict[str, Any] = {"supplier": supplier, "schedule_date": schedule_date, "docstatus": 0,

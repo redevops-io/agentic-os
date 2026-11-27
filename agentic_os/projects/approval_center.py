@@ -202,7 +202,13 @@ class ApprovalCenter:
         def add(label: str, kind: str = "", record: str = "") -> None:
             url = app_link(app, kind, record) if record else ""
             out.append({"label": label, **({"url": url} if url else {})})
-        if action == "erp.request_comment" and inputs:
+        if action == "economics.request_payment_correction":
+            if inputs:
+                add(f"Payment Entry {inputs['payment_entry']} (will be CANCELLED)", "Payment Entry", str(inputs["payment_entry"]))
+                add(f"Bank reference {inputs['reference']}")
+            if made:
+                add(f"Payment Entry {made} (replacement, submitted)", "Payment Entry", made)
+        elif action == "erp.request_comment" and inputs:
             add(f"{inputs['doctype']} {inputs['name']}", inputs["doctype"], inputs["name"])
             if made:
                 add(f"Comment {made} (created)")

@@ -74,6 +74,32 @@ answer that rests on the session must carry this deployment's `Origin`, and the 
 the person who saw the page. A deployment that declares a single owner treats whoever reaches it as that owner, as
 before.
 
+## Economic intelligence and reconciliation
+
+Offered where ERPNext is connected. Every tool needs `economics.read` (or `economics.propose`), **and** the financial-data
+grant on the agent and its tenant, **and** the tenant's `app:erpnext`.
+
+| Capability | What it returns |
+|---|---|
+| `economics.discrepancies` | payments the bank statement shows for another amount, with the exact values a correction proposal needs; corrections already made and whether they reconcile |
+| `economics.explain_adjustment` | discounts, cancellation, credit notes and payment discrepancies of one invoice; any approval claim in a comment, marked unverified |
+| `economics.evidence` | messages and CRM notes that refer to one invoice or customer, as references with excerpts |
+| `economics.request_payment_correction`, `economics.request_status` | propose the correction below and follow it |
+
+**Evidence follows its source.** A conversation needs `support.read` (which covers its private notes, as
+`support.get_conversation` does) and the tenant's `app:chatwoot`; a CRM note needs `crm.records.read` and `app:twenty`. A
+source the tenant is not granted is not read. A source the agent was not granted is reported only as a count of withheld
+items: no id, no excerpt, and they are withheld before anything is correlated. A message is tied to a customer only by an
+e-mail address or website both systems hold, never by a name.
+
+**The one correction** (off unless `AGENTIC_OS_PAYMENT_CORRECTIONS=1`, and it needs `AGENTIC_OS_WRITES_DIR`): a received
+payment the bank shows for another amount is **cancelled and entered again** for the bank's amount, as its amendment. It is a
+governed write: the approval card shows the entry to be cancelled and both figures. At execution the books and bank are
+read again and must still show exactly those figures; only a payment allocated to exactly one sales invoice, with equal paid
+and received amounts and no deductions or taxes, is corrected. If the cancellation succeeds and the replacement is not
+confirmed, the request ends **outcome unknown** with what to check; it is never reported as unchanged or retried.
+Success is decided by reading the application again (`economics.reconcile.corrections`).
+
 ## Arguments
 
 Every call is checked against the capability's published input schema, on REST and MCP alike, after the caller's

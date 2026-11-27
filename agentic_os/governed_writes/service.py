@@ -101,7 +101,12 @@ class GovernedWrites:
 
     def authorization(self, action: str, *, requester: str, tenant: str) -> authorization.Authorization:
         """May this requester of this tenant have this action done? Never changed by an approval."""
-        return authorization.authorize(action, app=ACTIONS[action].app, requester=requester, tenant=tenant,
+        spec = ACTIONS[action]
+        if spec.financial and not authorization.tenant_holds_financial(tenant, spec.app):
+            return authorization.Authorization(authorization.Verdict.DENIED, "missing_grant",
+                                               f"{action} concerns financial data: the tenant {tenant or '(none)'} needs egress:financial "
+                                               "(policy_refs in AGENTIC_OS_TENANT_LIMITS)")
+        return authorization.authorize(action, app=spec.app, requester=requester, tenant=tenant,
                                        someone_else_can_approve=self._single_owner)
 
     # ── the operator: runs only with the runtime's approval marker ───────────────

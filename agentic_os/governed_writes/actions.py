@@ -33,6 +33,9 @@ class WriteAction:
     input_schema: Mapping[str, Any]
     preview: Callable[[Mapping[str, Any]], str]                    # one line, without the written text
     perform: Callable[[Any, Mapping[str, Any], str, str], Outcome]  # (writer, inputs, footer, request_id)
+    grant: str = ""                  # the named grant that lets an agent propose it ("" = the application's own, APP_GRANTS)
+    served_by: str = ""              # the capability module that offers it ("" = the application record capabilities)
+    financial: bool = False          # the tenant must hold the financial-data grant for the application too
 
 
 #: text that other readers of these applications treat as a record of an approval. An agent writes the text of a proposal,
@@ -173,6 +176,11 @@ def _person(w: Any, i: Mapping[str, Any], footer: str, rid: str) -> Outcome:
     return _read_back(check, made)
 
 
+def _payment_correction(w: Any, i: Mapping[str, Any], footer: str, rid: str) -> Outcome:
+    from agentic_os.governed_writes import payment_correction  # noqa: PLC0415 (it imports Outcome from here)
+    return payment_correction.perform(w, i, footer, rid)
+
+
 _ID = r"^[^\x00-\x1f/\\]{1,140}$"
 _DATE = r"^\d{4}-\d{2}-\d{2}$"
 
@@ -202,6 +210,16 @@ ACTIONS: Dict[str, WriteAction] = {a.name: a for a in (
                 _schema(["first_name", "email"], first_name=_text(100), last_name={"type": "string", "maxLength": 100},
                         email=_text(254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$"), company_id=_text(64, pattern=r"^[A-Za-z0-9-]+$")),
                 lambda i: "Create a CRM contact unless one with the same email is already recorded", _person),
+    WriteAction("economics.request_payment_correction", "erpnext",
+                "Propose correcting a received payment the bank statement shows for another amount: CANCEL the payment entry and enter "
+                "it again for the bank's amount. Take every value from economics.discrepancies; the figures are checked again before writing",
+                _schema(["reference", "payment_entry", "posted_amount", "bank_amount"], reference=_text(140, pattern=_ID),
+                        payment_entry=_text(140, pattern=_ID),
+                        posted_amount={"type": "number", "minimum": 0.01, "maximum": 1_000_000_000},
+                        bank_amount={"type": "number", "minimum": 0.01, "maximum": 1_000_000_000}),
+                lambda i: (f"CANCEL Payment Entry {i['payment_entry']} ({i['posted_amount']}) and enter it again for {i['bank_amount']}, "
+                           f"the amount the bank shows under {i['reference']}"),
+                _payment_correction, grant="economics.propose", served_by="economics", financial=True),
 )}
 
 __all__ = ["APP_GRANTS", "Outcome", "WriteAction", "ACTIONS", "RESERVED_MARKERS", "reserved_marker"]
