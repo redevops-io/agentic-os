@@ -60,14 +60,13 @@
     {
       "capability": "the enterprise package is imported only when it is an installed distribution",
       "test": "tests/test_dr02_enterprise_import_trust.py"
+    },
+    {
+      "capability": "tenant-scoped grants and revocation epochs on the permissions plane, enforced fail-closed",
+      "test": "tests/test_permissions_agpl_regression.py::test_a_tenant_scoped_grant_never_matches_a_missing_tenant_context"
     }
   ],
   "enterprise_only": [
-    {
-      "capability": "tenant identity on the permissions plane",
-      "test": "tests/test_permissions_agpl_regression.py::test_ENTERPRISE_identities_carry_a_tenant",
-      "pin": "strict xfail"
-    },
     {
       "capability": "revocation across conversations and caches",
       "test": "tests/test_permissions_agpl_regression.py::test_ENTERPRISE_revocation_invalidates_held_context",
@@ -84,8 +83,8 @@
       "pin": "strict xfail"
     },
     {
-      "capability": "tenant and epoch fields on a permissions grant, tenant argument on authorize (B3)",
-      "test": "tests/test_edition_boundary.py::test_grants_and_authorize_carry_no_tenant_or_epoch_b3",
+      "capability": "a tenant argument on authorize, by which a caller would choose its own tenant (B3: the grant fields are enforced here)",
+      "test": "tests/test_edition_boundary.py::test_a_tenant_or_epoch_on_a_grant_is_enforced_and_never_a_caller_argument_b3",
       "pin": "assertion"
     },
     {
@@ -95,9 +94,9 @@
     }
   ],
   "decisions": {
-    "B1": "enterprise; the single-deployment tenant labelling shipped since v0.3.43 is kept, is not an isolation guarantee, and does not grow",
+    "B1": "community for isolation: tenant labelling, tenant-scoped tokens and visibility are preserved and enforced (owner decision 2026-11-27); tenant provisioning, membership resolution and cross-tenant delegation stay enterprise",
     "B2": "community",
-    "B3": "not an enforced authorization; no tenant or epoch field on a permissions Grant in this tree"
+    "B3": "enforced: a permissions Grant carries a tenant and a revocation epoch and authorize() denies on a missing or mismatched tenant or a stale epoch; the tenant comes from the authenticated identity, never from an argument (owner decision 2026-11-27)"
   },
   "legacy_tenant_surface": {
     "note": "pre-existing since v0.3.43; pinned so it cannot grow without a change to this file and to docs/EDITION_BOUNDARY.md",
@@ -108,13 +107,20 @@
       "AGENTIC_OS_TENANT_TOKENS"
     ],
     "modules": [
+      "agentic_os/agent_gateway/agent_tokens.py",
+      "agentic_os/agent_gateway/app_record_capabilities.py",
+      "agentic_os/agent_gateway/scope.py",
       "agentic_os/app_kit/route_authz.py",
       "agentic_os/desktop_sources.py",
       "agentic_os/fleet.py",
+      "agentic_os/governed_writes/authorization.py",
+      "agentic_os/governed_writes/service.py",
       "agentic_os/mission/control_auth.py",
       "agentic_os/mission/fork_join.py",
       "agentic_os/mission/profile.py",
-      "agentic_os/projects/approver_auth.py"
+      "agentic_os/projects/approver_auth.py",
+      "agentic_os/projects/operator_gate.py",
+      "agentic_os/projects_api.py"
     ]
   }
 }

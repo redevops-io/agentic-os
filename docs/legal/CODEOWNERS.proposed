@@ -1,5 +1,6 @@
-# PROPOSED code-owners entries (a draft for the owner; NOT active: it has no effect while it sits here). GitHub reads .github/CODEOWNERS only; installing this
-# is the owner's call. Replace the placeholder with the owner's login (or a team) first.
+# PROPOSED code-owners entries (a draft for the owner; NOT active: it has no effect while it sits here). GitHub reads .github/CODEOWNERS only.
+# Owner decision 2026-11-27: .github/CODEOWNERS stays as ADVICE (it already covers these paths with `* @arybach`) and no human review is made
+# mandatory. The "Require review" step below is not to be turned on; what protects a legal decision is its detached signature.
 #
 # Why: a DECIDED entry in the gate file, its record and the approved texts are plain repository data. The hash match in the gate
 # is a tripwire against mistakes and proves no authorship (see the docstring of packaging/check-distribution-gate.py). Review by the

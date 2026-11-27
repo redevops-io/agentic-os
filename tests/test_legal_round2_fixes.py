@@ -314,6 +314,7 @@ def test_read_repo_file_refuses_a_symlink_swapped_in_after_the_lstat(tmp_path, m
 
 # ----------------------------------------------------------------------------------------------- docs
 def test_docs_state_the_trust_model_and_that_codeowners_is_inactive():
+    """Inactive as an enforcement: CODEOWNERS asks for review and requires none."""
     doc = " ".join((ROOT / "docs" / "ABOUT_LEGAL_UI.md").read_text().split())
     for needle in ("legal_signer_fingerprints", "BOTH are repository data", "independent channel", "procedure step, not a code guarantee",
                    "unverified-draft", "approved-verified", "inactive", "docs/legal/CODEOWNERS.proposed", "redevops-legal-decision: 1"):
@@ -321,5 +322,6 @@ def test_docs_state_the_trust_model_and_that_codeowners_is_inactive():
     src = " ".join((ROOT / "packaging" / "check-distribution-gate.py").read_text().split())
     assert "BOTH files are repository data" in src and "independent channel" in src
     assert "redevops-legal-decision: 1" in src and "legal_signer_fingerprints" in src
+    assert "advice only" in doc and "requires none" in doc and "authenticity rests on the detached signatures" in doc
     t = (ROOT / "docs" / "legal" / "CODEOWNERS.proposed").read_text()
-    assert "NOT active" in t and not (ROOT / ".github" / "CODEOWNERS").exists()
+    assert "NOT active" in t and "requires none" in (ROOT / ".github" / "CODEOWNERS").read_text()

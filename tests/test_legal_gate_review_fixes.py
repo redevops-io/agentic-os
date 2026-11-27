@@ -148,11 +148,15 @@ def test_no_private_key_material_is_handled_by_the_gate():
     assert '"find-principals"' in src and '"verify"' in src
 
 
-def test_codeowners_draft_covers_the_three_paths_and_is_not_installed():
+def test_codeowners_is_advice_that_covers_the_legal_paths_and_requires_no_review():
     t = (ROOT / "docs" / "legal" / "CODEOWNERS.proposed").read_text()
     for path in ("/docs/legal/**", "/packaging/distribution-gate.json", "/packaging/legal-allowed-signers"):
         assert path in t
-    assert not (ROOT / ".github" / "CODEOWNERS").exists()
+    assert "NOT active" in t and "no human review is made" in t                       # the proposal's required review stays off
+    installed = (ROOT / ".github" / "CODEOWNERS").read_text()
+    rules = [line.split() for line in installed.splitlines() if line.strip() and not line.startswith("#")]
+    assert rules == [["*", "@arybach"]]                       # one verified owner for everything, which covers the legal paths
+    assert "Advisory only" in installed and "requires none" in installed and "detached signature" in installed
 
 
 def test_the_trust_boundary_is_stated_in_the_gate_the_docs_and_the_gate_file():

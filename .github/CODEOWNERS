@@ -6,7 +6,9 @@
 # provide none. No teams are listed because the organisation has none. Add a path rule when a second
 # reviewer exists and has been verified the same way; do not add a name to fill the file out.
 #
-# Requesting review is a separate step from branch protection, which is configured in repository
-# settings rather than in this file.
+# Advisory only (owner decision 2026-11-27): this file asks for a review. It requires none, and
+# "Require review from Code Owners" stays off. Requesting review is a separate step from branch
+# protection, which is configured in repository settings rather than in this file. Nothing here
+# authenticates a legal decision: that is the detached signature the distribution gate verifies.
 
 * @arybach
