@@ -471,8 +471,9 @@ def describe(definition: Mapping[str, Any], old: Optional[Mapping[str, Any]], te
     show.append(["An agent needs these permissions to use it (installing grants none)", ", ".join(grants_needed(definition, catalog))])
     show.append(["It keeps", "; ".join(f"{c['name']} ({', '.join(f['name'] for f in c['fields'])}; up to {c['max_records']})"
                                        for c in definition["state"]["collections"]) or "no state"])
-    show.append(["Who sees what it keeps", "People of this tenant on its pages, and this tenant's agents that hold apps.use and every "
-                                           "permission above."])
+    # what the runtime enforces for records: apps.use alone (the permissions above govern the tools, not the records)
+    show.append(["Who sees what it keeps", "People of this tenant on its pages, and every agent of this tenant that holds apps.use, "
+                                           "whatever its other permissions. Those agents can also add and change records."])
     show.append(["A person sees", ", ".join(v["title"] for v in definition["views"])])
     # every word the author wrote for people to read: it can claim anything, so the approver reads it before it is shown to anyone
     for view in definition["views"]:

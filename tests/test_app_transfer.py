@@ -197,6 +197,22 @@ def test_a_person_exports_reviews_in_words_and_brings_it_into_their_tenant(two_t
     assert "SINV-1" in acme.get("/approvals/apps/collections-desk").text                 # the source is untouched
 
 
+def test_what_the_card_says_about_the_records_is_what_the_runtime_enforces(world):
+    w = world()
+    asked = w.ok(INSTALL, definition=CRM)
+    said = dict(w.card(asked)["evidence"]["show"])["Who sees what it keeps"]
+    assert "every agent of this tenant that holds apps.use, whatever its other permissions" in said and "add and change" in said
+    assert w.decide(asked)["state"] == "executed_verified"
+    only_use = w.agent(["apps.use"])                                      # none of the tools' permissions the card lists
+    added = w.call("apps.state.add", as_=only_use, app_id="collections-desk", collection="chases", values={"invoice": "SINV-1", "status": "new"})
+    listed = w.call("apps.state.list", as_=only_use, app_id="collections-desk", collection="chases")
+    assert added["status"] == "ok" and [r["values"]["invoice"] for r in listed["output"]["records"]] == ["SINV-1"], (added, listed)
+    without = w.agent(["erp.read", "erp.propose"])                        # and without apps.use, nothing
+    assert w.call("apps.state.list", as_=without, app_id="collections-desk", collection="chases")["status"] != "ok"
+    other = w.agent(["apps.use"], tenant="globex")
+    assert w.call("apps.state.list", as_=other, app_id="collections-desk", collection="chases")["status"] != "ok"
+
+
 def test_confirming_something_other_than_what_was_reviewed_installs_nothing(two_tenants):
     w = two_tenants
     exported = w.signed_in().get("/approvals/apps/collections-desk/export").text
