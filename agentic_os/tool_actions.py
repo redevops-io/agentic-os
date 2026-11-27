@@ -184,7 +184,7 @@ TOOL_ACTIONS["governed-writes"] = {
     "crm.find_companies": "read", "crm.find_people": "read", "crm.request_status": "read",
     "erp.request_comment": "write", "erp.request_draft_purchase_order": "write", "support.request_private_note": "write",
     "crm.request_company": "write", "crm.request_person": "write",
-    "economics.discrepancies": "read", "economics.explain_adjustment": "read", "economics.evidence": "read", "economics.findings": "read",
+    "economics.discrepancies": "read", "economics.explain_adjustment": "read", "economics.evidence": "read", "economics.findings": "read", "economics.bank_reconciliation": "read",
     "economics.request_status": "read", "economics.request_payment_correction": "write",
     "media.library": "read", "media.assets": "read", "media.inspect": "read", "media.import": "write", "media.compose": "write",
     "media.export": "write", "media.request_generate": "write", "media.request_status": "read",
