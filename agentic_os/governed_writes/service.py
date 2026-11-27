@@ -57,7 +57,9 @@ class WriteError(Exception):
 class GovernedWrites:
     def __init__(self, state_dir: "str | Path", writers: Mapping[str, Any], *, ttl_s: float = 86400.0,
                  clock: Callable[[], float] = time.time, authority: Any = None, retention_s: float = 7 * 86400.0,
-                 single_owner: Optional[Callable[[], bool]] = None) -> None:
+                 single_owner: Optional[Callable[[], bool]] = None,
+                 authority_key_of: Callable[[str], str] = envelope_key_for_requester) -> None:
+        self._authority_key_of = authority_key_of       # where the requester's stored authority is: as the gateway names it
         self.mentions: Optional[Callable[[str, str], List[str]]] = None   # set by whoever can read the tenant's messages
         root = Path(state_dir)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -101,7 +103,7 @@ class GovernedWrites:
         self.runtime = MissionRuntime(registry, Executor(LocalOperatorClient({OPERATOR: operator})),
                                       store=EventStore(str(root / "events.jsonl")), authority=authority)
         # a write runs in the authority of the agent that asked for it: its stored envelope, never one made here
-        self.runtime.authority_key = lambda mission: envelope_key_for_requester(str(getattr(mission, "principal", "") or ""))
+        self.runtime.authority_key = lambda mission: self._authority_key_of(str(getattr(mission, "principal", "") or ""))
 
     @staticmethod
     def _fact(action: str) -> str:
@@ -123,7 +125,7 @@ class GovernedWrites:
             return ("this deployment keeps no authority records, so no agent can hold authority to change anything: set "
                     "AGENTIC_OS_AUTHORITY_DB, then connect the agent again (or issue its token with --authority-db)")
         try:
-            found = guard.check(envelope_key_for_requester(requester), tenant, Action(
+            found = guard.check(self._authority_key_of(requester), tenant, Action(
                 capability=action, arguments=dict(inputs or {}), risk_tier=1, side_effecting=True))
         except Exception as e:  # noqa: BLE001 - an authority store that cannot be read refuses
             return f"the authority records cannot be read ({type(e).__name__})"

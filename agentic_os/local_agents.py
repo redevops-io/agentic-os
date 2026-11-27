@@ -29,8 +29,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 ENV_DIR = "AGENTIC_OS_LOCAL_AGENTS_DIR"
-#: what this build's local gateway can grant. Read grants only: the mounted gateway registers no write capability.
+#: what ANY way of connecting an agent can grant: reading. The command line grants nothing else, so an agent that can run
+#: commands cannot give itself more.
 GRANTABLE = ("projects.read", "missions.read", "sources.read", "dashboards.read")
+#: permissions that let an agent change something (proposals a person must approve, and an application's own records). Only
+#: the person at the app gives these, on its screen (projects/desktop_api.py), and only for tools this installation serves.
+ACTING = ("apps.use", "apps.records.read", "apps.records.write", "apps.install", "media.read", "media.edit", "media.generate")
 #: dashboards.read is NOT a default: the dashboards hold test results and business figures, so it is granted by naming it.
 DEFAULT_GRANTS = ("projects.read", "missions.read", "sources.read")
 TOKEN_PREFIX = "rla_"                                   # rAIls local agent
@@ -114,15 +118,19 @@ class LocalAgentStore:
         _write_private(self._file, json.dumps({"schema": SCHEMA, "agents": [asdict(r) | {"grants": list(r.grants)} for r in records]}, indent=1) + "\n")
 
     # ── the user's actions ───────────────────────────────────────────────────────────────────────────────
-    def connect(self, name: str, *, grants: Iterable[str] = DEFAULT_GRANTS, client: str = "") -> Tuple[AgentRecord, Path]:
+    def connect(self, name: str, *, grants: Iterable[str] = DEFAULT_GRANTS, client: str = "",
+                allowed: Iterable[str] = GRANTABLE) -> Tuple[AgentRecord, Path]:
         """Create a credential for one agent. Returns the record and the path of its token file (the token is not returned)."""
         name = " ".join(str(name).split())[:80]
         if not name:
             raise LocalAgentError("an agent needs a name the user will recognise")
         wanted = tuple(dict.fromkeys(str(g).strip() for g in grants))
-        unknown = [g for g in wanted if g not in GRANTABLE]
+        offered = tuple(g for g in dict.fromkeys(allowed) if g in GRANTABLE or g in ACTING)     # never anything else
+        unknown = [g for g in wanted if g not in offered]
         if unknown or not wanted:
-            raise LocalAgentError(f"not grantable on this installation: {unknown or 'nothing was named'}; grantable: {', '.join(GRANTABLE)}")
+            hint = (" (permissions that change something are given only on the app's own screen)"
+                    if any(g in ACTING for g in unknown) else "")
+            raise LocalAgentError(f"not grantable here: {unknown or 'nothing was named'}; grantable: {', '.join(offered)}{hint}")
         records = self._load()
         token = TOKEN_PREFIX + secrets.token_urlsafe(32)
         rec = AgentRecord(id="agent-" + secrets.token_hex(6), name=name, grants=wanted, token_sha256=hashlib.sha256(token.encode()).hexdigest(),
@@ -275,10 +283,15 @@ def issue_authority(record: AgentRecord, authority_db: str, *, days: float = DEF
     if not 0 < days <= MAX_DAYS:
         raise LocalAgentError(f"an agent's authority lasts between a moment and {int(MAX_DAYS)} days")
     now = time.time()
+    acting = [g for g in record.grants if g in ACTING]
+    scoped = [Grant(capability=GRANT_PATTERNS[g], max_tier=0) for g in record.grants if g in GRANT_PATTERNS]
+    if acting:                                   # each capability those permissions cover, by name, at its own tier
+        from agentic_os.agent_gateway.agent_tokens import capability_tiers   # noqa: PLC0415
+        scoped += [Grant(capability=n, max_tier=t) for n, t in sorted(capability_tiers(acting).items())]
     env = AuthorityEnvelope(
         tenant=TENANT, principal=f"local-agent:{record.id}", mission_id=envelope_key(record.id),
-        goal=f"external agent {record.name!r} reading this installation through the governed gateway",
-        grants=tuple(Grant(capability=GRANT_PATTERNS[g], max_tier=0) for g in record.grants),
+        goal=f"external agent {record.name!r} using this installation through the governed gateway",
+        grants=tuple(scoped),
         budget=AutonomyBudget(usd=0.0, max_actions=int(max_actions), max_children=0, max_depth=0, max_parallel=4),
         may_delegate=False, issued_at=now, expires_at=now + days * 86400)
     SqliteEnvelopeStore(authority_db).put(env)
@@ -291,7 +304,7 @@ def revoke_authority(agent_id: str, authority_db: str) -> None:
 
 
 def connect_agent(name: str, *, grants: Iterable[str] = DEFAULT_GRANTS, client: str = "", days: float = DEFAULT_DAYS,
-                  env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                  env: Optional[Dict[str, str]] = None, allowed: Iterable[str] = GRANTABLE) -> Dict[str, Any]:
     """Everything connecting an agent means on an installed app: the credential, its token file and its authority."""
     env = dict(os.environ if env is None else env)
     store = LocalAgentStore.from_env(env)
@@ -300,7 +313,7 @@ def connect_agent(name: str, *, grants: Iterable[str] = DEFAULT_GRANTS, client: 
         raise LocalAgentError("this is not an installed app profile: no agents directory or no authority store is configured")
     if not 0 < float(days) <= MAX_DAYS:
         raise LocalAgentError(f"an agent's authority lasts between a moment and {int(MAX_DAYS)} days")
-    rec, token_file = store.connect(name, grants=grants, client=client)
+    rec, token_file = store.connect(name, grants=grants, client=client, allowed=allowed)
     try:
         digest = issue_authority(rec, db, days=days)
     except Exception:

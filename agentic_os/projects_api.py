@@ -1599,6 +1599,18 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     default_pid = (prov.projects() or [{"id": "customer-ops"}])[0].get("id", "customer-ops")
     _GRANTS = {"projects.read", "missions.read", "sources.read"} | ({"dashboards.read"} if local_agents is not None else set())
     _SHARED_GRANTS = _GRANTS - {"dashboards.read"}          # the shared bearer never reads the dashboards
+    _LOCAL_GRANTS = set(_GRANTS)             # an installed app's own agents: also what its screen may give, once known (below)
+    # the installed app: its own screen, behind the local session, is where a person connects agents and decides
+    desktop_ui = bool(getattr(app.state, "desktop_ui", False))
+    writes_link = ((lambda rid: f"/#/approvals/writes/{rid}") if desktop_ui else (lambda rid: _approval_link("writes", rid)))
+
+    def _writer_authority_key(requester: str) -> str:
+        """Where a requester's stored authority is, named as the gateway names it."""
+        from agentic_os.agent_gateway.agent_tokens import envelope_key_for_requester
+        if local_agents is not None and any(r.id == requester for r in local_agents.list()):
+            from agentic_os.local_agents import envelope_key as local_envelope_key
+            return local_envelope_key(requester)
+        return envelope_key_for_requester(requester)
 
     class _Projections:
         def projects(self): return prov.projects()
@@ -1633,7 +1645,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
                 rec = local_agents.verify(t)
                 if rec is not None:
                     return GatewayPrincipal(Principal(rec.id, "service", (), "local"), client_id=rec.id, workspace="local",
-                                            scopes=tuple(g for g in rec.grants if g in _GRANTS))
+                                            scopes=tuple(g for g in rec.grants if g in _LOCAL_GRANTS))
             return None
 
     def _is_local_agent(pid: str) -> bool:
@@ -1733,9 +1745,11 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             from agentic_os.governed_writes.service import GovernedWrites
             from agentic_os.products.principal import current_principal
             def _single_owner() -> bool:
+                if desktop_ui:
+                    return True                                  # the person at the installed app decides its changes
                 hub_ = getattr(prov, "products_hub", None)
                 return bool(hub_ is not None and hub_.registry.single_owner)
-            app_writes = GovernedWrites(writes_dir, app_writers, single_owner=_single_owner,
+            app_writes = GovernedWrites(writes_dir, app_writers, single_owner=_single_owner, authority_key_of=_writer_authority_key,
                                         retention_s=float(os.environ.get("AGENTIC_OS_WRITES_RETENTION_S", "") or 7 * 86400),
                                         ttl_s=max(60.0, float(os.environ.get("AGENTIC_OS_WRITES_TTL_S", "") or 86400)))
 
@@ -1745,19 +1759,19 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             app.include_router(make_router(app_writes, _person))
             app.state.governed_writes = app_writes
         app_record_capabilities.register(registry, app_writers, app_writes,
-                                         approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+                                         approval_url=writes_link if app_writes is not None else None)
         if "vibexgen" in app_writers or "postiz" in app_writers:
             from agentic_os.agent_gateway import media_capabilities
             media_capabilities.register(registry, app_writers, app_writes,
-                                        approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+                                        approval_url=writes_link if app_writes is not None else None)
         if "market-radar" in app_writers:
             from agentic_os.agent_gateway import market_capabilities
             market_capabilities.register(registry, app_writers, app_writes,
-                                         approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+                                         approval_url=writes_link if app_writes is not None else None)
         if app_store is not None:
             from agentic_os.agent_gateway import app_definition_capabilities
             app_definition_capabilities.register(registry, app_store, app_writes,
-                                                 approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+                                                 approval_url=writes_link if app_writes is not None else None)
         if "erpnext" in app_writers:
             from agentic_os.agent_gateway import economics_capabilities
             from agentic_os.integrations.chatwoot import chatwoot_from_env
@@ -1767,7 +1781,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
             readers.update(economics_sources.from_env())
             app.state.economics_readers = readers
             economics_capabilities.register(registry, app_writers, readers=readers, writes=app_writes,
-                                            approval_url=(lambda rid: _approval_link("writes", rid)) if app_writes is not None else None)
+                                            approval_url=writes_link if app_writes is not None else None)
 
     def _agent_label(principal: str) -> str:
         """What an agent calls itself (a connection's client name) or what the operator labelled its token: for a card."""
@@ -1798,7 +1812,7 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
 
     def _authorize(p, perm):
         if _is_local_agent(p.id):                          # connected in the installed app: its grants as they are now
-            return perm in _GRANTS and perm in local_agents.grants_of(p.id)
+            return perm in _LOCAL_GRANTS and perm in local_agents.grants_of(p.id)
         if p.id.startswith("agent:"):                      # a per-agent principal has exactly its own grants
             if _is_connection(p):
                 return oauth.authorize(p, perm)
@@ -1969,6 +1983,13 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
         app.state.oauth_gateway = oauth
     app.state.agent_gateway_policies = policies
     app.state.agent_gateway_registry = registry
+    if local_agents is not None:
+        from agentic_os import local_agents as _local
+        from agentic_os.agent_gateway.oauth_http import GRANT_TEXT
+        served = {perm for m in registry.all() for perm in m.permissions} if desktop_ui else set()
+        acting = [g for g in _local.ACTING if g in served]
+        _LOCAL_GRANTS.update(acting)
+        app.state.local_grantable = {g: GRANT_TEXT.get(g, g) for g in (*_local.GRANTABLE, *acting)}
 
     # what the sign-in gate may let through to this surface: a PER-AGENT credential only, never the shared bearer
     app.state.agent_gateway_gate_check = ((lambda t: (agents is not None and agents.verify(t) is not None)
@@ -2812,8 +2833,16 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # governed slice of this deployment over MCP + REST. Opt-in: mounted only when
     # AGENT_GATEWAY_TOKEN is set. Every call runs the one governed path (permissions → egress →
     # audit); writes/mission-delegation are NOT exposed here (read-only surface).
+    app.state.desktop_ui = capability is not None
     gateway_mounted = mount_agent_gateway(app, prov)
     _approval_policies = mount_approvals(app, prov)
+    if capability is not None:                       # the installed app's screen: approvals, agents and applications as JSON
+        from agentic_os.local_agents import LocalAgentStore
+        from agentic_os.projects import desktop_api
+        _pages = getattr(app.state, "approval_pages", None)
+        _approval_policies = {**_approval_policies, **desktop_api.mount(
+            app, center=_pages.center if _pages is not None else None, agents=LocalAgentStore.from_env(),
+            app_store=getattr(app.state, "app_store", None), grantable=lambda: getattr(app.state, "local_grantable", {}))}
 
     # Serve the bundled Projects UI at the SAME origin as the API (no CORS) — mounted LAST so
     # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
