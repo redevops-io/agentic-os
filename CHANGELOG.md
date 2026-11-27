@@ -17,6 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.30; no version set)
 
+- **Fix:** the agent consent page said a connection was read-only while offering grants that make files, keep records and start work without a further approval. It now says what the ticks mean.
 ## v0.4.30 (portable applications, developer mode with local-model budgets, more reconciliation for agents)
 
 - **Fix:** `deploy/apps/bootstrap-secrets.sh` no longer writes secrets to a local file when Vault is configured (backend `auto`) and no Python able to reach it is found; it refuses and says how to ask for the file on purpose.
