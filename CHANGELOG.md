@@ -17,7 +17,7 @@ The release notes for the permissions and authorization work are in [RELEASE_NOT
 
 ## Unreleased (after v0.4.26; no version set)
 
-- Fixed: 60 failed sign-ins from anywhere refused everyone's approval sign-in for five minutes, so anyone who could reach the page could keep approvers out. Only a client's own failures refuse it now; a flood slows failed answers.
+- Fixed: failed approval sign-ins could keep legitimate approvers out for five minutes: 60 failures from anywhere refused everyone, and 8 refused one address, which behind `--forwarded-allow-ips "*"` is whatever the caller puts in `X-Forwarded-For`. A configured credential now always signs in; limits only delay or refuse wrong ones. Password guessing is not meaningfully slowed by these limits (it never was: the other gated routes accept the same password without one), so use long random credentials.
 
 ## v0.4.26 (the MCP server works under a base path)
 
