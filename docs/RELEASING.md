@@ -20,6 +20,23 @@ git fetch --tags && git tag --sort=-v:refname | head -3
 gh release list --repo redevops-io/agentic-os --limit 5
 ```
 
+## The release script
+
+**Cut and verify kernel releases with `scripts/cut_release.py`**, run with the kernel's Python environment (it also needs
+`git`, `gh`, `node` and `npm`). Do not run the publishing commands by hand: v0.4.24 was published with a browser archive
+that did not load, because a failing check was piped into `tail`.
+
+```bash
+python3 scripts/cut_release.py check   vX.Y.Z                    # origin/main is this version and every run on it passed
+python3 scripts/cut_release.py publish vX.Y.Z --notes NOTES.md   # build, probe, tag, DRAFT, re-download, check, publish, images
+python3 scripts/cut_release.py verify  vX.Y.Z                    # the published assets: run before deploying from a release
+```
+
+`publish` makes the release public only after the assets downloaded back from the draft match their checksum, hold what
+the tagged source builds and run in WebAssembly Python. It then builds and signs the images and waits for success. If the
+image run fails after publication, fix the cause and run `images vX.Y.Z` while `main` is still the tagged commit.
+The checklist below covers preparing the version (steps 1 to 3); the script replaces steps 4 to 6.
+
 ## Checklist
 
 1. Start from an up-to-date `main` with a green `tests` workflow.
