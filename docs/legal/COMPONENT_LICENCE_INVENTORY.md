@@ -18,6 +18,7 @@ The longest matching path prefix decides. The last row covers root files of the 
 | `agentic_os/` | 1 Core (AGPL-3.0-or-later + Commons Clause) | the agentic-os control plane, Projects API and sidecar sources (Python package `agentic_os`) | F1, F2 |
 | `apps/` | 2 Apps (AGPL-3.0-only) | the 21 applications (`apps/<name>/`, each with its own `LICENSE`) and their shared test files | F1, F2, F5, F6, F9 |
 | `audit/` | 1 Core (AGPL-3.0-or-later + Commons Clause) | audit records | - |
+| `brand/` | 1 Core (AGPL-3.0-or-later + Commons Clause) | the generator of the rAIls mark (Python standard library only; its outputs are the launcher icons) | F2 |
 | `conformance/` | 1 Core (AGPL-3.0-or-later + Commons Clause) | conformance material | - |
 | `deploy/` | 1 Core (AGPL-3.0-or-later + Commons Clause) | deployment files, demo services and reference system of the platform | F5 |
 | `deploy/apps/` | 1 Core (AGPL-3.0-or-later + Commons Clause) | the deployment of the applications' third-party cores (compose files, theme for a third-party core) | F5 |

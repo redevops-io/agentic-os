@@ -19,17 +19,18 @@ The owner decided on 2026-11-11 to remove the image whose distribution rights ca
 
 ## 2. The launcher icons
 
-Generator: `scripts/make_neutral_icons.py` (SHA-256 `6af27fb99b61f7fba91d9a804ec98ac189da8e8e0f7ff17395f6d5836caf820f`), Python standard library only; a rounded square with a slate gradient, one pale diamond and one round cut-out; no letters, no fonts, no model output.
+Generator: `brand/rails_mark.py` (SHA-256 `342c0d47bb1b0f74cdf12625d8c231fc4bf1dd93ae326745572999f60e8970c8`), Python standard library only; the rAIls mark, a square spiral of the integers with a marker on each prime (definition in `brand/README.md`); no letters in the application icons, no fonts, no model output in the files. These files replace the neutral temporary artwork of `scripts/make_neutral_icons.py` (kept for history); the previous letter mark stays out of the repository.
+
 Enforcement: `tests/test_launcher_icons.py` (files equal the generator output; the previous artwork is nowhere in the repository).
 
 | File | `deploy/launcher/src-tauri/icons` | `deploy/desktop-shell-main/src-tauri/icons` |
 |---|---|---|
-| `32x32.png` | `1d874b2f5b8c7c41e0236b1a48c70c945bc1d2031ba7191f79eff5679a8d3de2` | `1d874b2f5b8c7c41e0236b1a48c70c945bc1d2031ba7191f79eff5679a8d3de2` |
-| `128x128.png` | `00a55d7aedcdd6cd9fca28c8d4af977a77e64497ffc69c8694993a846857ee02` | `00a55d7aedcdd6cd9fca28c8d4af977a77e64497ffc69c8694993a846857ee02` |
-| `128x128@2x.png` | `fdbd4720f98f69e0799dff887f16b85515a110042b1b89604d4780eb9fdd833a` | `fdbd4720f98f69e0799dff887f16b85515a110042b1b89604d4780eb9fdd833a` |
-| `icon.png` | `8e1e5c16bb0e1763ea7518d6f2153b7ec13571e263ca3f286cba78afc8a1f099` | `8e1e5c16bb0e1763ea7518d6f2153b7ec13571e263ca3f286cba78afc8a1f099` |
-| `icon.icns` | `f074813c07221cd2a9f6a3cdcaa52d0c9dcdfa2c380b55fc50a6a303b84f7ba9` | `f074813c07221cd2a9f6a3cdcaa52d0c9dcdfa2c380b55fc50a6a303b84f7ba9` |
-| `icon.ico` | `d8898a80e7374c792345b3d8166bb1132d9d5e75794b7d8ac59d3ac1651cb3ee` | `aa1457cf00d9e0801e7d2c47cdcec2596514f12a2ed73161c56ae344df5803c0` |
+| `32x32.png` | `1c4d5fcf74a9c05dd1e770fac573c775b59809272e4dcbc2aaf3a0f4175bf0be` | `1c4d5fcf74a9c05dd1e770fac573c775b59809272e4dcbc2aaf3a0f4175bf0be` |
+| `128x128.png` | `4bb529e59018d23aba7b2c932d7b1bbd231d2f68ed902910d8079a5b12cbf398` | `4bb529e59018d23aba7b2c932d7b1bbd231d2f68ed902910d8079a5b12cbf398` |
+| `128x128@2x.png` | `00f871b066fc94466716ddc561e0abcaa9d220b8208538d3900bc51f318a39cd` | `00f871b066fc94466716ddc561e0abcaa9d220b8208538d3900bc51f318a39cd` |
+| `icon.png` | `3369df2ff1515a7cae6d3102fec7ed7561136cbd89165b0992f504de3b6e3dbf` | `3369df2ff1515a7cae6d3102fec7ed7561136cbd89165b0992f504de3b6e3dbf` |
+| `icon.icns` | `019432dadd4b22ba2dd38e15492967838d99f1fe7bc280cd7a0b580ac8693fb8` | `019432dadd4b22ba2dd38e15492967838d99f1fe7bc280cd7a0b580ac8693fb8` |
+| `icon.ico` | `ad7e56e6bb5b6430e9dfe43ef09961754c3efe047c6b70dd6ae4053b6c6b9fcc` | `ad7e56e6bb5b6430e9dfe43ef09961754c3efe047c6b70dd6ae4053b6c6b9fcc` |
 
 ## 3. Image files with NO provenance record in this repository (not covered by any statement here)
 
@@ -59,4 +60,4 @@ These are not part of the desktop product's shipped set. They are listed so that
 
 ## 4. How to regenerate
 
-`python scripts/make_neutral_icons.py`, then `python scripts/build_artwork_provenance.py` (the hero image has no generator any more).
+`python brand/rails_mark.py <out dir>` and copy its icon outputs as `deploy/launcher/src-tauri/icons/README.md` says, then `python scripts/build_artwork_provenance.py` (the hero image has no generator any more).
