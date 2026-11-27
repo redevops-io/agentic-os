@@ -5,7 +5,10 @@ Order of evidence, strongest first:
 1. ``explicit_identifier``: the text names a document (``ACC-SINV-2026-00009``). Certain that the message is about that document; it says nothing about WHY.
 2. ``customer+time+amount``: same resolved customer, the message falls in the window before or after the event, and the text states a percentage or an amount that the event's own
    numbers reproduce (a 40 % discount on a 2,500 list price, a 420 shortfall). Two or three independent signals.
-3. ``customer+time``: same customer and window, nothing else agrees. A candidate only: a complaint near a discount is not its reason.
+3. ``customer+time+topic``: the text states no figure and names no document, but what it is ABOUT (a price or rate or special terms, a refund or credit, a cancellation) fits the kind of
+   the event. ``topics`` comes from a deterministic vocabulary (``lexicon_topics``) or from a model that only labels what a message is about (``reasoning.classify_topics``); either way it is
+   one independent signal, and a topic that does not fit the event's kind (an enquiry about a price list, a complaint) blocks the link rather than adding to it.
+4. ``customer+time``: same customer and window, nothing else agrees. A candidate only: a complaint near a discount is not its reason.
 
 A message whose customer could not be resolved by an explicit identifier is never linked by a name. ``status`` is ``linked`` (explicit identifier, or customer+time+amount where
 exactly one event matches), ``candidate`` (anything weaker, or ambiguous between events) and ``ambiguous`` (two or more events fit equally well): a person or a later step decides.
@@ -28,6 +31,24 @@ WINDOW_BEFORE_DAYS, WINDOW_AFTER_DAYS = 45, 45
 KIND_WORDS = {Kind.CANCELLATION: re.compile(r"\bcancel(?:l?ed|l?ing|lation)?\b", re.I),
               Kind.RETURN: re.compile(r"\b(?:refund(?:ed)?|return(?:ed)?|credit(?: note)?|replacement)\b", re.I),
               Kind.DISCOUNT: re.compile(r"\b(?:discount|goodwill|off|rebate|concession)\b|%", re.I)}
+
+
+# what a message is about; "terms" = price, rate, discount or special arrangement; the others do not explain an adjustment
+TOPICS = ("terms", "return_credit", "cancellation", "complaint", "enquiry", "thanks", "other")
+SCOPES = ("single", "several", "unspecified")        # how many orders a message concerns
+SINGLE_MARGIN_DAYS = 7                              # a message about ONE order is tied to the nearest event only if the next nearest is at least this much further away
+COMPATIBLE = {Kind.DISCOUNT: {"terms", "thanks"}, Kind.RETURN: {"return_credit", "terms", "thanks"}, Kind.CANCELLATION: {"cancellation"}}
+_LEX = (("cancellation", re.compile(r"\b(?:cancel\w*|call(?:ed|ing)? off|hold(?:ing)? off|step(?:ping)? back|pull(?:ing)? out|withdraw\w*)\b", re.I)),
+        ("return_credit", re.compile(r"\b(?:refund\w*|credit\w*|return(?:ed|ing)?|replacement|reimburse\w*)\b", re.I)),
+        ("terms", re.compile(r"\b(?:pric(?:e|es|ing)|rates?|terms|deal|discount\w*|offer(?:ed)?|rebate|concession|waive\w*|free|special|preferred|introductory|launch|pilot)\b|%", re.I)))
+
+
+def lexicon_topics(comms: Sequence[Communication]) -> Dict[str, str]:
+    """A fixed vocabulary, no model: the first topic whose words appear. Cannot tell an enquiry about a price list from an agreement on a price: that is what a model labelling is for."""
+    out: Dict[str, str] = {}
+    for c in comms:
+        out[c.ref.id] = next((name for name, rx in _LEX if rx.search(c.text)), "other")
+    return out
 
 
 def _day(iso: str) -> Optional[_dt.date]:
@@ -84,8 +105,12 @@ def _event_numbers(e: EconomicEvent, list_by_invoice: Mapping[str, Decimal]) -> 
     return pcts, {amt.quantize(Decimal("1"))} | {amt.quantize(Decimal("0.01"))}
 
 
-def correlate(comms: Sequence[Communication], events: Sequence[EconomicEvent], *, extra_amounts: Optional[Mapping[str, Sequence[Decimal]]] = None) -> List[CorrelationEdge]:
-    """``extra_amounts`` maps an event id (or any target) to further amounts it can be restated as, for example a payment discrepancy's two sides."""
+def correlate(comms: Sequence[Communication], events: Sequence[EconomicEvent], *, extra_amounts: Optional[Mapping[str, Sequence[Decimal]]] = None,
+              topics: Optional[Mapping[str, str]] = None, scopes: Optional[Mapping[str, str]] = None) -> List[CorrelationEdge]:
+    """``extra_amounts`` maps an event id (or any target) to further amounts it can be restated as, for example a payment discrepancy's two sides.
+    ``topics`` maps a communication id to what it is about (one of ``TOPICS``); without it only the stated figures, the kind words and the document names are used.
+    ``scopes`` maps it to how many orders it concerns: a message about ONE order that several events fit is tied to the nearest one only when that is clearly nearer (``SINGLE_MARGIN_DAYS``);
+    a message about several orders, or one that cannot be told, or two events about equally near, stay ``ambiguous``."""
     edges: List[CorrelationEdge] = []
     list_by_invoice = {_invoice_of(e): e.amount for e in events if e.kind in (Kind.SALE, Kind.RETURN) and e.amount}
     by_invoice: Dict[str, List[EconomicEvent]] = {}
@@ -117,20 +142,32 @@ def correlate(comms: Sequence[Communication], events: Sequence[EconomicEvent], *
                 sig.append("amount")
             if KIND_WORDS[e.kind if e.kind in KIND_WORDS else Kind.DISCOUNT].search(c.text):
                 sig.append("kind")
+            topic = (topics or {}).get(cid)
+            if topic is not None:
+                if topic in COMPATIBLE.get(e.kind, set()):
+                    sig.append("topic")
+                elif topic in ("enquiry", "complaint", "return_credit", "cancellation", "terms") and not ({"percent", "amount"} & set(sig)):
+                    continue   # the message is about something that does not fit this kind of event, and no figure ties it: not a link, not even a candidate
             scored.append((len(sig), e, tuple(sig)))
         if not scored:
             continue
         top = max(s for s, _, _ in scored)
         best = [(e, sig) for s, e, sig in scored if s == top]
+        picked_by_scope = ""
+        if len(best) > 1 and (scopes or {}).get(cid) == "single" and "topic" in best[0][1] and day:
+            dist = sorted(((abs((_day(e.at) - day).days), e, sig) for e, sig in best), key=lambda x: x[0])
+            if dist[1][0] - dist[0][0] >= SINGLE_MARGIN_DAYS:
+                best = [(dist[0][1], dist[0][2])]
+                picked_by_scope = f"the message concerns one order; this is the nearest event ({dist[0][0]} days), the next is {dist[1][0]} days away"
         for e, sig in best:
             states_figure = bool(mt.percents or mt.amounts)
             matched_figure = "percent" in sig or "amount" in sig
             # three signals are strong only if the text does not state a figure the event contradicts ("25% off" beside a 40% discount is not that discount)
-            strong = top >= 3 and (matched_figure or ("kind" in sig and not states_figure))
+            strong = top >= 3 and (matched_figure or (("kind" in sig or "topic" in sig) and not states_figure))
             status = "ambiguous" if len(best) > 1 else ("linked" if strong else "candidate")
-            method = "customer+time+" + "+".join(x for x in sig if x not in ("customer", "time")) if strong else "customer+time"
+            method = "customer+time+" + "+".join(x for x in sig if x not in ("customer", "time")) + ("+scope" if picked_by_scope else "") if strong else "customer+time"
             edges.append(CorrelationEdge(cid, e.id, "may_explain", method, sig, status,
-                                         "two or more events fit equally well" if len(best) > 1 else ("" if strong else "same customer and period only: not a reason")))
+                                         "two or more events fit equally well" if len(best) > 1 else (picked_by_scope or ("" if strong else "same customer and period only: not a reason"))))
     return edges
 
 

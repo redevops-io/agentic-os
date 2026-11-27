@@ -20,6 +20,7 @@ from agentic_os.integrations.business.contracts import Provenance
 from .contracts import Extraction
 
 ROLE_CUSTOMER, ROLE_COMPANY, ROLE_INTERNAL, ROLE_CRM_NOTE, ROLE_SYSTEM = "customer", "company", "internal_note", "crm_note", "system"
+INTERNAL_SUFFIX = "/internal"      # a private note carries its source's scope plus this: granting the source does not grant its private notes
 
 
 def _ms(iso: str) -> int:
@@ -132,7 +133,7 @@ def collect_chatwoot(client: Any, ex: Extraction, *, tenant: str, identity: Iden
             who = m.get("sender") or {}
             ref = EvidenceRef(tenant, Provenance("chatwoot", f"{cv['id']}/{m['id']}", observed_at=now_ms or 0, known_at=int(m.get("created_at") or 0) * 1000), "message",
                               str(cv["id"]), str(m.get("updated_at") or ""), str(who.get("name") or who.get("email") or role), role, _iso(m.get("created_at")),
-                              f"{base_uri}/app/accounts/{getattr(client, 'account_id', '1')}/conversations/{cv['id']}", scope)
+                              f"{base_uri}/app/accounts/{getattr(client, 'account_id', '1')}/conversations/{cv['id']}", scope + INTERNAL_SUFFIX if role == ROLE_INTERNAL else scope)
             out.append(Communication(ref, str(m.get("content") or ""), cust, method, note, {"contact_email": sender.get("email")}))
     ex.counts["Chatwoot activity lines (not speech)"] = activity
     return out
@@ -170,3 +171,18 @@ def collect_twenty(client: Any, ex: Extraction, *, tenant: str, identity: Identi
                           ROLE_CRM_NOTE, str(n.get("createdAt") or "")[:19] + "Z", f"{base_uri}/object/note/{n['id']}", scope)
         out.append(Communication(ref, (str(n.get("title") or "") + ". " + text).strip(), cust, method, note))
     return out
+
+
+def visible_to(comms: Iterable[Communication], granted: Iterable[str]) -> Tuple[List[Communication], int, Dict[str, int]]:
+    """What a caller may read: a communication is visible only when its own ``access_scope`` is EXACTLY one the caller holds. A scope never covers a longer one (the source does not
+    include its private notes, a mailbox does not include another mailbox, a channel does not include another channel). Returns the visible ones, how many were withheld, and that count
+    per scope: those counts are the whole of what is said about the rest ("a message exists"; no id, no excerpt). Apply this BEFORE correlating, explaining or caching, so withheld text
+    is never ranked, shown to a model or cached for someone else."""
+    held = set(granted)
+    comms = list(comms)
+    ok = [c for c in comms if c.ref.access_scope in held]
+    per: Dict[str, int] = {}
+    for c in comms:
+        if c.ref.access_scope not in held:
+            per[c.ref.access_scope] = per.get(c.ref.access_scope, 0) + 1
+    return ok, len(comms) - len(ok), per

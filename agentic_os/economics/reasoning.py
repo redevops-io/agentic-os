@@ -25,7 +25,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .contracts import EconomicEvent, Kind
-from .correlate import CorrelationEdge, mentions
+from .correlate import SCOPES, TOPICS, CorrelationEdge, mentions
 from .evidence import Communication
 
 Complete = Callable[[List[Dict[str, str]]], str]
@@ -113,9 +113,16 @@ def explain_adjustment(event: EconomicEvent, comms_by_id: Mapping[str, Communica
     # the rest of a conversation a linked message belongs to is context for it (a customer's acceptance follows the company's offer)
     threads = {(comms_by_id[i].ref.provenance.provider, comms_by_id[i].ref.thread) for i in ids if i in comms_by_id}
     shown = [c for c in comms_by_id.values() if (c.ref.provenance.provider, c.ref.thread) in threads and c.customer == event.subjects.get("customer")]
-    shown = [c for c in shown if not untrusted(c.text)] or []
     if untrusted_ids := [c.ref.id for c in comms_by_id.values() if (c.ref.provenance.provider, c.ref.thread) in threads and untrusted(c.text)]:
         out.notes.append(f"untrusted instruction-like text in {untrusted_ids}: reported, not used")
+    return explain_shown(event, shown, comms_by_id, complete, out)
+
+
+def explain_shown(event: EconomicEvent, shown: Sequence[Communication], comms_by_id: Mapping[str, Communication], complete: Complete, out: Optional["Explanation"] = None) -> "Explanation":
+    """The model step and the guards of ``explain_adjustment`` for an already chosen set of messages. How the set was chosen (correlation edges, a semantic search, a context plan) is the
+    caller's; instruction-like text is dropped here whatever chose it, and a reason is kept only if the messages it cites were shown."""
+    out = out or Explanation(event.id, str(abs(event.amount)), "unknown", None)
+    shown = [c for c in shown if not untrusted(c.text)]
     if not shown:
         out.notes.append("no linked communication for this event")
         return out
@@ -144,6 +151,50 @@ def explain_adjustment(event: EconomicEvent, comms_by_id: Mapping[str, Communica
     out.reason, out.evidence = str(ans["reason"]), cited
     out.cls = "corroborated" if len(cited_groups) >= 2 and len(roles) >= 2 and ("customer" in roles or "company" in roles) else "documented"
     return out
+
+
+# ── A0. what a message is about ───────────────────────────────────────────────────────────────────────────
+def _prompt_topics(thread: Sequence[Communication]) -> List[Dict[str, str]]:
+    body = "\n".join(f"[{c.ref.id}] {c.ref.at} {c.ref.role}: {c.text}" for c in thread)
+    ask = ("Label what EACH message below is about, reading it in the context of its conversation. Labels:\n"
+           "terms = a price, rate, discount, offer or special arrangement being asked for, offered, agreed or confirmed (a figure is NOT required: 'the introductory price holds' is terms)\n"
+           "return_credit = a refund, credit, return or replacement\n"
+           "cancellation = an order being cancelled, held off or withdrawn\n"
+           "complaint = a problem reported, with no concession\n"
+           "enquiry = a request for information (a price list, a document, a status) that is not itself a request for or grant of a concession\n"
+           "thanks = gratitude for a favour or concession without saying what it was\n"
+           "other = anything else.\n"
+           "Also label how many orders it concerns: single = ONE specific order (the first, the next, this week's, one named by date); several = upcoming, future, ongoing or every order; "
+           "unspecified = cannot tell.\n"
+           'Return {"labels": [{"id": message id, "topic": one label, "scope": single|several|unspecified}]}.\n'
+           f"<<<MESSAGES\n{body}\nMESSAGES>>>")
+    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": ask}]
+
+
+def classify(comms: Sequence[Communication], complete: Complete) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """(topics, scopes): what each message is about and how many orders it concerns, labelled by a model one conversation at a time. The model only labels; ``correlate`` decides what a
+    label can and cannot link. Messages with instruction-like text are never shown (they get no label), and a label outside ``TOPICS``/``SCOPES`` or for an id that was not shown is dropped."""
+    threads: Dict[Tuple[str, str], List[Communication]] = {}
+    for c in comms:
+        if not untrusted(c.text):
+            threads.setdefault((c.ref.provenance.provider, c.ref.thread), []).append(c)
+    topics: Dict[str, str] = {}
+    scopes: Dict[str, str] = {}
+    for _, msgs in sorted(threads.items()):
+        msgs.sort(key=lambda m: m.ref.at)
+        valid = {m.ref.id for m in msgs}
+        ans = _parse_json(complete(_prompt_topics(msgs))) or {}
+        for x in ans.get("labels") or []:
+            if isinstance(x, dict) and x.get("id") in valid:
+                if x.get("topic") in TOPICS:
+                    topics[str(x["id"])] = str(x["topic"])
+                if x.get("scope") in SCOPES:
+                    scopes[str(x["id"])] = str(x["scope"])
+    return topics, scopes
+
+
+def classify_topics(comms: Sequence[Communication], complete: Complete) -> Dict[str, str]:
+    return classify(comms, complete)[0]
 
 
 # ── B. commitments ────────────────────────────────────────────────────────────────────────────────────────
