@@ -38,6 +38,8 @@ class Studio:
     def __init__(self):
         self.files, self.meta, self.calls, self.keys, self.backend = {}, {}, [], {}, None
         self.tamper = False
+        self.inference, self.downloaded_for = None, []      # what /health says about the models; whose downloads were asked
+        self.on_health = None
 
     def add(self, data, ai, parents=()):
         aid = hashlib.md5(f"{len(self.files)}:{data!r}".encode()).hexdigest()
@@ -54,9 +56,13 @@ class Studio:
     def handle(self, request):
         path = request.url.path
         if path == "/health":
-            return httpx.Response(200, json={"video_backend": self.backend, "image_backend": self.backend, "notices": []})
+            if self.on_health:
+                self.on_health()
+            facts = {} if self.inference is None else {"inference": {"video": self.inference, "image": self.inference}}
+            return httpx.Response(200, json={"video_backend": self.backend, "image_backend": self.backend, "notices": [], **facts})
         if path.startswith("/assets/"):
             assert request.headers["authorization"] == "Bearer " + "d" * 40
+            self.downloaded_for.append(request.headers.get("x-vibexgen-tenant"))
             data = self.files.get(path.split("/")[2])
             return httpx.Response(404) if data is None else httpx.Response(200, content=data + (b"x" if self.tamper else b""))
         assert path == "/invoke" and request.headers["authorization"] == "Bearer " + "c" * 40
@@ -194,6 +200,8 @@ def test_import_edit_export_then_a_post_scheduled_only_after_a_person_approved_t
     final = w.reel()
     assert final["ai_generated"] is True and final["ai_label"] == "burned" and final["target"] == "instagram_reel" and final["how"] == "export"
     assert re.fullmatch(M.PUBLIC_ASSET, final["asset"]) and "sha256" not in final and "«" not in json.dumps(final)
+    # the media service is told whose each call is, so it can hold tenants' files apart itself
+    assert w.studio.calls and all(i.get("_tenant") == "acme" for _, i, _ in w.studio.calls), [(c, i.get("_tenant")) for c, i, _ in w.studio.calls]
     raw = M.asset_id(final["asset"])
     sha = hashlib.sha256(w.studio.files[raw]).hexdigest()
     assert w.ok("social.channels")["channels"][0]["id"] == "ig1"
@@ -210,6 +218,7 @@ def test_import_edit_export_then_a_post_scheduled_only_after_a_person_approved_t
     (post,) = w.social.posts
     assert (post["state"], post["integration"]["id"], post["content"], post["publishDate"][:16]) == ("QUEUE", "ig1", "Meet the roos.", when[:16])
     assert post["image"] == [{"id": "m1", "path": "http://postiz.test/uploads/x.mp4"}] and w.studio.files[raw] in w.social.uploads[0]
+    assert w.studio.downloaded_for == ["acme"]                       # the download names whose file it is
     status = w.ok("social.request_status", request_id=asked["request_id"])
     assert status["state"] == "executed_verified" and status["record"] == "p1" and status["decided_by"] == "approver:acme"
     assert w.ok("social.posts", month=int(when[5:7]), year=int(when[:4]))["posts"][0]["state"] == "QUEUE"

@@ -77,7 +77,7 @@ def make_router(writes: GovernedWrites, principal: Callable[[], Optional[str]]) 
     @r.post("/api/writes/preauthorizations")
     def _preauthorize(body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
         who, tenant = person_who_decides()
-        allowed = {"tenant", "agent", "actions", "match", "max_uses", "minutes", "reason"}
+        allowed = {"tenant", "agent", "actions", "match", "max_uses", "minutes", "reason", "budget"}
         if set(body) - allowed or not isinstance(body.get("actions"), list) or not isinstance(body.get("agent"), str):
             raise HTTPException(422, {"error": "invalid", "detail": "body: {agent, actions[], max_uses, minutes, reason[, match, tenant]}"})
         named = str(body.get("tenant") or tenant or "")
@@ -85,6 +85,7 @@ def make_router(writes: GovernedWrites, principal: Callable[[], Optional[str]]) 
             raise HTTPException(403, {"error": "refused", "detail": "you can only preauthorize changes of your own tenant"})
         try:
             return writes.preauthorize(tenant=named, requester=body["agent"], actions=body["actions"], match=body.get("match"),
+                                       budget=body.get("budget"),
                                        max_uses=body.get("max_uses"), minutes=body.get("minutes"), created_by=who,
                                        reason=body.get("reason"))
         except PreauthorizationError as e:

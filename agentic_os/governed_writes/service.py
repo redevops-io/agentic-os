@@ -249,14 +249,14 @@ class GovernedWrites:
         ``decide`` a person's click uses. Anything that refuses leaves the request waiting for a person."""
         if evidence and evidence.get("attestation"):             # what a person must attest to, nothing stands in for
             return
-        grant = self.preauthorizations.claim(tenant=tenant, requester=requester, action=action, inputs=args)
+        grant = self.preauthorizations.claim(tenant=tenant, requester=requester, action=action, inputs=args, evidence=evidence)
         if grant is None:
             return
         who = f"preauthorization:{grant['id']} (granted by {grant['granted_by']})"
         try:
             done = self.decide(mid, approve=True, digest=digest, approver=who, tenant=tenant)
         except WriteError as e:
-            self.preauthorizations.record(grant["id"], mid, f"not decided: {e.code}: {e.detail}", give_back=True)
+            self.preauthorizations.record(grant["id"], mid, f"not decided: {e.code}: {e.detail}", give_back=grant["charged"])
             return
         self.preauthorizations.record(grant["id"], mid, done["state"])
 

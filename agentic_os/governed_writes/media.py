@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 from agentic_os.governed_writes.apps import NotApplied, OutcomeUnknown, _Http
 
 VIBEXGEN_OPERATOR = "vibexgen"
+TENANT_HEADER = "X-Vibexgen-Tenant"          # whose file a download is: the media service gives one tenant's file to no other
 MAX_MEDIA_BYTES = 256 * 1024 * 1024
 MIN_LEAD_S = 15 * 60
 MAX_AHEAD_S = 366 * 86400
@@ -92,14 +93,14 @@ class VibexgenOperator(_Http):
             raise (OutcomeUnknown if side_effecting else NotApplied)("the media service's answer had no result")
         return result
 
-    def download(self, asset: str, limit: int = MAX_MEDIA_BYTES) -> bytes:
+    def download(self, asset: str, limit: int = MAX_MEDIA_BYTES, *, tenant: str = "") -> bytes:
         import httpx  # noqa: PLC0415
         if not self.download_token:
             raise NotApplied("this deployment holds no download token for the media service (VIBEXGEN_DOWNLOAD_TOKEN)")
         try:
             with httpx.Client(timeout=self.timeout, transport=self.transport) as client:
-                with client.stream("GET", f"{self.base_url}/assets/{asset}/download",
-                                   headers={"Authorization": f"Bearer {self.download_token}"}) as r:
+                headers = {"Authorization": f"Bearer {self.download_token}", **({TENANT_HEADER: tenant} if tenant else {})}
+                with client.stream("GET", f"{self.base_url}/assets/{asset}/download", headers=headers) as r:
                     if r.status_code != 200:
                         raise NotApplied(f"the media service would not give the file (HTTP {r.status_code})")
                     data = bytearray()
@@ -320,7 +321,7 @@ def perform_post(postiz: Any, i: Mapping[str, Any], footer: str, rid: str, ctx: 
         source = ctx.operators.get("vibexgen")
         if source is None:
             raise NotApplied("the media service is not connected")
-        data = source.download(entry["asset"])
+        data = source.download(entry["asset"], tenant=ctx.tenant)
         if hashlib.sha256(data).hexdigest() != file.get("sha256"):
             raise NotApplied("the file is not the one that was approved (its SHA-256 differs)")
         suffix = {"video/mp4": ".mp4", "image/png": ".png", "image/jpeg": ".jpg", "video/quicktime": ".mov", "video/webm": ".webm"}
@@ -371,6 +372,24 @@ def _generate_inputs(ctx: Any, i: Mapping[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _inference_facts(health: Any, kind: str) -> Dict[str, Any]:
+    """What the media service says about the model that would run: where it runs and whether each use is charged. A
+    service that does not say is recorded as unknown, which is neither local nor free."""
+    facts = ((health.get("inference") or {}).get(kind) if isinstance(health, dict) else None) or {}
+    facts = facts if isinstance(facts, dict) else {}
+    return {"backend": str((health or {}).get(f"{kind}_backend") or ""), "local": facts.get("local") if isinstance(facts.get("local"), bool) else None,
+            "costly": facts.get("costly") if isinstance(facts.get("costly"), bool) else None,
+            "cost_usd": facts.get("cost_usd") if isinstance(facts.get("cost_usd"), (int, float)) else None}
+
+
+def _where(facts: Mapping[str, Any]) -> str:
+    if facts.get("local") is None or facts.get("cost_usd") is None:
+        return "the media service does not say where this model runs or what a use costs"
+    place = "on your own infrastructure" if facts["local"] else "at an outside provider: your prompt (and any source image) is sent there"
+    paid = facts.get("costly") or facts["cost_usd"] > 0
+    return f"{place}; " + (f"each use is billed (about ${facts['cost_usd']:.2f})" if paid else "no charge per use")
+
+
 def prepare_generate(ctx: Any, operator: Any, i: Mapping[str, Any]) -> Dict[str, Any]:
     _generate_inputs(ctx, i)
     health = operator.health()
@@ -378,17 +397,27 @@ def prepare_generate(ctx: Any, operator: Any, i: Mapping[str, Any]) -> Dict[str,
     if not backend:
         raise NotApplied(f"no {i['kind']} generation model is configured on this deployment")
     notices = [str(n) for n in (health.get("notices") or [])][:5]
-    show = [["Model service", str(backend)], *([["Notices", "; ".join(notices)]] if notices else [])]
-    return {"backend": str(backend), "show": show, "summary": f"Generate a {i['kind']} with {backend}"}
+    facts = _inference_facts(health, i["kind"])
+    show = [["Model service", str(backend)], ["Where it runs", _where(facts)], *([["Notices", "; ".join(notices)]] if notices else [])]
+    return {"backend": str(backend), "inference": facts, "show": show, "summary": f"Generate a {i['kind']} with {backend}"}
 
 
 def perform_generate(operator: Any, i: Mapping[str, Any], footer: str, rid: str, ctx: Any):
     from agentic_os.governed_writes.actions import Outcome  # noqa: PLC0415
+    from agentic_os.governed_writes.preauthorization import DEFAULT_VIDEO_SECONDS, local_and_free  # noqa: PLC0415
     from agentic_os.mission.approval import mint_approval_token  # noqa: PLC0415
     inputs = _generate_inputs(ctx, i)
+    if inputs["kind"] == "video":
+        inputs.setdefault("duration", DEFAULT_VIDEO_SECONDS)          # the length a budget was charged for is the length asked
     health = operator.health()
     if (health.get(f"{i['kind']}_backend") or "") != (ctx.evidence or {}).get("backend"):
         raise NotApplied("the model service changed since it was approved: propose it again")
+    facts = _inference_facts(health, i["kind"])
+    if facts != (ctx.evidence or {}).get("inference", facts):
+        raise NotApplied("where the model runs or what it costs changed since it was approved: propose it again")
+    if str(ctx.approver).startswith("preauthorization:") and not local_and_free(facts):
+        raise NotApplied("a preauthorization covers only a local model with no charge per use: a person must approve this")
+    inputs["_tenant"] = ctx.tenant
     marker = {"approved": True, "by": ctx.approver, "tenant": ctx.tenant}
     token = mint_approval_token(None, operator=VIBEXGEN_OPERATOR, capability="visual.generate", mission_id=rid, node_id="generate",
                                 inputs=inputs, marker=marker)

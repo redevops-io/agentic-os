@@ -15,7 +15,6 @@ from tests.test_governed_writes import CASES, COMMENT, World, _changes, _env  # 
 
 #: every action that exists is either eligible for developer mode or named here as never eligible: a new one must choose
 NEVER = {"economics.request_payment_correction",      # changes the ledger, needs an attestation
-         "media.request_generate",                    # spends on a model
          "market.request_change_plan",                # records a person's judgement about what to change
          "apps.request_install"}                      # installs an application: what it may use is a person's decision
 LIMITS = {"acme": {"policy_refs": ["app:*", "writes:decide", "writes:preauthorize"]},
@@ -33,7 +32,9 @@ def _developer(monkeypatch, _env):
 
 
 def test_every_action_is_either_eligible_or_named_as_never():
-    assert set(ACTIONS) == set(P.ELIGIBLE) | NEVER and not set(P.ELIGIBLE) & NEVER
+    # a model run is its own, closed class (local, unpaid, budgeted: tests/test_developer_inference.py)
+    assert P.INFERENCE == {"media.request_generate"}
+    assert set(ACTIONS) == set(P.ELIGIBLE) | NEVER | P.INFERENCE and not set(P.ELIGIBLE) & (NEVER | P.INFERENCE)
 
 
 def test_without_a_preauthorization_nothing_changes_by_itself(tmp_path):
@@ -133,7 +134,7 @@ def test_an_application_taken_from_the_tenant_stops_the_proposal_whatever_was_pr
 
 @pytest.mark.parametrize("fields,why", [
     ({"actions": ["economics.request_payment_correction"]}, "can never be preauthorized"),
-    ({"actions": ["erp.request_comment", "media.request_generate"]}, "can never be preauthorized"),
+    ({"actions": ["erp.request_comment", "media.request_generate"]}, "runs a model"),   # not an isolated developer environment
     ({"actions": ["market.request_change_plan"]}, "can never be preauthorized"),
     ({"actions": ["*"]}, "can never be preauthorized"),
     ({"actions": []}, "name at least one"),

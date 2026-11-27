@@ -86,6 +86,7 @@ payment correction, is off unless the deployment turns it on (below).
 | `economics.explain_adjustment` | discounts, cancellation, credit notes and payment differences of one invoice; any approval claim in a comment, marked unverified |
 | `economics.evidence` | messages and CRM notes that refer to one invoice or customer, as references with excerpts |
 | `economics.findings` | adjustments with no verified authorization, and messages that state a percentage the recorded discount does not reproduce; names the finding kinds it did not evaluate |
+| `economics.bank_reconciliation` | the bank's own statement files compared with the books by reference (matched, timing, fee, split or partial payment, mismatch, reversal not in the books, unmatched); says so when no statement was provided |
 
 **A difference is not by itself an error.** A bank fee, a currency exchange, a partial settlement, timing or how a receipt
 is allocated can each explain it, and a difference alone never leads to a change.
@@ -157,6 +158,32 @@ always checked; an input the schema does not name is refused where the schema sa
 every capability this gateway offers does (`idempotency_key` is always accepted). The answer is `{"status": "error", "error": "invalid_arguments:
 <field>: <problem>"}` (REST: HTTP 200; MCP: `isError` true), and never repeats a value.
 
+### Local model runs in an isolated developer environment
+
+`media.request_generate` can also be preauthorized, with a **budget**, where all of these hold:
+
+| Condition | How |
+|---|---|
+| the deployment is an isolated developer environment | `AGENTIC_OS_DEVELOPER_ENVIRONMENT=isolated` |
+| the tenant may use local inference this way | `inference:local` among its `policy_refs`, besides the two above |
+| the model is on your infrastructure with no charge per use | VibeXGen's `/health` says so (`inference.video.local: true`, `costly: false`, `cost_usd: 0`) **and** the deployment names the model in `AGENTIC_OS_LOCAL_INFERENCE_BACKENDS` (e.g. `open-sora-v2`) |
+| there is budget left | `"budget": {"video_seconds": 20, "images": 4}` (at most 300 s and 100 images), spent atomically |
+
+```bash
+curl -sS -X POST "$PROJECTS/api/writes/preauthorizations" -H "Authorization: Bearer $APPROVER_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"agent": "agent:dev1", "actions": ["media.request_generate"],
+  "budget": {"video_seconds": 20}, "max_uses": 4, "minutes": 60, "reason": "trying the local video model"}'
+```
+
+A video with no stated length is charged, and asked for, as 5 seconds. A refused decision returns the use and the budget; a
+run that was started and then failed does not. Where the model runs and what it costs are on the approval card, are part of
+the approval digest, and are read again just before the run: if they changed, nothing runs. A paid or hosted model always
+waits for a person, whose approval is what authorizes the spend. Publishing, scheduling, money and ledger changes are
+unaffected: they wait for a person here too.
+
+"Isolated" is the operator's declaration. The runtime cannot tell whether a deployment is connected to production systems:
+do not set it where it is.
+
 ## Video, images and social posts
 
 Offered with governed writes (`AGENTIC_OS_WRITES_DIR`), where VibeXGen's operator app and/or Postiz are connected:
@@ -177,8 +204,9 @@ The tenant needs `app:vibexgen` / `app:postiz`.
 | `social.channels`, `social.posts` | `social.read` | channels and the month's calendar |
 | `social.request_post` | `social.propose` | **proposes** a draft or a post scheduled at least 15 minutes ahead. There is no publish-now |
 
-- **Files belong to a tenant.** VibeXGen has one asset store, so Projects records which tenant made each file
-  (`media.sqlite` in the writes directory); another tenant's file does not exist. Agents see asset ids written as UUIDs.
+- **Files belong to a tenant.** Projects records which tenant made each file (`media.sqlite` in the writes directory), and
+  names the tenant on every call and download, so VibeXGen (versions with file ownership) holds tenants' files apart
+  itself. Another tenant's file does not exist. Agents see asset ids written as UUIDs.
 - **Source footage** comes only from VibeXGen's operator-kept library (`VIBEXGEN_LIBRARY_DIR`), which says whether a model
   made each item.
 - **Plans** are checked against a closed list of ffmpeg steps. A reference is `$input` or `@step`: a direct asset reference
@@ -358,8 +386,9 @@ curl -sS -X POST "$PROJECTS/api/writes/preauthorizations" -H "Authorization: Bea
 - **Can be covered:** `erp.request_comment`, `erp.request_draft_purchase_order` (a draft), `support.request_private_note`
   (never sent to the customer), `crm.request_company`, `crm.request_person`, `social.request_post` **only as a draft**,
   `market.request_watch`.
-- **Never covered:** payment corrections (and anything needing an attestation), model generation, scheduled posts, change
-  plans, and any action added later until it is listed deliberately. A stored record cannot widen this.
+- **Never covered:** payment corrections (and anything needing an attestation), paid or hosted model runs, scheduled posts,
+  change plans, application installs, and any action added later until it is listed deliberately. A stored record cannot
+  widen this.
 - It changes **who approved**, not what is checked: the same decision path, tenant grants, enterprise permissions gate,
   execution and read-back. If anything denies it, the request waits for a person and the use is given back. The decision
   records `preauthorization:<id> (granted by <person>)`.

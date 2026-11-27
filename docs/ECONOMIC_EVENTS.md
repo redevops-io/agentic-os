@@ -95,3 +95,7 @@ The temporal engines already exist in Context Runtime (`TemporalStore` and `Temp
 ### `economics.findings` (gateway read)
 
 Returns the findings that need no model: `adjustment_without_verified_authorization` and the percentage form of `contradicts_record`, each with message references and excerpts only from sources the agent was granted (others are counted per source). It names `recorded_without_rationale`, `commitment_without_record` and `decision_not_executed` as **not evaluated**, because they need a reading of the messages' meaning; an agent that reads `economics.evidence` and judges them says so as its own judgment. Absence of a finding is never "none".
+
+### `economics.bank_reconciliation` (gateway read)
+
+The independent bank-statement comparison (`bank.reconcile_statement`) as a typed read, over the statement files the operator keeps (`AGENTIC_OS_BANK_STATEMENTS_DIR/<tenant>/*.csv`, the same files the payment-correction checks use). Returns the findings and a count per kind. With no statement provided it says nothing was compared, never an empty list that reads as "all matched". Read-only; a currency is never converted; a difference is not by itself an error.

@@ -28,7 +28,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from agentic_os.economics import correlate, evidence, findings, reconcile
+from agentic_os.economics import bank, correlate, evidence, findings, reconcile
 from agentic_os.economics.contracts import Extraction
 from agentic_os.economics.erpnext_events import extract
 from agentic_os.governed_writes import authorization, payment_correction
@@ -86,6 +86,9 @@ def manifests() -> Tuple[CapabilityManifest, ...]:
         read("economics.evidence", "Support messages and CRM notes that refer to one sales invoice or customer, as references with "
              "excerpts. Only sources this agent was granted are shown; others are counted. " + _UNTRUSTED,
              _schema(invoice=_NAME, customer=_NAME), (DataClass.CUSTOMER_CONTENT,)),
+        read("economics.bank_reconciliation", "Compare the bank's own statement files (put there by the operator) with the payments in the books by reference: matched, timing, fee, "
+             "split or partial payment, amount or currency mismatch, reversal not in the books, lines or payments with no counterpart. It never changes anything and "
+             "never converts a currency. " + _UNTRUSTED, _schema(), (DataClass.INTERNAL, DataClass.FINANCIAL)),
         read("economics.findings", "Adjustments with no verified authorization, and messages stating a percentage the recorded discount does not reproduce. "
              "It lists which other kinds of finding it did NOT evaluate. " + _UNTRUSTED, _schema(customer=_NAME), (DataClass.CUSTOMER_CONTENT, DataClass.FINANCIAL)),
     )
@@ -242,6 +245,19 @@ def _evidence(client: Any, readers: Mapping[str, Any], principal: GatewayPrincip
             "not_read": unread, "gaps": [*ex.gaps, *gaps.gaps][:MAX_ITEMS]}
 
 
+def _bank_reconciliation(client: Any, principal: GatewayPrincipal) -> Dict[str, Any]:
+    try:
+        statements = payment_correction.load_statements(principal.tenant)
+    except payment_correction.NotApplied as e:           # nothing was reconciled: say so, never an empty list that reads as "all matched"
+        return {"statements": [], "findings": [], "reconciled": False, "note": f"nothing was compared with the books: {e}"}
+    found, ex = bank.reconcile_statement(client, statements)
+    counts: Dict[str, int] = {}
+    for f in found:
+        counts[f.kind] = counts.get(f.kind, 0) + 1
+    return {"statements": sorted(statements), "reconciled": True, "counts": counts, "findings": [f.to_json() for f in found[:MAX_ITEMS * 5]],
+            "truncated": max(0, len(found) - MAX_ITEMS * 5), "gaps": ex.gaps[:MAX_ITEMS], "note": NOT_AN_ERROR}
+
+
 NOT_EVALUATED = {"recorded_without_rationale": "needs a reading of the messages' meaning; use economics.evidence and judge it, as a judgment of yours",
                  "commitment_without_record": "needs the commitments stated in messages to be read out; use economics.evidence",
                  "decision_not_executed": "needs the commitments stated in messages to be read out; use economics.evidence"}
@@ -318,6 +334,8 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], readers: 
                                                (DataClass.INTERNAL, DataClass.FINANCIAL)),
         "economics.evidence": reader("economics.evidence", lambda req: _evidence(erp, readers, req.principal, req.arguments),
                                      (DataClass.CUSTOMER_CONTENT, DataClass.FINANCIAL)),
+        "economics.bank_reconciliation": reader("economics.bank_reconciliation", lambda req: _bank_reconciliation(erp, req.principal),
+                                                (DataClass.INTERNAL, DataClass.FINANCIAL)),
         "economics.findings": reader("economics.findings", lambda req: _findings(erp, readers, req.principal, req.arguments),
                                      (DataClass.CUSTOMER_CONTENT, DataClass.FINANCIAL)),
     }
