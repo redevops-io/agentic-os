@@ -212,7 +212,7 @@ def test_it_is_read_only_and_a_difference_is_never_presented_as_something_to_cor
     """A bank difference alone authorizes nothing: no tool proposes a change, and nothing in the answer says to make one."""
     w = world()
     who = w.agent(FULL)
-    assert offered(w, who) == ["economics.discrepancies", "economics.evidence", "economics.explain_adjustment"]
+    assert offered(w, who) == ["economics.discrepancies", "economics.evidence", "economics.explain_adjustment", "economics.findings"]
     out = w.call(who, "economics.discrepancies")
     assert out["status"] == "ok", out
     (d,) = out["output"]["discrepancies"]
@@ -235,3 +235,19 @@ def test_a_difference_that_compares_a_payment_with_a_total_is_marked_ambiguous(w
     rows = w.call(w.agent(FULL), "economics.discrepancies")["output"]["discrepancies"]
     assert rows and all(why in r["ambiguous"] for r in rows), rows
 
+
+
+def test_findings_name_what_they_did_not_evaluate_and_show_message_text_only_within_the_source_grants(world):
+    w = world()
+    plain = w.call(w.agent(["economics.read", "egress:financial"]), "economics.findings")
+    assert plain["status"] == "ok", plain
+    out = plain["output"]
+    kinds = {f["kind"] for f in out["findings"]}
+    assert "adjustment_without_verified_authorization" in kinds, out["findings"]          # a comment saying "approved" is a claim, never a verification
+    assert set(out["not_evaluated"]) == {"recorded_without_rationale", "commitment_without_record", "decision_not_executed"}
+    assert out["withheld"]["count"] > 0 and all(not f["evidence"] for f in out["findings"])
+    assert SECRET_NOTE not in json.dumps(out) and CRM_WORDS not in json.dumps(out)
+    full = w.call(w.agent(FULL), "economics.findings", customer="Acme")["output"]
+    assert full["customer"] == "Acme" and all(f["customer"] == "Acme" for f in full["findings"])
+    assert w.call(w.agent(["economics.read"]), "economics.findings")["status"] == "error"     # no financial grant: nothing read
+    assert not w.ledger.writes

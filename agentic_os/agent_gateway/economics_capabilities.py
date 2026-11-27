@@ -26,7 +26,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from agentic_os.economics import correlate, evidence, reconcile
+from agentic_os.economics import correlate, evidence, findings, reconcile
 from agentic_os.economics.contracts import Extraction
 from agentic_os.economics.erpnext_events import extract
 from agentic_os.governed_writes import authorization, payment_correction
@@ -79,6 +79,8 @@ def manifests() -> Tuple[CapabilityManifest, ...]:
         read("economics.evidence", "Support messages and CRM notes that refer to one sales invoice or customer, as references with "
              "excerpts. Only sources this agent was granted are shown; others are counted. " + _UNTRUSTED,
              _schema(invoice=_NAME, customer=_NAME), (DataClass.CUSTOMER_CONTENT,)),
+        read("economics.findings", "Adjustments with no verified authorization, and messages stating a percentage the recorded discount does not reproduce. "
+             "It lists which other kinds of finding it did NOT evaluate. " + _UNTRUSTED, _schema(customer=_NAME), (DataClass.CUSTOMER_CONTENT, DataClass.FINANCIAL)),
     )
 
 
@@ -164,10 +166,8 @@ def _scopes(principal: GatewayPrincipal, source: str) -> List[str]:
     return [base, base + evidence.INTERNAL_SUFFIX]
 
 
-def _evidence(client: Any, readers: Mapping[str, Any], principal: GatewayPrincipal, i: Mapping[str, Any]) -> Dict[str, Any]:
-    invoice, customer = i.get("invoice", ""), i.get("customer", "")
-    if bool(invoice) == bool(customer):
-        raise ValueError("name exactly one of invoice or customer")
+def _collect(client: Any, readers: Mapping[str, Any], principal: GatewayPrincipal) -> Tuple[Extraction, List[Any], List[str], Extraction, Tuple[List[Any], int, Dict[str, int]]]:
+    """Read every source this tenant is granted, then keep only what the caller's grants cover. Filtered BEFORE anything is correlated."""
     ex, identity = _events(client), _identity(client)
     comms: List[Any] = []
     unread: List[str] = []
@@ -183,8 +183,15 @@ def _evidence(client: Any, readers: Mapping[str, Any], principal: GatewayPrincip
         comms += collect(readers[source], gaps, tenant=principal.tenant, identity=identity, base_uri=getattr(readers[source], "base_url", ""),
                          scope=f"tenant:{principal.tenant}/source:{source}", now_ms=int(time.time() * 1000))
     held = [s for source, (_app, grant) in SOURCES.items() if grant in principal.scopes for s in _scopes(principal, source)]
-    # filtered BEFORE anything is correlated: withheld words are never ranked, quoted or returned, only counted
-    visible, withheld, per_scope = evidence.visible_to(comms, held)
+    return ex, comms, unread, gaps, evidence.visible_to(comms, held)
+
+
+def _evidence(client: Any, readers: Mapping[str, Any], principal: GatewayPrincipal, i: Mapping[str, Any]) -> Dict[str, Any]:
+    invoice, customer = i.get("invoice", ""), i.get("customer", "")
+    if bool(invoice) == bool(customer):
+        raise ValueError("name exactly one of invoice or customer")
+    ex, _all, unread, gaps, (visible, withheld, per_scope) = _collect(client, readers, principal)
+    # withheld words were never ranked, quoted or returned, only counted
     events = [e for e in ex.events if (e.subjects.get("invoice") == invoice if invoice else e.subjects.get("customer") == customer)]
     edges = correlate.correlate(visible, events)
     if invoice:                                            # only what refers to THIS invoice or to something that happened to it
@@ -208,6 +215,31 @@ def _evidence(client: Any, readers: Mapping[str, Any], principal: GatewayPrincip
             "links": [e.to_json() for e in edges if e.communication in cited[:MAX_ITEMS]], "withheld": {"count": withheld, "by_scope": per_scope,
                                                        "note": "items exist in sources this agent was not granted; nothing of them is shown"},
             "not_read": unread, "gaps": [*ex.gaps, *gaps.gaps][:MAX_ITEMS]}
+
+
+NOT_EVALUATED = {"recorded_without_rationale": "needs a reading of the messages' meaning; use economics.evidence and judge it, as a judgment of yours",
+                 "commitment_without_record": "needs the commitments stated in messages to be read out; use economics.evidence",
+                 "decision_not_executed": "needs the commitments stated in messages to be read out; use economics.evidence"}
+
+
+def _findings(client: Any, readers: Mapping[str, Any], principal: GatewayPrincipal, i: Mapping[str, Any]) -> Dict[str, Any]:
+    """The findings that need no model: an adjustment with no VERIFIED authorization, and a message that states a percentage the recorded discount does not
+    reproduce. The others are named as not evaluated, so that their absence is never read as "none"."""
+    customer = i.get("customer", "")
+    ex, _all, unread, gaps, (visible, withheld, per_scope) = _collect(client, readers, principal)
+    events = [e for e in ex.events if not customer or e.subjects.get("customer") == customer]
+    found = findings.reconcile_both(events, {}, (), (), visible)
+    by_id = {c.ref.id: c for c in visible}
+    out = []
+    for f in found[:MAX_ITEMS * 5]:
+        row = f.to_json()
+        row["evidence"] = [{**by_id[r].ref.to_json(), "excerpt": by_id[r].text[:MAX_EXCERPT]} for r in f.evidence if r in by_id][:MAX_ITEMS]
+        row["evidence_count"] = len(row["evidence"])
+        out.append(row)
+    return {"customer": customer or None, "findings": out, "count": len(found), "not_evaluated": NOT_EVALUATED,
+            "withheld": {"count": withheld, "by_scope": per_scope,
+                         "note": "messages exist in sources this agent was not granted; a contradiction they would show cannot be found from here"},
+            "not_read": unread, "gaps": [*ex.gaps, *gaps.gaps][:MAX_ITEMS], "note": NOT_AN_ERROR}
 
 
 # ── registration ─────────────────────────────────────────────────────────────────
@@ -256,6 +288,8 @@ def register(registry: CapabilityRegistry, writers: Mapping[str, Any], readers: 
         "economics.explain_adjustment": reader("economics.explain_adjustment", lambda req: _explain(erp, req.arguments),
                                                (DataClass.INTERNAL, DataClass.FINANCIAL)),
         "economics.evidence": reader("economics.evidence", lambda req: _evidence(erp, readers, req.principal, req.arguments),
+                                     (DataClass.CUSTOMER_CONTENT, DataClass.FINANCIAL)),
+        "economics.findings": reader("economics.findings", lambda req: _findings(erp, readers, req.principal, req.arguments),
                                      (DataClass.CUSTOMER_CONTENT, DataClass.FINANCIAL)),
     }
 
