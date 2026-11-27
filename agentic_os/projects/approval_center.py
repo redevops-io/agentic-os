@@ -93,6 +93,7 @@ class Card:
     native: List[Dict[str, str]] = field(default_factory=list)       # {label, url}
     native_note: str = ""
     technical: str = ""                              # the exact thing being approved, shown folded under the explanation
+    running: bool = False                            # approved and being performed as a job: the view refreshes until it ends
 
     @property
     def ref(self) -> str:
@@ -189,6 +190,9 @@ class ApprovalCenter:
         if not card.waiting and v.get("attested"):
             card.changes.append(("The approver attested", _text(v["attested"])))
         card.affected = self._affected(app, action, inputs or {}, v)
+        if v.get("job"):
+            card.state_words, card.running = "Running: this takes a few minutes", True
+            card.changes.append(("Job", f"{v['job']['job_id']} (running; its state is shown here until it ends)"))
         if card.waiting:
             card.digest = v.get("digest", "")
             card.attestation = str(evidence.get("attestation", ""))

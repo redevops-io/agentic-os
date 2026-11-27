@@ -47,8 +47,10 @@ def _when(value: Any) -> str:
     return str(value or "")
 
 
-def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
-    return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{_e(title)}</title>'
+def _page(title: str, body: str, status: int = 200, *, refresh_s: int = 0, refresh_to: str = "") -> HTMLResponse:
+    # a running job's card reloads itself (no script: these pages allow none)
+    again = f'<meta http-equiv="refresh" content="{int(refresh_s)};url={_e(refresh_to)}">' if refresh_s else ""
+    return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">{again}<title>{_e(title)}</title>'
                         f'<meta name="viewport" content="width=device-width,initial-scale=1"><style>{_STYLE}</style></head><body>{body}</body></html>',
                         status_code=status, headers=HEADERS)
 
@@ -271,7 +273,8 @@ class ApprovalPages:
                 card = self.center.card(Person(session.principal), source, record_id)
             except DecisionRefused as e:
                 return _page("Not found", who_html(request, session) + f"<p>{_e(e.detail)}</p>", e.status)
-            return _page(card.title, who_html(request, session) + card_html(card, self._base(request), session.csrf))
+            return _page(card.title, who_html(request, session) + card_html(card, self._base(request), session.csrf),
+                         refresh_s=10 if card.running else 0, refresh_to=f"{self._base(request)}{PREFIX}/{source}/{record_id}")
 
         @app.post("/approvals/{source}/{record_id}/decision")
         async def _decide(source: str, record_id: str, request: Request):
@@ -290,7 +293,8 @@ class ApprovalPages:
                     return _page("Not found", f"<p>{_e(gone.detail)}</p>", gone.status)
                 return _page(card.title, who_html(request, session)
                              + card_html(card, self._base(request), session.csrf, message=f"Not done: {e.detail}"), e.status)
-            return _page(card.title, who_html(request, session) + card_html(card, self._base(request), session.csrf, message=card.state_words))
+            return _page(card.title, who_html(request, session) + card_html(card, self._base(request), session.csrf, message=card.state_words),
+                         refresh_s=10 if card.running else 0, refresh_to=f"{self._base(request)}{PREFIX}/{source}/{record_id}")
 
         # "operator_boundary": these routes are the authorizing boundary themselves. Sign-in verifies a configured credential;
         # a decision needs a live session, its CSRF token, the same origin, and the person's right to decide that record.
