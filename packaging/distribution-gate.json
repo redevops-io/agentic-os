@@ -510,17 +510,17 @@
     "option": "a",
     "note": "Owner fact."
    },
-   "ships_meanwhile": "temporary neutral artwork generated from code (scripts/make_neutral_icons.py), not the previous mark; LICENSING.md section 4 does not list the icons as covered",
+   "ships_meanwhile": "the rAIls prime-spiral mark generated from code (brand/rails_mark.py), provenance and hashes in docs/legal/ARTWORK_PROVENANCE.md; LICENSING.md section 4 does not list the icons as covered",
    "counsel_questions": [
     "Q29"
    ],
    "facts_resolved_by_lic2": "None: authorship is not discoverable from the files.",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-11",
    "chosen_option": "b",
-   "decision_reference": "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md",
-   "decision_sha256": "fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
-   "decided_by": "Alex Rybachek (owner), consolidated approval fa8662f3bcd02238adb514e17cb72cb87eb2f08613fb30cc3f111ad47e0f64a2",
-   "decided_on": "2026-11-12",
+   "decision_reference": "docs/legal/approved/D-LIC-11_RAILS_MARK_0.6.md",
+   "decision_sha256": "ec29b8b6910cc51602c706cfe62d7eea8a8378764adef18fd9079fc5f33f9444",
+   "decided_by": "Alex Rybachek (owner), record ec29b8b6910cc51602c706cfe62d7eea8a8378764adef18fd9079fc5f33f9444",
+   "decided_on": "2026-11-28",
    "counsel_reference": null
   },
   {
