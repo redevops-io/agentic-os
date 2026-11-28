@@ -23,6 +23,7 @@ class RegisteredApp:
     manifest: AppManifest
     operator: object            # a mission.operator_sdk.Operator
     findings: tuple             # the conformance findings recorded at registration
+    external: bool = False      # registered through the external trust boundary (see AppRegistry.register_external)
 
 
 class AppRegistry:
@@ -31,17 +32,31 @@ class AppRegistry:
     def __init__(self) -> None:
         self._apps: Dict[str, RegisteredApp] = {}
 
-    def register(self, manifest: AppManifest, operator) -> RegisteredApp:
-        """Validate and register an app. Raises ``ManifestError`` on any blocking finding."""
+    def register(self, manifest: AppManifest, operator, *, external: bool = False) -> RegisteredApp:
+        """Validate and register an app. Raises ``ManifestError`` on any blocking finding.
+
+        ``external=False`` is for the apps this distribution ships (and its own tests): trusted code, whose unclassified side effects are reported but do not block.
+        ``external=True`` is the trust boundary for an app that comes from outside (a portable, installed or imported app): see :meth:`register_external`."""
         if manifest.name in self._apps:
             raise ManifestError(f"app '{manifest.name}' is already registered")
-        findings = check_registration(manifest, operator)
+        findings = check_registration(manifest, operator, external=external)
         bad = blocking_findings(findings)
         if bad:
             raise ManifestError(summarize(findings))
-        app = RegisteredApp(manifest=manifest, operator=operator, findings=tuple(findings))
+        app = RegisteredApp(manifest=manifest, operator=operator, findings=tuple(findings), external=external)
         self._apps[manifest.name] = app
         return app
+
+    def register_external(self, manifest: AppManifest, operator) -> RegisteredApp:
+        """Register an app that is not part of this distribution. Fails closed, at registration, before any of its capabilities can be planned or invoked:
+
+        * every capability the operator can execute is declared in the manifest (nothing unclassified is reachable);
+        * every side-effecting capability declares who decides (``approval_required`` or ``required_authority``) and the ``permissions`` a caller must hold;
+        * the app's name is its operator's name and is not the name of a bundled app.
+
+        This adds NO authorization system: approval is enforced where it already is (the operator's ``/invoke``, the mission runtime's gate, the agent gateway), and scope
+        by the permissions the mission holds (``AGENTIC_OS_TENANT_LIMITS`` for a tenant caller). It refuses the app whose capabilities those checks could not classify."""
+        return self.register(manifest, operator, external=True)
 
     def ensure(self, manifest: AppManifest, operator) -> RegisteredApp:
         """Idempotent register: register the app if absent, else return the existing registration.
