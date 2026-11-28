@@ -6,10 +6,8 @@ import threading
 
 import pytest
 
-pytest.importorskip("fastapi")
-
-from agentic_os.governed_writes import service as S  # noqa: E402
-from tests.test_agent_gateway_media import APPROVER, world  # noqa: E402,F401
+from agentic_os.governed_writes import service as S
+from tests.test_agent_gateway_media import APPROVER, world  # noqa: F401
 
 
 @pytest.fixture
