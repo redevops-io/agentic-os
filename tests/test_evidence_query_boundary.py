@@ -484,6 +484,16 @@ def test_required_sandbox_fails_closed_when_unavailable(monkeypatch):
 
 
 # ───────────────────────── resource limits ─────────────────────────
+def test_a_parent_that_once_used_much_memory_does_not_fail_every_query():
+    """On Linux the new worker inherits its parent's ru_maxrss across exec: after the application had once held more than
+    the worker's cap, every query was killed with 'limit'. The worker is judged by its own memory."""
+    cap_mb = Limits().memory_mb * 2 + 200
+    once = bytearray((cap_mb + 150) * 1024 * 1024)
+    once[::4096] = b"x" * len(once[::4096])                                   # really resident, then freed
+    del once
+    assert W.execute(make_catalog().load_scope("alpha"), "SELECT 1", Limits(timeout_s=20), os_sandbox="off").rows == [[1]]
+
+
 def test_timeout_kills_the_worker(tmp_path):
     svc, sink = make_service(tmp_path, limits=Limits(timeout_s=2))
     import time
