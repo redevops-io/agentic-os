@@ -1,0 +1,23 @@
+{
+ "app": "video-ad",
+ "digest": "sha256:9f0095d7bbf4e375b545bfb3596e8cb889051ffacc7257a9f66612196b8585dd",
+ "operations": [],
+ "problems": [
+  "operator.py could not be loaded (ModuleNotFoundError: reel): its capabilities are not inventoried"
+ ],
+ "routes": [],
+ "schema": "rails.app-capabilities/1",
+ "status": "incomplete",
+ "summary": {
+  "gateway_candidates": 0,
+  "operations": 0,
+  "reachable_by_external_agents": 0,
+  "routes": 0,
+  "routes_without_a_gate_decision": 0,
+  "typed": 0,
+  "ui_calls": 0,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 0
+ },
+ "ui_calls": []
+}

@@ -41,7 +41,8 @@ def test_scan_start_runs_when_the_target_is_allowlisted(monkeypatch):
     monkeypatch.setenv("SCAN_ALLOWLIST", "web-baseline=127.0.0.1:1")
     resp = _rpc("scan_start", {"target": "127.0.0.1:1", "profile": "web-baseline"})
     sc = resp["result"]["structuredContent"]
-    assert "job_id" in sc and sc["state"] == "running"
+    # accepted, not refused. The scan hits a closed port, so it may already have finished when the reply is read.
+    assert "job_id" in sc and "error" not in sc and sc["state"] in ("running", "done"), sc
     _wait_until_done(sc["job_id"])
 
 

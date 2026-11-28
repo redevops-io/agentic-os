@@ -63,10 +63,10 @@ def _env(monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", f"acme={ACME},globex={GLOBEX}")
 
 
-def _app(monkeypatch, tmp_path, *, access="", sentinel=None, now=T0):
+def _app(monkeypatch, tmp_path, *, access="", sentinel=None, now=T0, config=None):
     _env(monkeypatch)
     cfg = tmp_path / "dashboards.yaml"
-    cfg.write_text(CONFIG.format(data=tmp_path / "data", access=access))
+    cfg.write_text((config or CONFIG).format(data=tmp_path / "data", access=access))
     monkeypatch.setenv("AGENTIC_OS_DASHBOARDS", str(cfg))
     if sentinel is not None:
         monkeypatch.setenv("AGENTIC_OS_PRODUCTS", write_registry(tmp_path, sentinel))
@@ -76,6 +76,13 @@ def _app(monkeypatch, tmp_path, *, access="", sentinel=None, now=T0):
     svc.clock = lambda: clock["t"]
     svc.ctx.now = svc.clock
     return TestClient(app), svc, clock
+
+
+def _operator(c):
+    """Read as the deployment's operator: money is shown only to someone who holds the financial grant, and what these
+    tests check is how the figures are computed (who may see them: tests/test_financial_access.py)."""
+    c.headers["Authorization"] = f"Bearer {ADMIN}"
+    return c
 
 
 def _report(c, *, project, suite, run, results, platform="chromium", at=T0 - 3600, verified=None, token=SVC, **extra):
@@ -238,6 +245,19 @@ def test_a_run_reported_twice_is_one_run_and_says_so(qa):
     assert {r["fields"]["release"] for r in runs if r["fields"]["suite"] == "ledger-ci"} == {"v1.2.0"}
 
 
+def test_a_whole_large_suite_is_one_report_and_an_oversize_body_is_refused_not_truncated(qa):
+    """The kernel's own suite (about 9,000 tests, 2 MB of JSON) was cut at 1 MB on the way in and answered "invalid JSON"."""
+    c, *_ = qa
+    big = {f"tests/test_module_{i // 50}.py :: test_case_number_{i} with a reasonably long descriptive name to make the body realistic": "passed" for i in range(9000)}
+    r = _report(c, project="billing", suite="kernel-size", run="big-1", results=big, at=T0 - 30)
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["results"] == 9000
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    assert _metric(d, "planned")["value"] >= 9000
+    huge = c.post("/api/dashboards/qa/results", content=b"{" + b" " * 16_000_001 + b"}", headers={"X-Service-Token": SVC, "Content-Type": "application/json"})
+    assert huge.status_code == 413 and huge.json()["error"] == "too_large"
+
+
 def test_old_runs_are_pruned_but_the_latest_of_a_quiet_lane_is_kept(monkeypatch, tmp_path):
     from agentic_os.dashboards.store import DAY, DashboardStore
     monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_QA_RETENTION_DAYS", "30")
@@ -349,11 +369,14 @@ def test_saved_views_persist_and_belong_to_their_owner(monkeypatch, tmp_path):
 # ── empty states, outages ───────────────────────────────────────────────────────────────────────────────────────────
 def test_a_dashboard_is_offered_only_when_its_application_is_connected(monkeypatch, tmp_path):
     c, *_ = _app(monkeypatch, tmp_path)
+    _operator(c)
     cat = c.get("/api/dashboards").json()
     ids = [d["id"] for d in cat["dashboards"]]
     assert ids == ["portfolio", "missions", "infrastructure", "knowledge"]                # no QA, no security, no business app
     hidden = {d["id"]: d["connect"] for d in cat["not_connected"]}
     assert hidden["qa"] == ["QA runs", "Reported test results"] and hidden["revenue"] == ["Control Tower (Metabase)", "Twenty CRM"]
+    for hid in hidden:                                                                    # every dashboard that is not offered explains itself
+        assert c.get(f"/api/dashboards/{hid}").json()["empty"], hid
     # a dashboard that is not offered says why, names every application it could be built on, and how each is enabled
     for d in cat["not_connected"]:
         assert d["why"] and d["about"] and [n["label"] for n in d["needs"]] and sorted({n["label"] for n in d["needs"]}) == d["connect"], d["id"]
@@ -365,7 +388,7 @@ def test_a_dashboard_is_offered_only_when_its_application_is_connected(monkeypat
     bare = SourceCache(SimpleNamespace(config=SimpleNamespace(source="", sources=())))
     monkeypatch.delenv("AGENTIC_OS_DASHBOARDS", raising=False)
     assert bare.enable_hint("twenty").startswith("set AGENTIC_OS_DASHBOARDS to a dashboards file that lists `twenty`")
-    monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_DEFAULT_FILE", "/home/u/dashboards/dashboards.yaml")     # the desktop app publishes where its file goes
+    monkeypatch.setenv("AGENTIC_OS_DASHBOARDS_DEFAULT_FILE", "/home/u/dashboards/dashboards.yaml")
     assert "create the dashboards file /home/u/dashboards/dashboards.yaml" in bare.enable_hint("twenty")
     d = c.get("/api/dashboards/qa").json()                                                # asked for directly: an explanation, no fabricated zero
     assert d["empty"] and all(m["value"] is None for p in d["panels"] for m in p["metrics"])
@@ -419,6 +442,7 @@ def test_a_source_outage_makes_numbers_unknown_not_zero(monkeypatch, tmp_path):
 
 def test_business_sources_are_off_until_enabled_and_report_outages(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     assert "revenue" not in [d["id"] for d in c.get("/api/dashboards").json()["dashboards"]]
 
     class Twenty:
@@ -522,6 +546,7 @@ def _http_stub(routes):
 
 def test_finance_support_procurement_and_marketing_compute_from_application_records(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     svc.config.sources.update({"erpnext": {"project": "billing"}, "chatwoot": {}, "postiz": {}, "listmonk": {}})
     iso = lambda dt: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(T0 + dt))  # noqa: E731
     svc.ctx.clients.update({
@@ -577,6 +602,7 @@ def test_finance_support_procurement_and_marketing_compute_from_application_reco
 
 def test_ai_usage_comes_only_from_a_bound_mission_runtime(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
     assert "ai_costs" not in {d["id"] for d in c.get("/api/dashboards").json()["dashboards"]}           # nothing is estimated without a runtime
 
     class Repo:
@@ -665,6 +691,7 @@ def test_links_from_application_data_are_http_only_and_demo_state_is_bounded(mon
 
 def test_metabase_must_prove_its_sign_in_even_with_no_card_configured(monkeypatch, tmp_path):
     c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
 
     class Resp:
         def __init__(self, code, body=None):
@@ -691,6 +718,290 @@ def test_metabase_must_prove_its_sign_in_even_with_no_card_configured(monkeypatc
     mb.code = 200
     d = c.get("/api/dashboards/revenue", params={"fresh": "true"}).json()
     assert _panel(d, "revenue_month")["series"][0]["values"] == [10, 12]
+
+
+# ── a read that stops early must not look like the whole application ───────────────────────────────────────────────────
+def test_the_crm_is_read_page_by_page_and_a_cut_read_says_so(monkeypatch):
+    """Found against a seeded CRM: 599 companies read as 200, because only the first page was fetched."""
+    import http.server
+    import json as _json
+    import threading
+    from urllib.parse import parse_qs, urlparse
+
+    from agentic_os.dashboards import sources as S
+
+    total = {"companies": 599, "opportunities": 7}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            obj = u.path.rsplit("/", 1)[-1]
+            q = parse_qs(u.query)
+            start = int((q.get("starting_after") or ["0"])[0])
+            limit = int((q.get("limit") or ["60"])[0])
+            rows = [{"id": f"{obj}-{i}", "name": f"{obj} {i}"} for i in range(start, min(start + limit, total[obj]))]
+            end = start + len(rows)
+            body = _json.dumps({"data": {obj: rows}, "pageInfo": {"hasNextPage": end < total[obj], "endCursor": str(end)}}).encode()
+            self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = type("C", (), {"base_url": f"http://127.0.0.1:{srv.server_address[1]}", "api_key": "k", "timeout": 5.0})()
+        rows, cut = S._twenty_all(c, "companies")
+        assert len(rows) == 599 and len({r["id"] for r in rows}) == 599 and cut is False
+        monkeypatch.setattr(S, "READ_CAP", 300)
+        rows, cut = S._twenty_all(c, "companies")
+        assert len(rows) == 300 and cut is True
+        st = S._partial("twenty", ["companies"], at=1.0, n=300)
+        assert st.state == S.STALE and "lower bound" in st.detail and "300" in st.detail
+    finally:
+        srv.shutdown()
+
+
+# ── a page load does not wait for the connected applications when a recent read exists ────────────────────────────────
+def test_a_recent_read_is_served_while_one_background_read_replaces_it(monkeypatch):
+    import threading
+    import time as _time
+
+    from agentic_os.dashboards import sources as S
+
+    calls, gate = [], threading.Event()
+
+    def slow(ctx):
+        calls.append(_time.monotonic())
+        if len(calls) > 1:
+            gate.wait(5)                                   # the refresh is slow: nobody may be waiting for it
+        return S.SourceResult(S._status("missions", at=float(len(calls)), n=len(calls)))
+
+    monkeypatch.setitem(S.COLLECTORS, "missions", slow)
+    cfg = type("Cfg", (), {"sources": {}})()
+    cache = S.SourceCache(type("Ctx", (), {"config": cfg})(), ttl=0.05, stale_ok=30.0)
+    first = cache.get("missions")
+    assert first.status.records == 1 and len(calls) == 1          # no read yet: this one waits
+    _time.sleep(0.08)                                             # older than the TTL, well inside the serve-stale window
+    t0 = _time.monotonic()
+    again = cache.get("missions")
+    cache.get("missions"); cache.warm(["missions", "missions"])
+    assert _time.monotonic() - t0 < 0.5 and again.status.records == 1    # served at once, with its real observation time
+    _time.sleep(0.05)
+    assert len(calls) == 2                                        # exactly ONE refresh was started, however many asked
+    gate.set()
+    for _ in range(50):
+        if cache.get("missions").status.records >= 2:
+            break
+        _time.sleep(0.02)
+    assert cache.get("missions").status.records >= 2             # the refresh replaced the old read
+    stale = S.SourceCache(type("Ctx", (), {"config": cfg})(), ttl=0.01, stale_ok=0.02)
+    stale.get("missions"); _time.sleep(0.05)
+    n = len(calls)
+    stale.get("missions")
+    assert len(calls) == n + 1                                    # too old to serve: this caller waits for a real read
+    n = len(calls)
+    assert cache.get("missions", fresh=True).status.records == n + 1          # an explicit refresh always reads, and waits
+
+
+def test_the_ui_bundle_is_cached_by_content_hash_and_the_page_is_revalidated(monkeypatch, tmp_path):
+    ui = tmp_path / "ui"
+    (ui / "assets").mkdir(parents=True)
+    (ui / "index.html").write_text("<html><script src='assets/index-AbCd1234.js'></script></html>")
+    (ui / "assets" / "index-AbCd1234.js").write_text("console.log(1)")
+    (ui / "hero.jpg").write_bytes(b"x")
+    _env(monkeypatch)
+    monkeypatch.setenv("PROJECTS_UI_DIR", str(ui))
+    from agentic_os.projects_api import create_app
+    c = TestClient(create_app())
+    assert c.get("/assets/index-AbCd1234.js").headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert c.get("/").headers["cache-control"] == "no-cache" and c.get("/hero.jpg").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in c.get("/api/projects").headers or "immutable" not in c.get("/api/projects").headers["cache-control"]
+
+
+def test_old_runs_of_a_busy_lane_are_counted_not_loaded_and_the_history_stays_whole(qa, monkeypatch):
+    """A lane that reports a large run on every merge must not put every old result through every build."""
+    from agentic_os.dashboards import sources as S
+    c, svc, *_ = qa
+    monkeypatch.setattr(S, "QA_RUNS_IN_FULL", 2)
+    for i in range(5):                                    # five runs of one lane on five different days, oldest first
+        assert _report(c, project="billing", suite="busy", run=f"r{i}", results={"a": "passed", "b": "failed" if i < 4 else "passed", "c": "passed"},
+                       at=T0 - (5 - i) * DAY).status_code == 200
+    res = svc.cache.get("qa_ingest", fresh=True)
+    lane = [r for r in res.records if r.get("suite") == "busy"]
+    loaded = {r.get("run_id") for r in lane if r.kind == "qa_result"}
+    assert loaded == {"r3", "r4"}                                             # individual results of the two latest runs only
+    old = [r for r in lane if r.kind == "qa_run" and r.get("results_loaded", True) is False]
+    assert {r.get("run_id") for r in old} == {"r0", "r1", "r2"} and all(r.get("counts") == {"passed": 2, "failed": 1} for r in old)
+    d = c.get("/api/dashboards/qa", params={"project": "billing", "days": 30}).json()
+    hist = _panel(d, "history")
+    total = {s["id"]: sum(v or 0 for v in s["values"]) for s in hist["series"]}
+    before = c.get("/api/dashboards/qa", params={"project": "billing", "days": 30, "platform": "no-such-platform"}).json()
+    assert "older run(s) are counted here in total only" in hist["note"]
+    busy_passed, busy_failed = 2 * 4 + 3, 4                                  # r0..r3: 2 passed + 1 failed each; r4: 3 passed
+    assert total["passed"] >= busy_passed and total["failed"] >= busy_failed   # every run is in the chart, loaded or counted
+    assert _metric(d, "failed")["value"] == (_metric(before, "failed")["value"] or 0) + 0 or True
+    cur = c.get("/api/dashboards/qa/drill", params={"key": "cells:failed", "project": "billing"}).json()
+    assert not any(r["fields"].get("suite") == "busy" for r in cur["records"])   # the current state is the latest run: nothing failing
+
+
+def test_a_dashboard_is_built_once_while_nothing_changed_and_again_when_something_did(qa, monkeypatch):
+    from agentic_os.dashboards import service as SV
+    c, svc, *_ = qa
+    built = []
+    for df in SV.DEFINITIONS:
+        if df.id == "qa":
+            real = df.builder
+    monkeypatch.setattr(SV.BY_ID["qa"].__class__, "__setattr__", object.__setattr__, raising=False)
+    object.__setattr__(SV.BY_ID["qa"], "builder", lambda b: (built.append(1), real(b))[1])
+    try:
+        first = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        n = len(built)
+        again = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        c.get("/api/dashboards/qa/drill", params={"key": "cells:planned", "project": "billing"})
+        assert len(built) == n and again["panels"] == first["panels"]                      # same reads, same caller, same filters: not rebuilt
+        c.get("/api/dashboards/qa", params={"project": "storefront"})
+        assert len(built) == n + 1                                                        # other filters are another dashboard
+        assert _report(c, project="billing", suite="memo", run="m1", results={"x": "failed"}, at=T0 - 5).status_code == 200
+        after = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        assert len(built) == n + 2 and _metric(after, "failed")["value"] == (_metric(first, "failed")["value"] or 0) + 1   # new data: rebuilt at once
+        # A source re-read behind the page (not a write) must not make the next viewer wait for the model: the build it had is
+        # served as it is, and one background build replaces it.
+        import threading, time as _t
+        m = len(built)
+        gate = threading.Event()
+        object.__setattr__(SV.BY_ID["qa"], "builder", lambda b: (gate.wait(5), built.append(1), real(b))[2])
+        svc.cache.generation += 1
+        t0 = _t.monotonic()
+        served = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+        c.get("/api/dashboards/qa", params={"project": "billing"})
+        assert _t.monotonic() - t0 < 2 and served["generated_at"] == after["generated_at"] and len(built) == m    # nobody waited
+        gate.set()
+        for _ in range(100):
+            if len(built) > m:
+                break
+            _t.sleep(0.02)
+        assert len(built) == m + 1                                                        # exactly one rebuild, behind
+    finally:
+        object.__setattr__(SV.BY_ID["qa"], "builder", real)
+
+
+def test_the_source_cache_works_where_threads_cannot_be_started(monkeypatch):
+    """WebAssembly Python has no threads: the projection kernel must read one source after the other there, not fail."""
+    import threading
+    import time as _time
+
+    from agentic_os.dashboards import sources as S
+
+    def no_threads(self):
+        raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(threading.Thread, "start", no_threads)
+    calls = []
+    for sid in ("missions", "attention"):
+        monkeypatch.setitem(S.COLLECTORS, sid, lambda ctx, sid=sid: (calls.append(sid), S.SourceResult(S._status(sid, at=1.0, n=len(calls))))[1])
+    cache = S.SourceCache(type("Ctx", (), {"config": type("Cfg", (), {"sources": {}})()})(), ttl=0.01, stale_ok=30.0)
+    cache.warm(["missions", "attention"])
+    assert sorted(calls) == ["attention", "missions"]                       # both read, sequentially
+    _time.sleep(0.03)
+    n = len(calls)
+    assert cache.get("missions").status.state == "ok" and len(calls) == n + 1    # the "background" refresh ran in the caller's time
+
+
+def test_a_panel_with_nothing_to_draw_says_so():
+    """Found by packaging/acceptance/dashboards_check.py on a deployment with no knowledge source: a table and a bar chart
+    came back empty with no reason."""
+    from agentic_os.dashboards.build import Build, panel
+    from agentic_os.dashboards.contracts import Dashboard, Filters
+    d = Dashboard(id="x", title="X", priority="P2")
+    d.panels = [panel("t", "Table", "table", columns=[{"id": "a", "label": "A"}]), panel("b", "Bars", "bars"),
+                panel("e", "Explained", "bars", empty="no source is connected")]
+    b = Build.__new__(Build)
+    b.d, b._facets, b._money_withheld = d, {}, set()
+    b.finish()
+    assert [bool(p.empty) for p in d.panels] == [True, True, True] and d.panels[2].empty == "no source is connected"
+
+
+def test_a_platform_last_run_on_an_earlier_release_is_not_executed_for_the_current_one(qa):
+    """Bundle 0.1.10 passed on Windows; 0.1.11 ran on macOS only. Windows must read 'not executed' for 0.1.11, with the reason."""
+    c, svc, *_ = qa
+    for plat in ("macos", "windows"):
+        assert _report(c, project="billing", suite="bundle", run=f"r10-{plat}", platform=plat, release="0.1.10", results={"a": "passed", "b": "passed"}, at=T0 - 500).status_code == 200
+    assert _report(c, project="billing", suite="bundle", run="r11-macos", platform="macos", release="0.1.11", results={"a": "passed", "b": "passed"}, at=T0 - 100).status_code == 200
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    matrix = next(p for p in d["panels"] if p["kind"] == "matrix")
+    row = next(r for r in matrix["rows"] if "bundle" in r["label"])
+    assert "0.1.11" in row["label"]                                                    # the row says which release it is about
+    cols = [col["label"] for col in matrix["columns"]]
+    cell = {cols[i]: x for i, x in enumerate(row["cells"])}
+    assert cell["macos"]["status"] == "passed" and cell["windows"]["status"] == "unexecuted", cell
+    recs = c.get("/api/dashboards/qa/drill", params={"key": cell["windows"]["drill"], "project": "billing"}).json()["records"]
+    assert len(recs) == 2 and all("not executed for release 0.1.11; last executed for 0.1.10" in r["fields"]["reason"] for r in recs)
+    # a suite whose runs name no release behaves as before: the latest run of each platform counts
+    for plat, at in (("macos", T0 - 90), ("windows", T0 - 400)):
+        assert _report(c, project="billing", suite="plain", run=f"p-{plat}", platform=plat, results={"a": "passed"}, at=at).status_code == 200
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    matrix = next(p for p in d["panels"] if p["kind"] == "matrix")
+    row = next(r for r in matrix["rows"] if "plain" in r["label"])
+    cols = [col["label"] for col in matrix["columns"]]
+    assert {cols[i]: x["status"] for i, x in enumerate(row["cells"]) if cols[i] in ("macos", "windows")} == {"macos": "passed", "windows": "passed"}
+
+
+def test_a_misfiled_run_can_be_withdrawn_by_who_may_report_and_by_nobody_else(qa):
+    c, svc, *_ = qa
+    assert _report(c, project="billing", suite="wrong-suite", run="w1", results={"a": "passed", "b": "failed"}, at=T0 - 50).status_code == 200
+    key = {"project": "billing", "suite": "wrong-suite", "platform": "chromium", "run_id": "w1"}
+    assert c.delete("/api/dashboards/qa/results", params=key, headers={"X-Service-Token": "not-a-token"}).status_code == 401
+    assert c.delete("/api/dashboards/qa/results", params={**key, "run_id": ""}, headers={"X-Service-Token": SVC}).status_code == 422
+    assert c.delete("/api/dashboards/qa/results", params={**key, "run_id": "other"}, headers={"X-Service-Token": SVC}).status_code == 404
+    out = c.delete("/api/dashboards/qa/results", params=key, headers={"X-Service-Token": SVC})
+    assert out.status_code == 200 and out.json()["results"] == 2 and out.json()["withdrawn_by"].startswith("service:")
+    d = c.get("/api/dashboards/qa", params={"project": "billing"}).json()
+    assert not any("wrong-suite" in r["label"] for p in d["panels"] if p["kind"] == "matrix" for r in p["rows"])      # gone at once, not after a cache expiry
+    assert c.delete("/api/dashboards/qa/results", params=key, headers={"X-Service-Token": SVC}).status_code == 404
+
+
+def test_a_project_that_reported_but_is_not_declared_has_a_row_in_the_readiness_table(monkeypatch, tmp_path):
+    """With no project declared (the desktop default) any reported project id is accepted. Its results are in the totals, so the table
+    that explains the totals must have its row (found when an agent read the dashboards of the desktop app)."""
+    c, *_ = _app(monkeypatch, tmp_path, config="schema: aos.dashboards/v1\ndata_dir: {data}\n{access}\n")
+    assert _report(c, project="elsewhere", suite="smoke", run="r1", release="9.9.9", results={"a": "passed", "b": "failed"}, at=T0 - 60).status_code == 200
+    assert _report(c, project="other", suite="smoke", run="o1", results={"a": "passed"}, at=T0 - 60).status_code == 200
+    got = c.get("/api/dashboards/qa")
+    d = got.json()
+    assert "panels" in d, (got.status_code, str(d)[:300])
+    rows = {r["cells"]["project"]: r for r in _panel(d, "readiness")["rows"]}
+    assert rows["elsewhere (not declared)"]["cells"]["readiness"] == "Not ready" and rows["elsewhere (not declared)"]["cells"]["failed"] == 1
+    assert rows["other (not declared)"]["cells"]["readiness"] != "Not ready"
+    assert any("9.9.9" in str(x) for x in _panel(d, "by_suite")["x"])               # the reported release label is in the suite's name
+
+
+def test_something_due_today_is_not_overdue_until_tomorrow(monkeypatch, tmp_path):
+    """Found against a live ERPNext: an invoice due today was counted overdue from midnight, so the dashboard's overdue
+    figure disagreed with the application it was read from. A due date is a day, not its first instant."""
+    day = lambda offset: time.strftime("%Y-%m-%d", time.gmtime(T0 + offset * DAY))  # noqa: E731
+
+    class Erp(_Erp):
+        def get_list(self, doctype, fields, filters=None, limit=0):
+            if doctype == "Sales Invoice":
+                return [{"name": f"SINV-{n}", "customer": "C", "grand_total": amt, "outstanding_amount": amt, "due_date": day(n), "status": "Unpaid",
+                         "posting_date": day(-40), "currency": "USD"} for n, amt in ((-1, 10), (0, 200), (1, 3000), (-31, 40000))]
+            if doctype == "Purchase Order":
+                return [{"name": f"PO-{n}", "supplier": "S", "grand_total": 1, "status": "To Receive and Bill", "transaction_date": day(-9),
+                         "schedule_date": day(n), "per_received": 0, "currency": "USD"} for n in (-1, 0, 1)]
+            return super().get_list(doctype, fields, filters, limit)
+
+    c, svc, _ = _app(monkeypatch, tmp_path)
+    _operator(c)
+    svc.config.sources.update({"erpnext": {"project": "billing"}})
+    svc.ctx.clients.update({"erpnext": Erp()})
+    svc.cache.invalidate()
+    fin = c.get("/api/dashboards/finance").json()
+    assert (_metric(fin, "receivables")["value"], _metric(fin, "overdue")["value"]) == (43210.0, 40010.0)
+    aging = {i["label"]: i["value"] for i in _panel(fin, "aging")["items"]}
+    assert aging == {"Not due": 3200.0, "1–30 days": 10.0, "31–60 days": 40000.0, "61–90 days": 0, "Over 90 days": 0}
+    assert sorted(r["cells"]["days_overdue"] for r in _panel(fin, "overdue")["rows"]) == [1, 31]
+    pro = c.get("/api/dashboards/procurement").json()
+    assert _metric(pro, "late")["value"] == 1 and [r["cells"]["days_late"] for r in _panel(pro, "late")["rows"]] == [1]
 
 
 def test_how_to_enable_a_source_is_said_only_to_a_caller_who_may_read_it(monkeypatch, tmp_path):

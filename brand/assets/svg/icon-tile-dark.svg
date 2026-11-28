@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="rAIls">
+<rect x="3" y="3" width="94" height="94" rx="21" fill="#0B1222"/>
+<path d="M50 50 L60.417 50 L60.417 39.583 L39.583 39.583 L39.583 60.417 L70.833 60.417 L70.833 29.167 L29.167 29.167 L29.167 70.833 L81.25 70.833 L81.25 18.75 L18.75 18.75 L18.75 81.25 L81.25 81.25" fill="none" stroke="#1896D6" stroke-width="2.083" stroke-linecap="round" stroke-linejoin="round"/>
+<g fill="#EEF2FB"><circle cx="60.417" cy="50" r="3.75"/><circle cx="60.417" cy="39.583" r="3.75"/><circle cx="39.583" cy="39.583" r="3.75"/><circle cx="39.583" cy="60.417" r="3.75"/><circle cx="70.833" cy="50" r="3.75"/><circle cx="70.833" cy="29.167" r="3.75"/><circle cx="29.167" cy="29.167" r="3.75"/><circle cx="29.167" cy="50" r="3.75"/><circle cx="50" cy="70.833" r="3.75"/><circle cx="81.25" cy="39.583" r="3.75"/><circle cx="81.25" cy="18.75" r="3.75"/><circle cx="18.75" cy="18.75" r="3.75"/><circle cx="18.75" cy="60.417" r="3.75"/><circle cx="18.75" cy="81.25" r="3.75"/><circle cx="60.417" cy="81.25" r="3.75"/></g>
+</svg>

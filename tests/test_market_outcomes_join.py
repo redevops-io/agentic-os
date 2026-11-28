@@ -7,6 +7,7 @@ honoured via higher_is_better so an adverse move trips the guardrail regardless 
 from __future__ import annotations
 
 from agentic_os.integrations.business.contracts import Provenance
+from agentic_os.market.ingestion import repo_adapter
 from agentic_os.market import (
     CommercialHypothesis, FirstPartyLedger, FirstPartyMetric, conversion_delta, freeze_experiment,
     measure_experiment,
@@ -22,8 +23,9 @@ def _exp():
 
 
 def _m(metric, value, segment, higher=True):
-    return FirstPartyMetric(prov=Provenance(provider="umami"), source="umami", metric=metric, value=value,
-                            segment=segment, higher_is_better=higher)
+    # A first-party metric now comes from a registered source adapter (market/ingestion.py): a hand-built
+    # FirstPartyMetric(source="umami") without the adapter stamp is refused by the ledger.
+    return repo_adapter("umami").make_metric(metric=metric, value=value, segment=segment, higher_is_better=higher)
 
 
 def test_measures_improvement_from_ledger():

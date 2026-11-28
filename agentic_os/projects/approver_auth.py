@@ -4,7 +4,7 @@ A route that can post to a real account must not trust the request body for "who
 publisher is live (anything but the simulated/no-op publishers) the caller must present a valid bearer token
 (the same admin / tenant / approver credentials as the Mission API), and the recorded actor is derived from
 that credential, never from the body. When an approver credential is configured
-(``AGENTIC_OS_APPROVER_TOKENS``) a requester token may not approve (separation of duties). With a simulated
+(``AGENTIC_OS_APPROVER_TOKENS``) for the requester's tenant, that requester token may not approve (separation of duties). With a simulated
 publisher nothing leaves the machine, so the demo UI keeps working without a token.
 """
 from __future__ import annotations
@@ -36,9 +36,9 @@ def approving_actor(authorization: Optional[str], *, live: bool, claimed: str = 
     if not live:
         return claimed or SIMULATED_ACTOR
     from fastapi import HTTPException
-    from agentic_os.mission.control_auth import approver_tokens, resolve_caller, tenant_limits
+    from agentic_os.mission.control_auth import resolve_caller, separation_applies, tenant_limits
     caller = resolve_caller(authorization)             # 503 when no token is configured, 401 when missing/wrong
-    if caller.role == "requester" and approver_tokens():
+    if caller.role == "requester" and separation_applies(caller.tenant):
         raise HTTPException(403, "approval requires an approver credential")
     if caller.tenant is not None:
         if not tenant or caller.tenant != tenant:

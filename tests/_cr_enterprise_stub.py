@@ -102,9 +102,25 @@ def install(monkeypatch, *, fleet=None, factory=None, with_engine=True, with_fle
     def enabled():
         return os.getenv("CR_PERMISSIONS", "").lower() in ("1", "true", "yes")
 
+    # As in the real package, the principal is the PACKAGE'S OWN Identity class and its authorizer knows no other: a
+    # stand-in that accepted any object hid a kernel that passed the wrong one (every governed write would have been denied).
+    @dataclass
+    class Identity:
+        user: str = ""
+        tenant: str = ""
+        app: str = ""
+        agent: str = ""
+        roles: object = field(default_factory=list)
+
+    def strict(authorizer):
+        def check(principal, spec, args):
+            if principal is not None and not isinstance(principal, Identity):
+                return f"no controlled resource mapped for tool {getattr(spec, 'name', '')!r}; denied (fail closed)"
+            return authorizer(principal, spec, args)
+        return check
+
     def _principal_for(app_name):
         def principal_for(request=None):
-            from agentic_os.permissions import Identity
             if request is None:
                 return Identity(app=app_name, user="", roles=[])
             h = request.headers
@@ -120,7 +136,7 @@ def install(monkeypatch, *, fleet=None, factory=None, with_engine=True, with_fle
             if enabled():
                 if tool_actions is None:
                     raise ToolActionsRequired(f"app {app_name!r}: CR_PERMISSIONS is on but bootstrap() got no tool_actions")
-                st.base.set_default_authorizer(st.factory(dict(tool_actions)))
+                st.base.set_default_authorizer(strict(st.factory(dict(tool_actions))))
             elif os.environ.get("CR_PERMISSIONS_DEV_UNGATED_ACK") == DEV_ACK:
                 st.base.set_default_authorizer(None)
             else:
@@ -139,6 +155,7 @@ def install(monkeypatch, *, fleet=None, factory=None, with_engine=True, with_fle
     mod("context_runtime_enterprise.apps",
         bootstrap=(bootstrap_full if bootstrap_has_install else bootstrap_no_install) if bootstrap_has_tool_actions else bootstrap_old)
     mod("context_runtime_enterprise.authz", ToolActionsRequired=ToolActionsRequired)
+    mod("context_runtime_enterprise.policy", Identity=Identity)
     if with_fleet_module:
         def fleet_tool_actions(app):
             if st.fleet is not None and app in st.fleet:

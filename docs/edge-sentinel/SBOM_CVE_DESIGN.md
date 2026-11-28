@@ -1,0 +1,482 @@
+# Edge Sentinel: SBOM and vulnerability-intelligence design
+
+Status: DESIGN. Nothing in this document is an implemented capability unless a row below says Implemented or CI-tested and names the repository evidence. The command line, the data model and the file layouts are design targets. The owner approved the evidence architecture on 2026-11-02 as it then stood; sections 7 to 13 were revised after the independent review (VEX rules, exit codes, the `snapshot` and `profile` lanes, the per-source licence filter) and are marked "revised after approval, owner to re-confirm" in [DECISIONS.md](DECISIONS.md), together with the other decisions of that date.
+
+Companion documents: [COMPLIANCE_READINESS_DESIGN.md](COMPLIANCE_READINESS_DESIGN.md) (control probes and SOC 2 technical readiness) and [DECISIONS.md](DECISIONS.md) (open questions, recommended defaults, the ES-01 PR breakdown, risk register).
+
+## 0. Reading rules
+
+Status labels, used on every capability named here:
+
+| Label | Meaning |
+|---|---|
+| Implemented | The code exists in the repository and runs, but no test in this repository exercises it end to end |
+| CI-tested | A test that runs in the repository's CI exercises it |
+| Experimental | Exists as a library, a sample or an offline simulation; not wired into the product or not run against a real target |
+| Planned | Described here only |
+
+External facts (licences, API terms, rate limits) cite a URL and the date they were retrieved (2026-11-01). A fact I could not read from a primary page is marked UNVERIFIED, with the secondary source if one exists. Section 17 collects them.
+
+Licence wording: the kernel, `context-runtime`, `redevops-qa` (including the qa-evidence adapter) and `runtime-contracts` are "source-available under the family licence (AGPL-3.0-or-later with the Commons Clause)", never "open source". `apps/edge-sentinel` and the standard-library-only R0 core are "declared AGPL-3.0-only in the repository's `LICENSE.md` (the app's own LICENSE file is the standard AGPLv3 text), subject to the pending additional permission". Third-party tools are described by their own licence. No package is published until the release gates in DECISIONS section 5 clear; no restricted data is bundled and no licensed framework coverage is claimed before then.
+
+Two wording rules apply throughout and to anything derived from this design:
+
+* A scanner or matcher result is "an advisory database lists this installed version as affected". It is never described as confirmed exploitation, and never as "exploitable" unless a separate, named test demonstrated it.
+* A technical control test is never described as a completed SOC 2 audit (see the compliance document).
+
+## 1. Purpose, scope and non-goals
+
+Purpose: let one operator, on one declared host or one declared artifact set, answer "which components do I run, which published advisories list those versions as affected, how fresh is the data behind that answer, and what evidence supports it", and keep the answer reproducible and verifiable offline.
+
+In scope for R0 (the standalone, CLI-first release):
+
+* Inventory: produce or ingest an SBOM for a declared target (a directory, a root filesystem path, a container image already present locally, or a supplied SBOM file).
+* Scan: run one or more pinned scanners against the SBOM or target, read-only, with scanner output kept as a native artifact.
+* Assess: evaluate the findings with Edge Sentinel's own matcher over a frozen advisory snapshot, with a state per finding, VEX statements, suppressions with expiry and owner, and caveats.
+* Verify: an independent check program compares the recorded findings with a frozen expectation set and writes a verdict.
+* Report: human and machine output, plus an evidence export that an unmodified qa-evidence verifier accepts.
+
+Non-goals:
+
+* No scanning of systems the operator has not declared and consented to. No third-party scanning.
+* No automatic remediation in R0. No package upgrade, configuration change, firewall change or process kill, not even behind a flag.
+* Excluded from R0 by the owner's decision of 2026-11-02: ban enforcement, nmap, ZAP, nuclei and any other active scanning, active exploitation, proof-of-concept execution, DAST, and any SOC 2 certification claim. The existing `deploy-scan` proxy is outside R0 (DECISIONS Q10 and Q12). R0 is vulnerability assessment plus 4 to 6 deterministic read-only Linux host probes (compliance document, section 4).
+* No claim of independent confirmation of exploitation, and no CVSS-derived "risk score" that is presented as a measured probability.
+* No general vulnerability database or mirror. The product reads feeds on the operator's machine for the operator's inventory.
+* No change to the shared contracts. Evidence export is an additive consumer of the merged qa-evidence format (section 13); `runtime-contracts` qa/v1, `agent-harness` and the QA product's evidence schema are not modified or extended by this design.
+* No SOC 2 or other attestation. Vulnerability data is one input to the readiness evidence described in the compliance document.
+
+## 2. What exists today
+
+From the read-only audit ES-00 (2026-11-01), with the labels above. "Private deployment copy" is the vendored copy that the public demo builds; it is not published.
+
+| Item | Status | Where and how it is limited |
+|---|---|---|
+| Trivy shell-outs (`trivy rootfs`, `fs`, `image`) wrapped as `SupplyChainScanner`; Syft SBOM with a fallback to Trivy CycloneDX | Implemented | `context-runtime` `integrations/supply_chain.py`, imported by the app. Output is parsed into `Finding{id, pkg, installed, fixed, severity, title, target, cls}`. Not tested here against real images; the default demo image has no container runtime, so image scans are unavailable by default |
+| `VulnDB` reader over an Apache Doris table with row scope and column mask | Implemented, partly CI-tested | `context-runtime` `integrations/vuln_db.py`; permissions behaviour is tested in the app's tests; the Doris schema and the ingest were never run against a real Doris in CI |
+| Daily NVD and OSV ingest into one table | Implemented in a private deployment copy; not CI-tested against Doris | keyword and fixed-package lists for the owner's own stack, not a general mirror (section 9.3) |
+| Freshness stamp with a 36 hour check | Implemented and CI-tested in the private deployment copy | writes a log line and a syslog warning; no page, no alert, and the application payloads carry no data age |
+| Status vocabulary, VEX, suppression, false-positive workflow | none | `grep` for `vex`, `not_affected`, `cpe`, `kev`, `epss` over all audited trees finds nothing |
+| Grype, OSV-Scanner, CISA KEV, EPSS | none | Grype and KEV and EPSS are not used anywhere |
+| qa-evidence export | none | the app has its own evidence vault and ledger (compliance document) |
+
+Consequences that drive this design: matching is delegated to Trivy's own database today; the stored NVD rows cannot be matched to a package; there is no data age in any payload; and a failed OSV package query is swallowed (`vuln_feeds.fetch_osv` returns an empty list on any exception), which is the kind of silent empty result section 11 forbids.
+
+## 3. R0 CLI surface (design targets only)
+
+None of these commands exists. They are named so the data model, exit codes and evidence layout can be reviewed before code.
+
+```text
+edge-sentinel doctor     environment and prerequisite check; read-only; also reports feed and scanner freshness
+edge-sentinel inventory  build or ingest an SBOM for a declared target; write sbom/ and an asset record
+edge-sentinel scan       run pinned scanners over the SBOM or target; keep raw output as native artifacts
+edge-sentinel assess     evaluate scanner output and the matcher over a feed snapshot; apply VEX and suppressions
+edge-sentinel verify     run the independent check program over recorded findings; write the verdict records
+edge-sentinel report     render findings, caveats, feed freshness and the evidence export (human, JSON, SARIF)
+```
+
+Global design rules:
+
+* Read-only by default. No command writes outside its declared output directory and the tool's own state directory. No command modifies the target.
+* A target must be declared (`--target` or a scope file) and the operator must acknowledge scope and consent once per scope file (a recorded acknowledgement, not a prompt that can be bypassed by a pipe). The acknowledgement is the operator's own statement: it is a safeguard against accidents, not a control that prevents deliberate misuse. A target that resolves outside the declared allow-list is refused (section 12).
+* Two feed modes: `--feeds-dir DIR` (offline: read only a frozen snapshot, open no network connection) and `--refresh-feeds DIR` (online: download into a new snapshot directory, never into the one an earlier run used). Mixing them in one invocation is refused. `doctor` and `report` print the snapshot age separately from the evaluation result.
+* The gate. The operator's gate is a policy over states and severity, set in the scope file or on the command line, with these defaults: `detected` and `potentially affected` findings count; a finding counts when its severity is at or above `--gate-severity` (default: every severity, and a finding with no score counts as at or above any threshold); `unassessed` components never count as findings but are handled by exit 5 below; findings that are valid suppressions, or VEX-backed and accepted (section 8.5), are removed from the gate count and reported in the run-level record. Changing the defaults is recorded in `run.json`.
+* Exit codes: 0 completed with complete coverage, a fresh snapshot, and no finding at the gate (it means "no unexcused finding", not "no finding": exclusions by suppression or accepted VEX are printed in the headline of every human and machine output and in `run.json`); 1 findings at the gate (including VEX-backed exclusions the operator has not accepted, section 8.5); 2 usage or scope error; 3 a feed, scanner or database was unavailable, stale beyond the configured limit, or implausibly empty; 4 internal error; 5 data complete and fresh, no finding at the gate, but one or more components are `unassessed` (incomplete coverage; a clean exit needs every component assessed); 6 completed under a recorded run-level override (the stale-snapshot override, section 7.1) with no finding at the gate. Precedence when more than one applies: 4, then 3, then 1, then 5, then 6, then 0. A strict mode (`--strict-exit`) makes any run that relied on suppressions or accepted VEX exit 7 instead of 0, for pipelines that want that. So a failure (3) takes precedence over findings (1): a run that both found something and could not read a feed exits 3 and its report says both. The override never produces 0, with or without findings. A crash is never reported as a clean run.
+* Every run writes a `run.json` naming tool versions, scanner and database versions, snapshot digest, target digest, the evaluation time, the exit code, and a run-level `coverage` and `freshness` record (counts of covered and unassessed components, VEX-backed and suppressed findings, the age of each feed, and every override used). The record is always printed by `report`, including when there are zero findings.
+* The evaluation time is an input (`--now`, recorded in `run.json`), not read from the clock inside the matcher, so a fixture's staleness and suppression expiry are reproducible and golden fixtures do not start failing as the snapshot ages.
+
+## 4. Pipeline
+
+```text
+declared target
+   |  inventory (Syft or supplied SBOM)         read-only
+   v
+sbom/<asset>.cdx.json           (CycloneDX; SPDX optional)      -> digest
+   |  scan (Trivy, Grype, OSV-Scanner: each isolated)
+   v
+native/<scanner>/output.json    (scanner's own words; native artifact)
+   |  assess (Edge Sentinel matcher + frozen feed snapshot + VEX + suppressions)
+   v
+records/findings.json           (normalised findings, state, caveats, evidence digests)
+   |  verify (independent check program + frozen expectation set)
+   v
+records/verdicts.json -> qa-evidence bundle (optional adapter) -> report
+```
+
+The scanners produce native artifacts. The matcher is Edge Sentinel's own code, so a state per finding does not depend on any one scanner's database. The check program is a separate program with its own parser; section 13 states exactly how far that independence goes.
+
+## 5. SBOM formats and generators
+
+### 5.1 Formats
+
+| Format | Role in this design | Licence of the specification (retrieved 2026-11-01) |
+|---|---|---|
+| CycloneDX (JSON), current schema 1.7 in the specification repository (latest release 1.7.2, 2026-09-17) | Primary SBOM and VEX format. Chosen because one document type carries components, purls, hashes, and `vulnerabilities[].analysis` VEX data | Apache-2.0: https://github.com/CycloneDX/specification (GitHub licence metadata) |
+| SPDX (JSON), specification 3.0.1 (2024-12-17) | Secondary: ingest and export where a consumer requires it | Community Specification License 1.0, with pre-existing portions under CC-BY-3.0: https://github.com/spdx/spdx-spec/blob/main/LICENSE |
+| OpenVEX | Ingest and export of standalone VEX statements | CC0-1.0 (GitHub licence metadata): https://github.com/openvex/spec |
+| SARIF 2.1.0 | Findings export for code-scanning consumers | OASIS TC repository; terms are in https://github.com/oasis-tcs/sarif-spec/blob/master/LICENSE.md (read as a pointer only: UNVERIFIED which terms apply to reuse of the schema) |
+
+CycloneDX VEX states, read from the checked-in 1.6 schema (`impactAnalysisState`): `resolved`, `resolved_with_pedigree`, `exploitable`, `in_triage`, `false_positive`, `not_affected`. Justifications (`impactAnalysisJustification`): `code_not_present`, `code_not_reachable`, `requires_configuration`, `requires_dependency`, `requires_environment`, `protected_by_compiler`, `protected_at_runtime`, `protected_at_perimeter`, `protected_by_mitigating_control`. OpenVEX statuses: `not_affected`, `affected`, `fixed`, `under_investigation`; a `not_affected` statement must carry a justification or an impact statement, with justifications `component_not_present`, `vulnerable_code_not_present`, `vulnerable_code_not_in_execute_path`, `vulnerable_code_cannot_be_controlled_by_adversary`, `inline_mitigations_already_exist` (https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md, retrieved 2026-11-01).
+
+The ECMA standardisation of CycloneDX and a 1.7 schema date are not read from a primary page here: UNVERIFIED beyond the repository metadata above.
+
+### 5.2 Generators
+
+| Tool | Version checked | Licence | Use |
+|---|---|---|---|
+| Syft | v1.55.0 (2026-10-19) | Apache-2.0: https://github.com/anchore/syft | Default generator: directory, filesystem, image archive; CycloneDX and SPDX output |
+| Trivy (SBOM mode) | v0.76.1 (2026-10-21) | Apache-2.0: https://github.com/aquasecurity/trivy | Fallback generator, already the existing fallback in `supply_chain.py` |
+| cdxgen | v13.6.0 (2026-10-31) | Apache-2.0: https://github.com/cdxgen/cdxgen | Optional, for language projects where lockfile resolution is the question; not R0 |
+| cyclonedx-python | v7.6.0 (2026-10-28) | Apache-2.0: https://github.com/CycloneDX/cyclonedx-python | Optional, Python environments; not R0 |
+
+Licence and release facts: GitHub repository licence metadata (for the repositories where it reports a licence; for KEV, ComplianceAsCode and the SPDX specification it reports none, and the licence files themselves were read) and the latest-release API, retrieved 2026-11-01. A licence file in a repository states the licence of the code. It does not settle the terms of data the tool downloads (section 7).
+
+Design rules for generators:
+
+* Pin by version and by digest or checksum. The audited image installs scanners with unpinned `curl | sh`; that pattern is not carried into the new package (DECISIONS D4).
+* An SBOM is stored with its SHA-256 and the generator name and version. A generator that exits 0 with zero components is an error (exit 3 "implausibly empty"), unless the operator declared an empty target.
+* An SBOM states what the generator could see, not what is installed. The report carries the generator's catalogers or ecosystems as coverage, and any ecosystem for which no generator ran is reported as unassessed (section 8).
+
+## 6. Scanners and their terms
+
+| Scanner | Version checked | Licence (code) | Notes |
+|---|---|---|---|
+| Trivy | v0.76.1 | Apache-2.0 | Vulnerability database is an OCI artifact in public registries; databases can be self-hosted (https://trivy.dev/latest/docs/advanced/air-gap/, retrieved 2026-11-01). Flags: `--skip-db-update`, `--download-db-only`, `--db-repository` with ordered fallbacks (https://trivy.dev/latest/docs/configuration/db/). Misconfiguration checks are compiled into the binary. Already used by the existing integration |
+| Grype | v0.121.0 (2026-10-19) | Apache-2.0: https://github.com/anchore/grype | DB commands in the source tree: `db update`, `db status`, `db check`, `db import`; configuration keys `auto-update`, `validate-age`, `max-allowed-built-age`, `validate-by-hash-on-start` (`cmd/grype/cli/options/database.go`, read 2026-11-01). Supports OpenVEX filtering (README). Database builder `grype-db` and `vunnel`: Apache-2.0 |
+| OSV-Scanner | v2.7.0 (2026-10-12) | Apache-2.0: https://github.com/google/osv-scanner | `--offline`, `--offline-vulnerabilities`, `--download-offline-databases`; local database at `{dir}/osv-scanner/{ecosystem}/all.zip`, directory from the variable `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` (https://google.github.io/osv-scanner/usage/offline-mode/, retrieved 2026-11-01). Commit-level scanning is not supported |
+
+Terms of the data each scanner downloads are separate from its code licence:
+
+* Trivy and Grype databases are aggregations of vendor, distribution and ecosystem advisories. The licence of the aggregate is not stated by the code repositories. UNVERIFIED for redistribution. Design consequence: Edge Sentinel never redistributes a scanner database. The operator's machine downloads it, and the evidence bundle records its identity and digest, not its bytes.
+* OSV data is licensed per source (section 7).
+
+Scanner role and trust: a scanner's output is Edge Sentinel's native artifact. Edge Sentinel records it as the scanner wrote it (the bytes are hashed and kept, never edited), runs scanners with secret scanning off (for example Trivy's vulnerability scanner only) so that matched secret values are not printed into the artifact, and applies redaction to derived records only. If a redaction pattern nevertheless matches inside a native artifact, the artifact is kept locally under restricted retention, is not copied into an exported bundle, and the report says so; the bundle's `redaction` block declares what was applied. Edge Sentinel never edits it, and never converts a scanner's "no vulnerabilities" into a pass. Two scanners disagreeing is a recorded caveat, not a vote.
+
+Scanner supply chain is itself a risk: binaries are fetched by version and checked against a checksum list that ships with the release; unsigned or unchecked downloads are refused. Which signing artefacts each project publishes is UNVERIFIED here and is a precondition for ES-01c.
+
+## 7. Vulnerability feeds
+
+All terms retrieved 2026-11-01. "Primary" means read from the cited page or repository; "secondary" means read from an extract or a search result for that page.
+
+| Feed | Access | Rate limit and terms | Licence of the data | Freshness fields | Reading |
+|---|---|---|---|---|---|
+| NVD CVE API 2.0 | `https://services.nvd.nist.gov/rest/json/cves/2.0` (as used in the ingest script) | 5 requests per rolling 30 s without an API key, 50 with one. Terms ask services to display "This product uses the NVD API but is not endorsed or certified by the NVD", forbid implying NVD endorsement, and forbid attributing modified content to the NVD; keys must not be shared (https://nvd.nist.gov/developers/start-here and https://nvd.nist.gov/developers/terms-of-use; the terms text read at https://open.windriver.com/info/uni-license-list/licenses/nist-nvd-api-tou.html). Secondary: the NVD pages did not render through the page reader | Data licence not stated on any page I could read: UNVERIFIED. Do not describe NVD data as public domain or freely redistributable in product copy until counsel confirms | per-CVE `lastModified`; per-CVE `vulnStatus` (store verbatim); response `timestamp`. The `lastModStartDate`/`lastModEndDate` window is capped at 120 days in the existing ingest code; the NVD documentation of that cap was not read: UNVERIFIED | Secondary source for enrichment and for CPE-based hints. NIST has changed which records it enriches (a "Deferred" status for pre-2018 records in 2025, replaced in 2026 by "Not scheduled" according to secondary reports: UNVERIFIED against NIST): a record without a CPE configuration is not evidence of "not vulnerable" |
+| OSV.dev | API `/v1/query`, `/v1/querybatch`, `/v1/vulns/{id}`; bulk dumps `gs://osv-vulnerabilities/<ECOSYSTEM>/all.zip` and `modified_id.csv` (also reachable over HTTPS on `osv-vulnerabilities.storage.googleapis.com`, which is the form a client without cloud tooling uses, per the OSV-Scanner offline page) | "Currently there are no limits on the API"; 32 MiB response cap over HTTP/1.1 (https://google.github.io/osv.dev/api/) | Per source: CC-BY 4.0 for most (including GitHub Advisory Database, PyPI, Go); CC0 for some (Rust, GSD, Haskell, opam); MIT, BSD, Apache-2.0 for others; CC-BY-SA 4.0 for Ubuntu and Alpine converted data; CC-BY-NC-ND 4.0 for Chainguard/Wolfi; none stated for Debian and NVD-converted data (https://google.github.io/osv.dev/data/) | per-record `modified`, `published`, `withdrawn`; `modified_id.csv` is newest first so a client can stop at the last timestamp it already holds; withdrawn records are in `all.zip` | Primary source for ecosystem advisories (purl and version ranges). Bulk dump, not per-package queries, is the snapshot path |
+| CISA KEV | `https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json` (and CSV) | none stated on the catalog page | CC0 1.0 (https://github.com/cisagov/kev-data, README and licence file); the licence text states that third-party links in the data keep their own terms and that use does not imply CISA or DHS endorsement | read directly from the live feed: `catalogVersion` (2026.10.30), `dateReleased`, `count`; per entry `cveID`, `dateAdded`, `dueDate`, `knownRansomwareCampaignUse`, `forensicTriage`, `cwes`, `notes` | Context only: "listed in KEV" raises priority. It is not detection and not proof that a given installation is exploited |
+| FIRST EPSS | daily CSV `https://epss.empiricalsecurity.com/epss_scores-current.csv.gz` (redirects to a dated file) and API `https://api.first.org/data/v1/epss?cve=...` | the FIRST page says the data is "freely and openly accessible" and published every day (https://www.first.org/epss/); no rate limit stated | Reuse, attribution and redistribution terms not stated on the pages I could read; the site footer reads "All Rights Reserved" and links a copyright page I could not retrieve: UNVERIFIED. Treat as: fetch on the operator's machine, never bundle, cite FIRST as the source | CSV first line `#model_version:vYYYY.MM.DD,score_date:<ISO time>`; columns `cve,epss,percentile`; API fields `cve`, `epss`, `percentile`, `date` (both read live) | Context only: a probability estimate with a model version, not a measurement for this host. FIRST warns that a percentile recalculated over a subset must be labelled as such (https://www.first.org/epss/articles/prob_percentile_bins), so the product shows the published percentile only |
+| Scanner databases (Trivy, Grype) | see section 6 | per the tool | UNVERIFIED for the aggregate | Trivy DB `metadata.json` (field names not read: UNVERIFIED); `grype db status` reports build time | Native artifacts of the scan step; their identity (version, build time, digest) is recorded |
+| Distribution security trackers (Debian, Ubuntu, Red Hat and similar) | not selected for R0 | not read | not read | not read | Planned. For OS packages the distribution's own advisory data is the right authority (section 8.2); R0 relies on the scanner databases for it and states that as a caveat |
+
+Release gates: the data terms in this table are inputs to release gates RG2 to RG5 in [DECISIONS.md](DECISIONS.md) section 5 (owner: counsel). Until they clear, nothing in this table is bundled, redistributed or shown as licensed coverage; the operator's machine downloads each feed.
+
+Snyk is not a feed: the existing fetcher is never enabled and its API data terms prohibit redistribution (ES-00; not re-read here). It is dropped from the design.
+
+### 7.1 Freezing a feed snapshot for offline evaluation
+
+A snapshot is a directory, written once, never edited, and addressed by the digest of its manifest.
+
+```text
+feeds/<snapshot-id>/
+  snapshot.json            id, created_at (producer-supplied), tool version, per-feed entries, manifest digest rules
+  osv/<ECOSYSTEM>.zip      the dump file as downloaded (selected ecosystems only)
+  kev/known_exploited_vulnerabilities.json
+  epss/epss_scores-<date>.csv.gz
+  nvd/<window>.json        only if NVD enrichment was requested; raw pages concatenated by request order
+  scanner-db/<scanner>/    version file and digest only; the bytes stay in the scanner's own cache
+  sources.txt              URL, HTTP status, retrieved_at, response digest per request
+```
+
+`snapshot.json` per feed records: the source URL; `retrieved_at`; the source's own freshness field (KEV `catalogVersion` and `dateReleased`; EPSS `model_version` and `score_date`; OSV newest `modified`; NVD newest `lastModified` and the request window); record count; SHA-256 of each stored file; the licence label as Edge Sentinel understood it at retrieval; and the attribution text the terms require. Retrieval details for a feed that was requested and failed are stored too, with the failure, so the snapshot says which feeds it does not contain.
+
+Reproducibility contract: given the same SBOM digest, the same snapshot digest, the same VEX and suppression files and the same Edge Sentinel version, `assess` produces byte-identical `findings.json` (sorted keys, no host data, and the evaluation time supplied with `--now` rather than read from the clock). Online freshness is a separate record: `freshness.json` holds, per feed, the snapshot age at the recorded evaluation time. A stale snapshot never changes the findings; it adds a run-level caveat and, past the configured limit, makes `assess` and `report` exit 3. The operator may pass an explicit `--allow-stale-snapshot` flag; it is recorded in `run.json`, printed in the run-level `freshness` record whether or not there are findings, and the exit code is then 6 (or 1 when findings are at the gate, or 5 with unassessed components), never 0. Under the override the bundle's `snapshot` lane is `NATIVE_UNAVAILABLE` (with a record naming the override), so the bundle cannot reach `VERIFIED` while the command line exits 6. A CI job that always passes the flag therefore never sees a clean exit from an old snapshot.
+
+Per-source licence tags and an export filter: every advisory record carries the licence label of its source (from the OSV table above, or "unknown"). Records from a source under a non-commercial or no-derivatives licence (for example the Chainguard/Wolfi data under CC-BY-NC-ND 4.0) are excluded from the snapshot by default, and records under share-alike or attribution licences carry their attribution requirement. `findings.json`, the `advisories` table export and the evidence bundle carry identifiers, ranges and digests (facts) and no advisory prose from a source whose terms are not cleared (release gate RG5). The filter is tested with a synthetic record per licence class.
+
+Public fixtures use synthetic advisories authored for the tests (section 10). A snapshot of real feed data is never committed to the repository or published, because of the per-source terms above.
+
+## 8. Evaluation model
+
+### 8.1 States
+
+| State | Meaning | Requirement |
+|---|---|---|
+| detected | A version-evaluated match: the installed version of a component identified by purl lies in an affected range of an advisory from a source with ecosystem-native version semantics | component identity from the SBOM; advisory with a range or an explicit affected version; comparison with the ecosystem's own version ordering (semver, PEP 440, Debian, RPM, apk, Maven and so on); no VEX statement overriding it |
+| potentially affected | A weaker or unresolved match that a person must review | CPE-only match; version missing, unparsable or from a different scheme; advisory lists the package as affected with no fixed version; distribution backport possible and no distribution data; scanners disagree; the advisory is modified after the snapshot's matching rule was last validated |
+| not affected | The operator or a supplier states the product is not affected, supported by a VEX statement that meets every rule of section 8.5 | an accepted-justification `not_affected` statement, with an author, an expiry, and an exact purl, exact version and asset scope, unexpired and not contradicted by a newer statement. A free-text impact statement alone, an environment-dependent justification, a suppression, or a version outside the range does not produce this state |
+| unassessed | No judgement was possible | no matcher or no data for the component's ecosystem; component without a purl or version; feed missing from the snapshot; VEX `in_triage` or OpenVEX `under_investigation` |
+
+"Installed version outside the affected range" (a patched or never-affected version) is a recorded evaluation trace entry (`evaluated: outside_range`, with the advisory id, range and installed version), not a finding and not "not affected". It lets a test prove the patched fixture was evaluated and not skipped. A component is reported as "covered, no match" for a snapshot id only when all three hold: (1) the snapshot holds data for the component's ecosystem (and, for operating-system packages, the release) and that data is complete, meaning the dump was read in full and its record count passed the plausibility check; (2) a version comparator for the component's version scheme exists and parsed the installed version; and (3) the package identity was resolved against the advisory keys (section 8.2). Otherwise the component is `unassessed`, with the reason (`ecosystem-data-missing`, `comparator-missing`, `version-unparsable`, `identity-unresolved`). "Covered, no match" is a statement about the snapshot, not "clean". The headline of `report` and the run-level record always carry the counts of covered and unassessed components, so a first release that supports one ecosystem cannot present the others as covered.
+
+Each finding carries `state`, `advisory_id`, `aliases`, `component_purl`, `installed_version`, `affected_range`, `fixed_versions`, `source_feed` and its freshness, `matched_by` (`purl-range`, `scanner-only`, `cpe-hint`), `scanners_reporting`, `context` (KEV listing, EPSS value and model version, both optional and labelled as context), `caveats[]`, and evidence digests.
+
+Provenance of data. Every result, feed value and sample in a report carries an explicit provenance: `LIVE` (read from the real source at a stated time), `SAMPLE` (built-in or fixture data), `UNAVAILABLE` (the source was asked and did not answer) or `UNKNOWN` (not known whether the data is live). `UNKNOWN` and `UNAVAILABLE` are never rendered as clean or as an empty result. Acceptance test: a report built from a source that fails, from sample data, and from a source of unknown origin shows the provenance on every row and never an empty "clean" state; the per-source read states that #602 introduces in the demo are the start of this.
+
+### 8.2 Matching rules
+
+* Match on package URL and the ecosystem's own version comparison. A matcher that cannot parse a version returns potentially affected with the reason, never detected and never "no match".
+* Components from the operating system package manager are matched against distribution data when it is in the snapshot; otherwise a component that a scanner reports is `potentially affected` (`matched_by: scanner-only`) with the caveat "no distribution advisory data in this snapshot; a distribution fix can carry the same upstream version string", and a component that no scanner reports and for which the snapshot has no distribution data is `unassessed` (`ecosystem-data-missing`). `scanner-only` therefore always means `potentially affected`, never `detected`.
+* Operating-system package identity. Distribution advisories are keyed by source package name, source version and release (for example `Debian:12`), while an inventory tool lists binary packages with a distribution qualifier. The join is therefore on (advisory ecosystem and release, source package name, source version), not on the binary package name. The source name and version come from the SBOM's source or upstream metadata (the purl `upstream` qualifier or the generator's source-package field); the release comes from the `distro` qualifier mapped through a table maintained with the matcher (for example `debian-12` to `Debian:12`). A component whose source name, source version or release cannot be read from the SBOM, or whose key is absent from the snapshot's distribution data, is `unassessed` with reason `identity-unresolved`; a miss on a binary-name join is never "covered, no match". A fixture covers a binary package whose name differs from its source package (section 10).
+* The affected range is the whole `affected[]` array of an OSV record (all packages, all ranges and events). The existing ingest keeps only the first entry (`vuln_feeds._osv_to_record`; see section 9.3); that behaviour is replaced.
+* Aliases (CVE, GHSA, distribution ids) are merged into one advisory identity with a stable preference order so a finding is counted once. The identity keeps its member records. Withdrawal acts on a record, not on the identity (section 8.4).
+
+### 8.3 CPE pitfalls
+
+CPE strings from NVD are a secondary hint only, because: vendor and product names are not unique or stable and do not map to package names; `*` and `-` mean different things in version fields and ranges are expressed in separate configuration nodes; many records have no configuration (the enrichment status issue in section 7); a configuration saying "running on" an operating system is not a statement about a library; and a CPE match says nothing about distribution patches. Therefore a CPE-only match yields potentially affected at most, with the `cpe-hint` marker, and the report prints it under a separate heading.
+
+### 8.4 Withdrawn and modified advisories
+
+The snapshot keeps withdrawn records. Withdrawal retires a record, not an identity: a merged advisory identity is retired (its finding kept in the history with the withdrawal time and reason, and not counted) only when every member record is withdrawn or rejected. A record withdrawn as a duplicate of another, whose aliases overlap a live record, therefore does not retire the live vulnerability; the live record keeps producing the finding. A fixture covers a withdrawn duplicate beside a live record (section 10). A record modified between two snapshots is re-evaluated; `report` can show "changed since snapshot X" by comparing two `findings.json` files. Rejected NVD records are treated like withdrawn ones. The ingest today never parses withdrawn data and never deletes a row; that gap is closed by the new store, not by the old table.
+
+### 8.5 VEX, suppression and false positives
+
+Three different things, kept apart:
+
+* VEX statement: a supplier's or operator's statement about exploitability in a product. It is the only input that yields `not affected`, and in R0 only on these terms:
+  * Allow-listed justifications only: `component_not_present` and `vulnerable_code_not_present` (OpenVEX names; the CycloneDX equivalent is `code_not_present`). Free-text impact statements are stored but never produce the state. The code-path justifications (`vulnerable_code_not_in_execute_path`, `code_not_reachable`) and every environment-dependent one (`requires_configuration`, `requires_environment`, `requires_dependency`, `protected_at_perimeter`, `protected_at_runtime`, `protected_by_compiler`, `protected_by_mitigating_control`, `inline_mitigations_already_exist`, `vulnerable_code_cannot_be_controlled_by_adversary`) cannot be checked by Edge Sentinel; they are kept and shown as "claimed mitigation" and do not change the state.
+  * An expiry is required (a maximum validity is configurable; the default is a GUESS of 180 days); a statement with none is rejected. Scope is exact: one purl, one exact version, one asset; wildcards and ranges are rejected.
+  * The author is unauthenticated unless the file is signed, and signature verification is Planned, not in R0. The report says so next to every VEX-backed item ("author: unauthenticated file").
+  * Mapping of other states: CycloneDX `resolved` and `resolved_with_pedigree` and OpenVEX `fixed` do not change the state (the matcher's own version evaluation decides); `exploitable` and OpenVEX `affected` keep or raise the finding and add the statement as a note; `in_triage` and `under_investigation` give `unassessed`; `false_positive` is treated as `not_affected` only with an allow-listed justification, otherwise `unassessed` with a caveat.
+  * VEX-backed items are listed separately in the report, in `run.json` and in the bundle (author, issued, expires, justification, statement digest), next to, and never folded into, the count of findings. A VEX file that the operator wrote, or any file not pinned by digest, never silently turns a finding into exit 0: the findings it would exclude still count toward the gate (exit 1) and are listed as "would be excluded by VEX file <digest>, not accepted", unless the operator passes `--accept-vex <digest>` naming that exact file; the acceptance is recorded in `run.json`, printed in the headline of every output ("gate satisfied with N finding(s) excluded by VEX statements authored by <author>, unauthenticated file"), and, under `--strict-exit`, gives exit 7 instead of 0. Exit 0 with accepted VEX or valid suppressions means "no unexcused finding", not "no finding".
+* Suppression: an operator decision that a finding is accepted or deferred. Record: finding key (advisory, purl, version, asset), reason, owner (a named identity), created, expires (required; an absent expiry is refused; a maximum validity is configurable), approver. An expired suppression stops applying at the next `assess` and the finding returns with the caveat "suppression expired". A suppressed finding stays in every report with its suppression visible, is counted in the run-level record, and never becomes `not affected`; a valid suppression removes it from the gate count only, and the headline says how many findings are suppressed.
+* False positive: not a state. It is handled by a VEX statement with a justification (for example `code_not_present`), authored by a named person, or by a correction to the matcher with a regression fixture. Marking something a false positive without a justification is not accepted.
+
+### 8.6 Priority context
+
+KEV and EPSS inform ordering only. The report shows them in a separate column labelled "context", with the feed identity and date, and never in the state. A KEV listing does not turn potentially affected into detected, and an EPSS value is not shown as the chance of attack on this host.
+
+## 9. Data model and storage
+
+### 9.1 What is stored
+
+Design sketch of the R0 store (SQLite, one file per scope, standard library driver; DECISIONS D1 explains why not the existing Doris table). Names are targets.
+
+| Table | Key fields |
+|---|---|
+| `assets` | `asset_id` (stable, derived from the declared target identity and a fingerprint such as the image digest or host id supplied by the operator), kind, declared scope id, first and last inventoried |
+| `sbom_documents` | `sbom_digest`, format and spec version, generator name and version, asset id, component count, coverage (ecosystems and catalogers seen) |
+| `components` | `sbom_digest`, `purl`, name, version, ecosystem, supplier hint, hashes, layer or path |
+| `scanner_runs` | `run_id`, scanner name and version, scanner database version and build time and digest, command line (redacted), exit code, native artifact path and digest, started and finished (producer-supplied) |
+| `feed_snapshots` | `snapshot_id` (manifest digest), per-feed source freshness fields, counts, licence labels |
+| `advisories` | normalised: id, aliases, source, ecosystem, package, `affected` (full structure), fixed versions, published, modified, withdrawn, source snapshot, record digest |
+| `findings` | state, advisory id, purl, installed version, affected range, matched_by, scanners_reporting, context, caveats, `assessment_run`, evidence digests (SBOM, scanner artifact, snapshot) |
+| `vex_statements` | statement digest, format, author, issued, scope, status, justification, impact statement, valid until |
+| `suppressions` | finding key, reason, owner, approver, created, expires, status |
+| `receipts` | run record, exit code, tool versions, digests of every input and output |
+
+Every finding row can be traced to: the asset, the SBOM digest, the scanner and database versions, the feed snapshot and its source timestamps, the evidence file digests, and the caveats that applied. A finding with a missing link in that chain is not stored as detected.
+
+### 9.2 Where it lives
+
+R0 keeps findings and receipts in the store above and in the output directory (files under `records/`, `native/`, `sbom/`, `feeds/`). The qa-evidence bundle (section 13) is built from the output directory, not from the database. An optional adapter can write the same rows to Apache Doris for a multi-asset deployment (Planned, after R0), because Doris is a heavy dependency for a one-host package and the audited table cannot hold the model above.
+
+### 9.3 Existing Doris table: reusable and wrong
+
+The existing table `vulns(source, cve_id, package, ecosystem, severity, cvss, fixed_version, vulnerable_range, published, modified, summary, refs, aliases, owner)`, unique key `(source, cve_id, package)`, replication 1, loaded by an ingest script in a private deployment copy.
+
+| Aspect | Verdict |
+|---|---|
+| Columns `source`, `cve_id`, `ecosystem`, `published`, `modified`, `summary`, `aliases` | Reusable as the shape of the advisory view |
+| `package=''` for every NVD row (`_nvd_record`) | Wrong for matching: the rows cannot be joined to a component. The unique key then collapses all NVD data for a CVE to one row. Fix: NVD enters only as an enrichment source keyed by CVE, never as a package advisory |
+| OSV rows keep only the first `affected[]` entry, and from its ranges the first `introduced` and the last `fixed` event seen | Wrong: advisories that list several packages, ranges or ecosystems lose data, and combining events from different ranges can produce a range no advisory states. Store the full structure |
+| `vulnerable_range` as a free `VARCHAR(255)` string | Wrong for evaluation: needs structured events (introduced, fixed, last affected) and the ecosystem's version scheme |
+| `cvss DOUBLE` with `0.0` when absent or when the OSV score is a vector string that does not parse as a float, `severity` `UNKNOWN` | Wrong: an unscored record and a score of zero are different; store null and keep the vector |
+| no `ingested_at`, no feed snapshot hash, no source freshness | Wrong for reproducibility and for stale-feed detection |
+| no deletion and no withdrawn handling | Wrong: a withdrawn advisory keeps producing results |
+| `owner` column set to the source name | Mislabelled; the model needs an owner only on suppressions |
+| `refs` and `aliases` joined with `;` and clipped to 2000 and 500 bytes | Lossy; store arrays |
+| row scope and column mask in the reader | Reusable as a permissions pattern for the enterprise multi-user case; out of R0 |
+| Keyword search over the NVD with a last-modified window | Wrong for inventory-driven evaluation (a fixed keyword list is the owner's stack, not the operator's components); an inventory-driven query is the model |
+| Ingest exit codes (non-zero on a failed NVD request, an unresolved OSV id, or zero rows) and the 36 hour stamp check | Reusable principles, extended in section 11 |
+| `fetch_osv` swallows exceptions and returns `[]`, and queries with a fixed limit of 50 and no pagination | Wrong: a dead feed must fail loudly, and truncation must not be silent |
+
+## 10. Fixtures plan
+
+All fixtures are synthetic: invented package names, invented advisory ids in a reserved prefix, advisory text authored for the test. No real CVE record or real feed bytes are committed. Each fixture is a directory with an SBOM, a feed snapshot, optional VEX and suppression files, and an `expected.json` that is the frozen expectation set the check program compares against.
+
+| Fixture | Contents | Expected result |
+|---|---|---|
+| vulnerable | one component at a version inside a synthetic affected range, in two ecosystems | `detected` with the full evidence chain; exit 1 at the default gate |
+| patched | the same component at the fixed version, and at a version past the fix | no finding; trace entries `outside_range`; never reported as clean without those entries |
+| not-applicable | a component the advisory names under a different ecosystem; a CPE-only look-alike with a different vendor | no `detected`; the look-alike is at most `potentially affected` with `cpe-hint`; the other-ecosystem component produces no match |
+| not-affected-vex | the vulnerable component plus a valid VEX statement; the same with an expired statement; with a statement for another version | `not affected` only for the valid one; the expired and out-of-scope statements leave `detected` with a caveat |
+| unassessed | a component with no purl, a component in an ecosystem with no matcher, a component with an unparsable version | `unassessed` or `potentially affected` with the reason; never dropped |
+| withdrawn | an advisory later withdrawn between two snapshots | finding present under snapshot A, retired with history under snapshot B |
+| withdrawn-duplicate | a withdrawn record that shares an alias with a live record of the same vulnerability | the live record keeps producing the finding; the identity is retired only when all member records are withdrawn |
+| os-source-binary | a binary package whose name differs from its source package, against a synthetic distribution advisory keyed by source name and release; and the same component with no source metadata | the first is matched through the source name and release; the second is `unassessed` with `identity-unresolved`, never covered |
+| vex-abuse | a `not_affected` VEX statement with only a free-text impact statement; one with an environment-dependent justification; one with no expiry; one with a wildcard version; and a valid one, with and without `--accept-vex` | the first four never change the state; the valid one is listed separately, and without `--accept-vex` it still exits 1; with it, the run-level record names the accepted digest |
+| suppression | a suppression that expires between two evaluation dates | applied before expiry, finding returns after, caveat present |
+| coverage-gap | complete, fresh feeds and a fixture with no findings but one `unassessed` component (an ecosystem with no matcher) | exit 5, never 0; the headline names the unassessed count |
+| stale-feed | a snapshot older than the configured limit; a snapshot missing the KEV feed; a snapshot whose OSV file is empty; the stale snapshot with `--allow-stale-snapshot`, with and without findings; findings plus a missing feed | `assess` exits 3 with the named reason in the first three; none produces an empty "clean" report; with the override the exit is 6 (or 1 with findings), never 0, and the run-level record carries the override; findings plus a missing feed exits 3 and the report states both |
+| wrong-asset | evidence (a scanner artifact or findings file) produced for asset A offered for asset B; an SBOM digest that does not match the recorded one | `verify` rejects it; an evidence bundle built from it is flagged by the check program, and altered artifacts are caught by the qa-evidence digest checks |
+| scanner-disagreement | two recorded scanner outputs, one reporting a finding and one not | the finding is kept, `scanners_reporting` lists both, caveat added |
+
+Reproducibility test: `assess` run twice over each fixture produces byte-identical output, on macOS and on the Linux CI runner, with the network disabled. The R0 bar's "patched and not-applicable fixtures never yield a false PASS" is the patched, not-applicable and stale-feed rows.
+
+## 11. Failure modes
+
+Rule: a failure to read data is a failure of the run, not an empty result. The only way to get an empty findings list with exit 0 is a snapshot that was read completely and fresh, and every component covered in the strict sense of section 8.1 with no match, and the report then says so in those words and prints the counts.
+
+| Failure | Behaviour |
+|---|---|
+| a feed request fails, times out, returns a non-success status or an error body | the refresh fails (exit 3); the partial snapshot directory is marked incomplete and refused by `assess` |
+| a feed returns success with an implausible body: zero records, or a record count more than a configured fraction below the previous snapshot, or a schema change | refused as "implausibly empty" or "schema changed" (exit 3) |
+| the snapshot lacks a feed the policy requires | `assess` exits 3 naming the feed |
+| a feed in the snapshot is older than its limit | run-level caveat and exit 3; with `--allow-stale-snapshot`, exit 6 (or 1 with findings), never 0, and the run-level `freshness` record carries the override |
+| a scanner's database is missing, older than its limit, or failed to update | scanner step exits 3; the scanner is recorded as not run, never as "no findings" |
+| a scanner exits non-zero or produces unparsable output | native status error; findings from that scanner are absent and the report says so |
+| a scanner reports zero components or zero packages scanned | treated as implausibly empty, not as clean |
+| SBOM generator sees no components | exit 3 unless the target was declared empty |
+| a VEX or suppression file is malformed, unsigned where signing was required, or its author or scope is missing | rejected with a reason; the finding keeps its prior state |
+| the store or output directory is not writable, or a digest does not match on re-read | exit 4; no partial report |
+| rate limit response (HTTP 429 or a timeout cluster) | back off per the feed's limit (section 7); after the retry budget, fail the refresh. Never skip a page and continue |
+
+Every failure is written to `run.json` and to the evidence bundle as a record, so a missing result is explainable from the evidence alone.
+
+## 12. Security model
+
+* Declared scope only. A scope file lists targets (paths, image references already local, SBOM files) and, for any later network-facing mode, host allow-lists. Anything not in it is refused. Third-party systems are never targets.
+* Read-only. Scanners get the target mounted read-only, no network when run against a local snapshot, a non-root user, a dropped capability set, no new privileges, a CPU, memory, time and output-size cap, and a scratch directory that is discarded. Linux first; other platforms are marked unsupported until the same isolation is demonstrated.
+* No Docker socket by default, and none in R0. Image scanning reads image archives or an OCI layout that the operator exports (for example with `docker save`, run by the operator), or an SBOM file. The audited tree already ships a default deployment with no socket and an opt-in overlay behind a path-filtering proxy; its own documentation states that a path allow-list cannot inspect request bodies and that a read-only mount does not make the Docker API read-only (ES-00 section 2.6). R0 does not carry the socket proxy and does not need it. Section 12.1 is the deployment guidance, including the opt-in tiers that come after R0.
+* Operator credential. Where a privileged operation exists (only in the app and in the post-R0 response workflow; the R0 CLI has none), the single operator credential is governed by requirements OC1 to OC11 in [DECISIONS.md](DECISIONS.md) section 3.2: securely stored and strong, rotatable, never in images or logs, every privileged operation authenticated and audited, no anonymous write endpoints, CSRF and Origin protection, Host-header validation and a transport requirement. Multi-user identity and tenant authorisation are Enterprise.
+* Network. Only `refresh-feeds` opens connections: to the feed hosts in section 7 and to the hosts from which each pinned scanner fetches its own database (Trivy's documentation lists a mirror registry and then a public registry as its default database repositories, and Grype uses its own listing; confirm the hosts when pinning), with a fixed allow-list, TLS verification on, and the NVD key read from a file or an environment variable and never written to output. Scanners and the matcher run with the network disabled and with explicit database paths: Trivy with `--skip-db-update` and `--skip-check-update`, Grype with `GRYPE_DB_AUTO_UPDATE=false` and `GRYPE_CHECK_FOR_APP_UPDATE=false`, Syft with `SYFT_CHECK_FOR_APP_UPDATE=false`, OSV-Scanner with `--offline`. The configuration keys and their defaults were read from source on 2026-11-02; the environment variable names follow the tools' key-to-variable convention and are confirmed when each tool is pinned. Network-off without a container runtime is achieved with an unprivileged network namespace (for example `unshare` with a new user and network namespace, or a systemd unit with `PrivateNetwork=yes`); where the platform cannot provide it, the scanner step refuses to run and `doctor` says so. Tests: a socket-blocking harness in CI proves no connection is attempted in offline mode, and a Linux-only job runs the scanners inside the namespace.
+* Rate limits. Feed clients enforce the published limits with margin (NVD: at most one request every 6.5 seconds without a key, as the existing ingest does, and 0.7 seconds with one) and a maximum retry count.
+* Secret redaction. Command lines, environment and output pass a redaction step before they enter records: known token patterns, the configured key names, and any value from the secret files declared in the scope. SBOMs of a filesystem can contain file paths with sensitive names; paths are recorded as given by the SBOM and the operator is told so in the `inventory` output.
+* Untrusted input. SBOMs, VEX files, scanner output and feed data are parsed with size caps and without executing anything from them; no archive is extracted outside a scratch directory; every string that enters a report is escaped for the output format.
+* Supply chain. Pinned scanner versions with checksums, a recorded SBOM of Edge Sentinel itself, and a refusal to run an unpinned scanner.
+* Prompts. No LLM is in the R0 path. If the chat console later presents findings, it receives records, not raw scanner output, and its tools cannot start a scan or a remediation (the existing console marks such tools side-effecting with an empty allow-list: Implemented, in the code; no test in the public tree exercises it).
+
+### 12.1 Least-privilege deployment and container-runtime access
+
+Design rule: Edge Sentinel never requires unrestricted container-runtime access by default. A raw runtime socket mount gives the container effective control of the host (it can start privileged containers and mount the host filesystem), and mounting it read-only does not restrict the API. The guidance has three tiers; only tier 0 exists in R0.
+
+| Tier | What it is | Status | Conditions |
+|---|---|---|---|
+| 0 | No runtime access at all. R0 reads files, SBOMs, exported image archives and OCI layouts the operator provides. The Edge Sentinel process, if containerised, has no socket mount and no runtime CLI, runs as a non-root user with a read-only root filesystem, all capabilities dropped and no-new-privileges, and the scan step has no network | Planned (R0) | `doctor` reports "container-runtime access: none" as the expected state and fails if a socket is reachable from the scanner's namespace |
+| 1 | Image scanning by registry pull with read-only registry credentials, or through a rootless runtime socket owned by a dedicated unprivileged user that holds only the images the operator loads | Planned (after R0, opt-in) | the credential or socket is scoped to that user; nothing else on the host is reachable; documented as opt-in |
+| 2 | A socket proxy in front of the runtime, on an internal-only network with no published ports, with an allow-list of method and path: `GET` for ping, version and image list. Image export is not allowed in general, because an export is read access to every layer of every local image including secrets baked into them; where export is needed it is limited to named image digests listed in the scope file. No exec, no create, no start, no `POST`, no container inspect (it returns each container's environment), no `DELETE` | Planned (after R0, opt-in, off by default) | paths are matched with anchored expressions that also normalise the optional API version prefix and reject unnormalised paths; the proxy itself runs read-only, with capabilities dropped and, where possible, rootless; the residual risk (a path allow-list cannot inspect request bodies, so the allow-list is limited to `GET`) is stated next to the instructions; the acceptance test runs against the real proxy configuration (parsed in CI, or the proxy started in CI), not a fake |
+
+What is replaced: the public tree's README instructions that mount the socket and add its group, the Dockerfile notes that explain the same, and the container-exec path for reading the detection engine's alerts. The alert path moves to the engine's authenticated local API (ES-01a1), which removes the reason for any socket. The exact places to change are in [DECISIONS.md](DECISIONS.md) section 6.
+
+Acceptance tests: a test fails if a default compose file, Dockerfile or README command mounts the runtime socket outside a section labelled as an opt-in tier; the R0 install and the fixtures run in an environment with no runtime installed; the proxy test, run against the real configuration, shows `POST`, exec, container inspect, a versioned or unnormalised path, and an export of an unlisted image are refused; `doctor` fails when it finds a socket reachable by the scanner.
+
+## 13. Evidence export to qa-evidence
+
+The merged format is `packages/qa-evidence` in the redevops-qa repository (read at commit 2ad97f3, 2026-11-01; its README and schemas are the contract). Edge Sentinel is an additive consumer. It writes bundles that the unmodified verifier accepts; it adds no field, role, schema or vocabulary to that format.
+
+Mapping:
+
+| Edge Sentinel item | qa-evidence element |
+|---|---|
+| one evaluation run | the run: `run_id`, `plan_digest` (in this format version the digest of the assertion-lock rows `{assertion_id, lane_id, digest}`), `environment` |
+| a scanner | a lane: `lane_id` = scanner name, `engine {name, version}`, `native {status, raw_status, exit_code, artifacts[]}`. `NATIVE_PASS` means the scanner ran to completion with exit code 0; `NATIVE_FAIL` means it ran to completion and its own exit code says it found vulnerabilities (a non-zero exit code is required by the format; counts are optional); `NATIVE_ERROR`, `NATIVE_TIMEOUT` or `NATIVE_UNAVAILABLE` otherwise. Each scanner's exit-code semantics are in the table below the mapping |
+| the snapshot and matcher | a lane `snapshot`: engine `edge-sentinel-assess`; `NATIVE_PASS` when the snapshot was complete and fresh under the policy, `NATIVE_UNAVAILABLE` when a required feed was missing, stale or implausibly empty. Its assertions are "snapshot complete and fresh" and "no component unassessed for a reason the profile requires to be covered" |
+| raw scanner output, the scanner's database metadata as emitted | files under `lanes/<scanner>/native/`, role `native-artifact` |
+| the SBOM, the normalised findings, the evaluation trace, the feed snapshot manifest, `freshness.json`, VEX and suppression files, `run.json` | files elsewhere in the bundle, roles `record` or `observation` |
+| the expectation set | `assertion-lock.json`, produced by `build_bundle` from the frozen assertions; each assertion is `{assertion_id, lane_id, digest}` where the digest is over the bytes of the expectation (for example the canonical JSON of `records/expected.json`, or of the property specification for a real-target assertion), for example "finding set for fixture asset A equals the expected set" or "no finding of state detected exists for component C at version V". The expectation file itself is included in the bundle as a `record`, so a third party can see what was expected |
+| the check program's decision | a verdict per assertion with a state and a reason code from the closed list, provenance naming the verifier and the evidence file |
+
+Exit-code semantics of each scanner and the status they map to (a completed scan that found vulnerabilities is never an error):
+
+| Scanner | Exit codes | Mapping | Source |
+|---|---|---|---|
+| OSV-Scanner | 0 packages found, no vulnerabilities; 1 packages found with vulnerabilities (1 to 126 reserved for result-related codes); 127 general error; 128 no packages found; 129 to 255 non-result errors | 0 `NATIVE_PASS`; 1 to 126 `NATIVE_FAIL`; 127, 129 to 255 `NATIVE_ERROR`; 128 `NATIVE_ERROR` with reason "no packages" (an empty scan is never clean, section 11) | https://google.github.io/osv-scanner/output/, retrieved 2026-11-02 |
+| Trivy | 0 by default even when issues are found; a non-zero code only when the exit-code option is set (the code for a scan error is not stated on the page read) | run with the option unset: 0 `NATIVE_PASS`; any non-zero `NATIVE_ERROR` | https://trivy.dev/latest/docs/configuration/others/, retrieved 2026-11-02 |
+| Grype | exits non-zero when a fail-on severity threshold is set and met; the code values and the code for errors were not read: UNVERIFIED | run without a fail-on threshold: 0 `NATIVE_PASS`; any non-zero `NATIVE_ERROR`, until the codes are confirmed when the tool is pinned | `anchore/grype` source (the threshold error exists in `cmd/grype/cli/commands/root.go`), read 2026-11-02 |
+| Syft | no vulnerability semantics; non-zero means an error | 0 `NATIVE_PASS`; non-zero `NATIVE_ERROR` | not read: UNVERIFIED |
+
+Rules that follow from the format:
+
+* Scanner output is a native artifact. A verdict's evidence may not be a native artifact, may not live under a native directory, and may not equal native bytes by digest. A scanner result therefore can never by itself be `VERIFIED`; the format enforces it, and the design relies on that.
+* The independent check program reads the recorded `findings.json` (an observation or record produced by `assess`, not scanner bytes) and compares it with the frozen expectation set, writing `VERIFIED` (`EQUALS_EXPECTED` or `PREDICATE_HOLDS`), `FAILED` (`EXPECTED_VALUE_DIFFERS` or `PREDICATE_VIOLATED`) or `INCONCLUSIVE` (`EVIDENCE_MISSING`, `EVIDENCE_UNUSABLE`). `VERIFIED` here says the recorded findings equal the frozen expectation for a synthetic fixture. For a real target there is no frozen expectation of the true vulnerability set, so a real-target bundle states findings and caveats, and its assertions are limited to properties that can be frozen (the SBOM digest equals the declared one, every finding has its evidence chain, no finding rests on a feed older than the limit, no `detected` state without a version-evaluated match). It does not say the host has no other vulnerabilities.
+* Run outcome follows the format: any lane that did not run to completion caps the run at `INCONCLUSIVE`, every lane needs at least one frozen assertion, and a `NATIVE_PASS` lane may not report failed counts. A feed is not a lane, so the format does not by itself stop a dead feed from producing a `VERIFIED` run. The mechanism is the `snapshot` lane above: a missing, stale or implausibly empty feed, or the stale-snapshot override, makes that lane `NATIVE_UNAVAILABLE`, which caps the run at `INCONCLUSIVE` (the run reason is `NOT_ALL_ASSERTIONS_VERIFIED` when the check program writes `EVIDENCE_MISSING` for its assertions, and `ENGINE_DID_NOT_COMPLETE` only if every assertion was verified regardless), and a test with the stale-feed fixtures asserts it.
+* A native artifact withheld from the bundle because a redaction pattern matched inside it (section 6): its lane is `NATIVE_SKIPPED` with raw status `ARTIFACT_WITHHELD`, lists no artifact, and a record `records/withheld.json` carries the withheld file's digest and the reason; the assertions over that lane are `INCONCLUSIVE` with `EVIDENCE_MISSING`, so the run is capped at `INCONCLUSIVE`.
+* The product result and the verdict are different things and are printed together. A deliberately misconfigured fixture whose frozen expectation is "FAIL" yields a `VERIFIED` run: the verdict says the recorded result equals the expectation. The report never shows `VERIFIED` alone; it shows the product result (for example "probe FAIL, as expected by the frozen assertion") next to it. A probe that returns FAIL has no engine exit code of its own, so the runner assigns a synthetic one (1 for FAIL, none with `NATIVE_ERROR` for INCONCLUSIVE).
+* Identifiers are mapped to safe path components, and ids that differ only in case are refused by the format (`DUPLICATE_ID_CASE`, case-colliding paths); the mapping is case-insensitive-unique.
+* Roles are labels written by the producer. The format says so and so does this design: Edge Sentinel does not claim that an observation file is what an independent party saw. The independence of the check program is a separate program, separate parser and separate code path under the same producer; it is not a separate trust domain. Integrity against a deliberate re-forging exists only when the manifest digest is compared with a value published outside the bundle (the anchor), and the plan digest must be supplied from outside to show the expectation set was not trimmed. The report prints the format's own "not established" notices when no anchor or plan digest was supplied.
+* Path rules: ASCII, at most 100 bytes, no spaces; asset and advisory identifiers are mapped to safe path components (a hash prefix with a readable suffix where it fits), with the real identifier inside the file.
+* Stable size caps (4096 files, 64 MiB a file, 256 MiB a bundle) bound what a bundle may contain; raw scanner databases are never included, only their identity and digest.
+
+Worked example (Experimental: built by the independent review on 2026-11-02 against qa-evidence at commit 2ad97f3 with the package's own `assemble_report` and `build_bundle`; it is design evidence that the export is feasible, not shipped code). The bundle held a mocked Trivy lane (`NATIVE_PASS`, exit 0, raw output as a native artifact), a normalised `records/findings.json`, a frozen `records/expected.json`, and one probe lane `HOST-SSH-01` (`NATIVE_FAIL`, synthetic exit 1, raw observation as a native artifact, the comparison as an observation). Condensed:
+
+```python
+lanes = [
+  {"lane_id": "trivy", "run_id": "run1.trivy", "engine": {"name": "trivy", "version": "0.76.1"},
+   "native": {"status": "NATIVE_PASS", "raw_status": "exit 0", "exit_code": 0,
+              "artifacts": [{"path": "lanes/trivy/native/output.json", "digest": sha(trivy_raw), "size": len(trivy_raw)}]}},
+  {"lane_id": "HOST-SSH-01", "run_id": "run1.HOST-SSH-01", "engine": {"name": "edge-sentinel-probe", "version": "1"},
+   "native": {"status": "NATIVE_FAIL", "raw_status": "FAIL", "exit_code": 1,
+              "artifacts": [{"path": "lanes/HOST-SSH-01/native/raw.txt", "digest": sha(probe_raw), "size": len(probe_raw)}]}},
+]
+frozen = [{"assertion_id": "A-findings-set", "lane_id": "trivy", "digest": sha(expected)},
+          {"assertion_id": "A-ssh-result", "lane_id": "HOST-SSH-01", "digest": sha(probe_expected)}]
+# each verdict names evidence under records/ (role record or observation), never a native file
+report = assemble_report(run_id="run1", plan_digest=assertion_set_digest(frozen), lanes=lanes, frozen=frozen,
+                         results=results, verifier={"id": "es-check", "version": "0.0.1"}, ...)
+bundle = build_bundle(report=report, files=files, tools={"edge-sentinel": "0.0.1"})
+```
+
+Results observed: the bundle built and `verify_bundle` returned ok with run outcome `VERIFIED` and the plan state `absent` (no external plan digest supplied, as the format prints). Negative cases were refused as this section claims: verdict evidence equal to native bytes gave `EVIDENCE_IS_NATIVE_BYTES`, `EVIDENCE_IN_NATIVE_DIRECTORY` and `EVIDENCE_ROLE`; a `NATIVE_FAIL` lane with exit code 0 gave `NATIVE_STATUS_INCONSISTENT`; a lane with `NATIVE_ERROR` (an INCONCLUSIVE probe) capped the run at `INCONCLUSIVE` with `ENGINE_DID_NOT_COMPLETE`. The example also showed the two points added above: a probe has no native exit code unless one is assigned, and a deliberately failing probe yields a `VERIFIED` run.
+
+Interface points, so each side ships independently:
+
+1. The bundle layout and report schema of qa-evidence 1.0, pinned for development to an immutable, reviewed commit SHA (a release tag is created only after the QA evidence format and its verification tests stabilise). Edge Sentinel treats `python -m qa_evidence verify BUNDLE` as the acceptance test and runs it offline in its own CI, with a golden bundle.
+2. The library API `assemble_report` and `build_bundle`, used through an optional extra pinned to that reviewed commit SHA. If the package is absent, `report` still writes the output directory and says no bundle was built; no other feature depends on it.
+3. The `qa_evidence digest` value, handed to the operator's CI attestation step. Edge Sentinel does not implement attestation.
+4. The licence relationship between the packages: the adapter is family-licence code and the R0 core is AGPL-3.0-only, so the adapter stays an optional extra until release gate RG1 clears (DECISIONS Q2 and section 5).
+
+Edge Sentinel does not depend on the QA runner, the QA verifier's engines, runtime-contracts, agent-harness or any identity-workstream feature. The QA side does not depend on Edge Sentinel. If the pinned qa-evidence changes its major version, Edge Sentinel's export is disabled until the adapter is updated, and nothing else changes.
+
+## 14. Remediation coupling for ES-01
+
+R0 has none. ES-01 adds the response workflow: finding, risk and exposure assessment, proposed remediation, explicit approval, constrained action, QA verification, audit receipt. It starts with seeded findings and dry-run execution only.
+
+Coupling rules:
+
+* A finding is an input. A finding of any state never causes a write. There is no code path from `assess` to an executor.
+* A proposal is a data object: action type from a closed list (for the first slice, "upgrade package P on asset A to version V" and "disable service S"), the finding keys it addresses, the exact operation (command and arguments, or a package plan) rendered to a canonical form, and the operation digest. Risk and exposure inputs (KEV, EPSS, asset exposure supplied by the operator, fix availability) are context, shown to the approver, not an automatic decision.
+* Approval binds to the operation digest. Any change to the operation changes the digest and voids the approval. The existing chain for the ban action (staged request with a content-addressed id, authenticated operator decision with the recorded actor, a second enable switch, a recorded dry-run receipt, then a separate read-only verification step) is the pattern to reuse. Its state machine is CI-tested for bans in the private deployment copy (the 86-test guard and approval suite runs in that repository's CI) and its library layer in the public tree; the forged-approval tests for the operator `/invoke` path are not run by any CI (the vendored tests are not in the stack's CI and 6 of 18 fail against the pinned kernel), and the public tree's own test for a forged approval on the open HTTP path is `test_operator.py`. Reuse means the same state machine, not importing ban code into vulnerability handling.
+* Dry-run first: the executor renders what it would do, checks preconditions read-only (package exists, version available from a configured source, the asset matches the proposal), and records a dry-run receipt. A dry-run receipt cannot be promoted: real execution needs a new, separately authorised request that references it.
+* Real execution needs the identity workstream's authorised-execution primitives (agent identity, delegated scope bound to tool, resource and action, the operation digest, a short-lived credential from a broker). Until those exist, the executor interface is present and refuses with "no execution authority configured". This design does not define those primitives; it defines the point where they plug in (section 15).
+* QA verification: after any real execution (not in the first slice) a read-only re-inventory and re-assessment runs, and a check program compares the new findings with the expectation "the addressed findings are absent and no new detected finding appeared in the touched components". The result is a verdict in the same bundle format.
+* Receipt: decision, attempt, outcome, partial effects, evidence references. A receipt of a dry run says dry run in its first field.
+
+Acceptance (also in DECISIONS): seeded findings in dry-run mode cannot trigger a real write with every authorisation switch off, with the enable switch on but no execution authority, and with a forged approval; this is the owner's demonstration 7.
+
+## 15. Interface points with other workstreams
+
+| With | Interface | Dependency direction |
+|---|---|---|
+| QA (qa-evidence) | bundle layout, `verify` CLI, optional build API (section 13) | Edge Sentinel consumes the pinned format; QA does not depend on Edge Sentinel |
+| Identity workstream | the executor's authority check (ES-01): a function that takes an operation digest and returns an authorisation or a refusal. Until the identity work ships, the answer is always refusal | Edge Sentinel consumes; absence means no execution, not a degraded mode |
+| Identity workstream | agent identity strings in receipts (an optional field in Edge Sentinel's own records) | optional; no behaviour depends on it |
+| Governance and approvals (AGPL-side) | the approval state machine used by the existing response layer | existing |
+| Enterprise | per-tenant authorisation of findings and multi-user approvals | out of scope; the single operator credential is the first-package assumption under conditions OC1 to OC11 (DECISIONS Q8 and section 3.2) |
+
+## 16. Wording rules for this capability
+
+May say, once the capability exists and its tests pass: "lists installed components from an SBOM", "reports advisories that list an installed version as affected, from a named feed snapshot", "shows the age of the data behind each result", "keeps scanner output unchanged and records how it was produced", "evaluation is reproducible offline against a frozen snapshot", "an independent check compares recorded findings with a frozen expectation".
+
+May not say: "no vulnerabilities", "clean", "secure", "compliant", "confirmed vulnerable" or "exploitable" for a scanner or matcher result; "real-time" or "continuous" for a periodic evaluation; "SBOM" as proof of what is running; any claim about CVE coverage ("covers all CVEs"); "audit" for a technical test.
+
+Before the capability is demonstrated, none of these appear in public copy (the current demo offers none of them).
+
+## 17. External facts register
+
+All retrieved 2026-11-01.
+
+| Fact | Source | Read how |
+|---|---|---|
+| Syft, Grype, Trivy, trivy-db, OSV-Scanner, osv.dev, cdxgen, cyclonedx-python, grype-db, vunnel licence Apache-2.0; CycloneDX specification Apache-2.0; OpenVEX spec CC0-1.0; OpenSCAP LGPL-2.1; ComplianceAsCode content BSD-3-Clause | GitHub repository licence metadata and the licence files in `anchore/*`, `aquasecurity/*`, `google/*`, `CycloneDX/*`, `openvex/spec`, `OpenSCAP/openscap`, `ComplianceAsCode/content` | primary (API) |
+| Release versions and dates in sections 5 and 6 | GitHub latest-release API for the same repositories | primary |
+| SPDX specification licensing | https://github.com/spdx/spdx-spec/blob/main/LICENSE | primary |
+| NVD API: 5 and 50 requests per rolling 30 s; notice wording; modification and name-use clauses | https://nvd.nist.gov/developers/start-here, https://nvd.nist.gov/developers/terms-of-use; text read at https://open.windriver.com/info/uni-license-list/licenses/nist-nvd-api-tou.html | secondary (page reader returned an empty shell; the limits came from a search extract of the NVD page, the terms from the mirror) |
+| NVD data licence; 120-day window documentation; enrichment-status changes | not read | UNVERIFIED (enrichment: secondary press reports only) |
+| OSV API has no stated limits; per-source data licences; dump locations; withdrawn handling | https://google.github.io/osv.dev/api/, https://google.github.io/osv.dev/data/ | primary |
+| KEV CC0 1.0; feed URL and fields | https://github.com/cisagov/kev-data; the live JSON feed | primary |
+| EPSS free and daily; file and API formats | https://www.first.org/epss/; the live CSV and API responses | primary for access and format; reuse terms UNVERIFIED |
+| Trivy database flags; air-gap behaviour | https://trivy.dev/latest/docs/configuration/db/, https://trivy.dev/latest/docs/advanced/air-gap/ | primary |
+| Grype database commands and configuration keys | `anchore/grype` source tree, `cmd/grype/cli/` | primary (source) |
+| OSV-Scanner offline flags | https://google.github.io/osv-scanner/usage/offline-mode/ | primary |
+| CycloneDX VEX states and justifications | `CycloneDX/specification` `schema/bom-1.6.schema.json` | primary |
+| OpenVEX statuses and justifications | https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md | primary |
+| Trivy and Grype aggregate database redistribution terms; scanner signing artefacts; Trivy DB metadata field names | not read | UNVERIFIED |

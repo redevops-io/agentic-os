@@ -8,6 +8,8 @@ idempotent on the wire.
 Capabilities (syscalls):
   radar.add_watch  — start monitoring a new competitor/price page (creates a watch)
   radar.brief      — read-only competitive-intelligence summary of what changed (fact `market_brief`)
+  radar.synthetic_study — read-only SYNTHETIC buyer study of message variants (off unless AGENTIC_OS_SYNTHETIC_RESEARCH=1);
+                     its output is a hypothesis for human review, never evidence
 
 Per modules.yaml there is NO approval gate for market-radar: add_watch is non-destructive
 (it only starts observing a public page) and brief is read-only, so neither is parked as a
@@ -18,7 +20,7 @@ from __future__ import annotations
 
 from agentic_os.mission.operator_sdk import Operator, capability
 
-from . import core
+from . import core, loop, synthetic
 
 
 def build_market_radar_operator() -> Operator:
@@ -43,4 +45,31 @@ def build_market_radar_operator() -> Operator:
             estimated_value="high", deterministic=False, latency_ms=800,
             concurrency_mode="read_only",
         ),
+        capability(
+            "radar.synthetic_study",
+            lambda inp: synthetic.synthetic_study(inp),
+            provides=["synthetic_study_run"],
+            inputs={"variants": "2-4 message variants ({id, headline, body, cta})", "audience": "sme | enterprise"},
+            outputs={"synthetic_study_run": "a SYNTHETIC buyer study of the variants: hypotheses for human review, never evidence"},
+            estimated_value="low", deterministic=False, latency_ms=120000,
+            permissions=["market-radar:write"], concurrency_mode="read_only",   # no data is written; it spends model calls, so it needs the stricter permission
+        ),
+        # ── the loop on the company's own site (loop.py): audit, recommend, approve, verify, reassess. All read-only except the approval,
+        #    which is a person's decision and writes nothing either. The site itself is changed elsewhere; verify refuses until it is.
+        capability("radar.site_audit", lambda inp: loop.site_audit(inp), provides=["site_audit"],
+                   inputs={"site": "the site to audit, https://..."},
+                   outputs={"site_audit": "findings on discoverability and funnel instrumentation, each with a machine check"},
+                   estimated_value="high", deterministic=False, latency_ms=20000, concurrency_mode="read_only"),
+        capability("radar.recommend", lambda inp: loop.recommend(inp), provides=["recommendations"],
+                   outputs={"recommendations": "a ranked list with evidence, checks and a digest"},
+                   estimated_value="high", latency_ms=50, concurrency_mode="read_only"),
+        capability("radar.approve_plan", loop.approve_plan, provides=["change_plan_approved"],
+                   outputs={"change_plan_approved": "the recommendations a person approved, bound to their digest"},
+                   approval_required=True, estimated_value="high", latency_ms=50, permissions=["market-radar:write"]),
+        capability("radar.verify_change", lambda inp: loop.verify_change(inp), provides=["change_verified"],
+                   outputs={"change_verified": "every approved item's checks pass on the live site"},
+                   estimated_value="high", deterministic=False, latency_ms=20000, concurrency_mode="read_only"),
+        capability("radar.reassess", lambda inp: loop.reassess(inp), provides=["reassessment"],
+                   outputs={"reassessment": "resolved, remaining and new findings after the change: the next round's input"},
+                   estimated_value="medium", deterministic=False, latency_ms=20000, concurrency_mode="read_only"),
     ])

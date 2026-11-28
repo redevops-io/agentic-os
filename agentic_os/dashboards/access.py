@@ -16,6 +16,10 @@ The dashboards add no new authority and no new exposure:
   show to the same caller (missions, attention, registered products, runtime), and the business sources only if the
   operator enabled them — the boundary is unchanged, not widened.
 
+FINANCIAL data needs its own grant on top of the source (``agentic_os/financial_access.py``): a tenant's
+``egress:financial`` refs, ``financial`` in the access section or the overlay's answer. It is never implied by
+``sources``. Nobody anonymous holds it, except the demonstration grant over sources declared synthetic.
+
 An aggregate is computed ONLY over records the caller may read. A metric that would need a source or a project the
 caller may not see is reported as not known, with the reason, never as a partial number that looks complete.
 """
@@ -23,6 +27,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Tuple
+
+from agentic_os import financial_access
 
 from .config import ALL, NONE, DashboardsConfig, Grant
 
@@ -34,7 +40,20 @@ class Access:
     basis: str                        # "overlay" | "tenant" | "config" | "deployment"
 
     def source(self, sid: str) -> bool:
+        """Whether this caller may read the source at all. A source that is financial throughout also needs the grant."""
+        return self._granted(sid) and (sid not in financial_access.WHOLE or self.financial(sid))
+
+    def _granted(self, sid: str) -> bool:
         return self.grant.sources is None or sid in self.grant.sources
+
+    def financial(self, sid: str) -> bool:
+        """Whether this caller may see the money in this source."""
+        held = None if self.grant.financial is None else frozenset(financial_access.name_of(s) for s in self.grant.financial)
+        return financial_access.covers(held, sid)
+
+    def lacks_money(self, sid: str) -> bool:
+        """Refused for want of the financial grant ALONE: the source itself is granted. This is what a caller can be told."""
+        return self._granted(sid) and sid in financial_access.WHOLE and not self.financial(sid)
 
     def project(self, pid: str) -> bool:
         if self.grant.projects is None:
@@ -51,7 +70,11 @@ class Access:
         return self.principal
 
 
-def _tenant_grant(tenant: str) -> Optional[Grant]:
+def _as_grant_value(held: "financial_access.Covered") -> Optional[Tuple[str, ...]]:
+    return None if held is None else tuple(sorted(held))
+
+
+def _tenant_grant(tenant: str, synthetic: Tuple[str, ...] = ()) -> Optional[Grant]:
     try:
         from agentic_os.mission.control_auth import ConfigError, tenant_limits  # noqa: PLC0415
     except Exception:  # noqa: BLE001
@@ -65,7 +88,8 @@ def _tenant_grant(tenant: str) -> Optional[Grant]:
     prj = [r.split(":", 1)[1] for r in refs if r.startswith("project:")]
     if not src:
         return NONE
-    return Grant(projects=None if "*" in prj else tuple(prj), sources=None if "*" in src else tuple(src))
+    return Grant(projects=None if "*" in prj else tuple(prj), sources=None if "*" in src else tuple(src),
+                 financial=_as_grant_value(financial_access.covered(refs, synthetic)))
 
 
 def resolve(config: DashboardsConfig, provider: Any, principal: Optional[str]) -> Access:
@@ -81,10 +105,11 @@ def resolve(config: DashboardsConfig, provider: Any, principal: Optional[str]) -
         if isinstance(g, dict):
             def one(v: Any) -> Optional[Tuple[str, ...]]:
                 return None if v == "*" else tuple(str(x) for x in (v or ()))
-            return Access(p, Grant(projects=one(g.get("projects")), sources=one(g.get("sources"))), "overlay")
+            money = config.synthetic_sources() if g.get("financial") == "demo" else one(g.get("financial"))
+            return Access(p, Grant(projects=one(g.get("projects")), sources=one(g.get("sources")), financial=money), "overlay")
         return Access(p, NONE, "overlay")
     if ":" in p and p.split(":", 1)[0] in ("approver", "requester"):
-        tg = _tenant_grant(p.split(":", 1)[1])
+        tg = _tenant_grant(p.split(":", 1)[1], config.synthetic_sources())
         if p in config.principals:
             return Access(p, config.principals[p], "config")
         if tg is not None and (tg is not NONE or not config.access_configured):
@@ -95,7 +120,9 @@ def resolve(config: DashboardsConfig, provider: Any, principal: Optional[str]) -
         if p in ("admin", "operator", "local-owner"):
             return Access(p, ALL, "config")
         return Access(p, config.anonymous if not p else NONE, "config")
-    return Access(p, ALL, "deployment")
+    # With no access section, the sources stay what they were; money is for the people the deployment can name.
+    named = bool(p) and not p.startswith(("approver:", "requester:"))      # a tenant's money comes only from its own grants
+    return Access(p, ALL if named else Grant(), "deployment")
 
 
 def visible_projects(access: Access, project_ids: Iterable[str]) -> list:

@@ -104,3 +104,13 @@ def principal_of_caller(caller) -> AuthenticatedPrincipal:
     role = getattr(caller, "role", "") or "admin"
     pid = "admin" if tenant is None else f"{role}:{tenant}"
     return default_issuer().issue(Principal(pid, "user", (role,), ALL_TENANTS if tenant is None else tenant), method="control-token")
+
+
+def principal_of_signed_in(who: str, tenant: "str | None", *, method: str) -> AuthenticatedPrincipal:
+    """The principal behind a person (or a person's standing preauthorization) that this process's authentication layer
+    has just identified: call it ONLY at an entry point that checked a credential or a session and resolved ``who`` from
+    it, never with a name taken from a request body or a record. ``tenant`` is the identity's own limit, None for one that
+    may act for every tenant."""
+    role = who.partition(":")[0] if ":" in who else who
+    kind = "service" if method == "preauthorization" else "user"
+    return default_issuer().issue(Principal(who, kind, (role,), ALL_TENANTS if tenant is None else tenant), method=method)

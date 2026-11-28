@@ -100,10 +100,20 @@ def content_intervention_queue(signals: Iterable[Any], *, policy: Optional[Prior
     views = [_decision_view(d) for d in decisions]
     approvals = sum(1 for d in decisions if d.requires_approval)
     watching = sum(1 for s in sigs if str(getattr(s, "status", "")).upper() == "WATCH")
-    return {
+    out = {
         "count": len(views),
         "requires_approval": approvals,
         "auto": len(views) - approvals,
         "watching": watching,
         "decisions": views,
     }
+    # Unknown relevance is reported, never acted on: a "not assessable" or "relevance conflict" WATCH signal is
+    # counted under "watching" like any WATCH and ALSO broken out here (keys appear only when non-zero, so the
+    # queue shape is unchanged unless the unknown-aware flag / the relevance hook produced such signals).
+    na = sum(1 for s in sigs if (getattr(s, "evidence", None) or ("",))[0] == "not assessable: relevance unknown")
+    rc = sum(1 for s in sigs if str(getattr(getattr(s, "signal_type", None), "value", "")) == "RELEVANCE_CONFLICT")
+    if na:
+        out["not_assessable"] = na
+    if rc:
+        out["relevance_conflicts"] = rc
+    return out

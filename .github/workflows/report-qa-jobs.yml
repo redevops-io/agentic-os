@@ -1,0 +1,87 @@
+name: report-qa-jobs
+
+# Reports the outcome of the `desktop-shell` workflow (the launcher's cargo tests and builds on three systems) on the default branch to the QA portfolio dashboard.
+#
+# It is a SEPARATE workflow on purpose: cargo produces no result file and the desktop workflows hold no secret. This one runs after
+# they finish, from the default branch's copy of this file, never checks out or executes the code that was tested, and only reads
+# the finished run's job list through the API. One result per job: a job that succeeded is "passed", one that failed or timed out
+# is "failed", one that was cancelled is "blocked", and a job that was skipped is not reported (the dashboard counts it as not
+# executed). A dashboard outage is a warning here and never changes the result of the tests.
+on:
+  workflow_run:
+    workflows: ["desktop-shell"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+
+jobs:
+  report:
+    if: ${{ github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Turn the finished run's jobs into a result file
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs?per_page=100" --jq '.jobs[]' > "$RUNNER_TEMP/jobs.jsonl"
+          python3 - "$RUNNER_TEMP/jobs.jsonl" "$RUNNER_TEMP/junit-jobs.xml" <<'PY'
+          import json, sys
+          from datetime import datetime
+          from xml.sax.saxutils import quoteattr
+          jobs = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+          def seconds(j):
+              try:
+                  return max(0.0, (datetime.fromisoformat(j["completed_at"].replace("Z", "+00:00")) - datetime.fromisoformat(j["started_at"].replace("Z", "+00:00"))).total_seconds())
+              except Exception:
+                  return 0.0
+          out, kept = [], 0
+          for j in jobs:
+              c = j.get("conclusion")
+              if c in (None, "skipped", "neutral"):      # did not run: absent, so the dashboard reads it as not executed
+                  continue
+              kept += 1
+              body = ""
+              if c in ("failure", "timed_out", "startup_failure", "action_required"):
+                  body = "<failure message=%s/>" % quoteattr("the job ended with %s: %s" % (c, j.get("html_url", "")))
+              elif c != "success":                         # cancelled, stale
+                  body = "<skipped message=%s/>" % quoteattr("blocked: the job ended with %s" % c)
+              out.append("<testcase classname=\"jobs\" name=%s time=\"%.1f\">%s</testcase>" % (quoteattr(j["name"]), seconds(j), body))
+          open(sys.argv[2], "w", encoding="utf-8").write("<testsuite name=\"jobs\" tests=\"%d\">%s</testsuite>" % (kept, "".join(out)))
+          print("%d jobs in the run, %d reported" % (len(jobs), kept))
+          PY
+      - name: Report to the QA portfolio dashboard (Linux)
+        uses: redevops-io/agentic-os/.github/actions/report-qa@660abb705ffbb7f4a98711b50fa8423c11dbd32c   # v0.4.13
+        with:
+          junit: ${{ runner.temp }}/junit-jobs.xml
+          only: "ubuntu"
+          project: redevops-desktop
+          suite: desktop-shell-ci
+          platform: linux-x64
+          url: ${{ vars.QA_DASHBOARD_URL }}
+          token: ${{ secrets.QA_DASHBOARD_TOKEN }}
+      - name: Report to the QA portfolio dashboard (Windows)
+        uses: redevops-io/agentic-os/.github/actions/report-qa@660abb705ffbb7f4a98711b50fa8423c11dbd32c   # v0.4.13
+        with:
+          junit: ${{ runner.temp }}/junit-jobs.xml
+          only: "windows"
+          project: redevops-desktop
+          suite: desktop-shell-ci
+          platform: windows-x64
+          url: ${{ vars.QA_DASHBOARD_URL }}
+          token: ${{ secrets.QA_DASHBOARD_TOKEN }}
+      - name: Report to the QA portfolio dashboard (macOS)
+        uses: redevops-io/agentic-os/.github/actions/report-qa@660abb705ffbb7f4a98711b50fa8423c11dbd32c   # v0.4.13
+        with:
+          junit: ${{ runner.temp }}/junit-jobs.xml
+          only: "macos"
+          project: redevops-desktop
+          suite: desktop-shell-ci
+          platform: macos-arm64
+          url: ${{ vars.QA_DASHBOARD_URL }}
+          token: ${{ secrets.QA_DASHBOARD_TOKEN }}

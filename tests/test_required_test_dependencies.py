@@ -25,7 +25,8 @@ REQUIRED = {"jsonschema": "jsonschema", "duckdb": "duckdb", "yaml": "pyyaml", "h
 #: modules a test may legitimately skip on (optional extras / external tooling), each with the reason it is optional.
 OPTIONAL = {"psycopg": "postgres extra; needs a server", "playwright": "browser tests; opt-in", "agent_harness": "external repository",
             "reel": "app-local package", "redevops_connectors": "projects/connectors extra", "fastmcp": "mcp extra; CI checks it separately",
-            "credentials_enterprise": "private enterprise plane", "billing": "an app: needs apps/ on the path"}
+            "credentials_enterprise": "private enterprise plane", "billing": "an app: needs apps/ on the path",
+            "context_runtime": "external repository (context-runtime); main's integration tests skip without it"}
 
 
 @pytest.mark.parametrize("module", sorted(REQUIRED))

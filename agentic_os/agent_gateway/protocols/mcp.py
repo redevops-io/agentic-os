@@ -91,16 +91,21 @@ def build_fastmcp_server(gateway: AgentGateway, verifier: TokenVerifier, *,
     principal-visible set so a hidden capability is never enumerated. Serve it with
     ``server.run(transport="http")`` (Streamable-HTTP) or ``run_async``.
 
-    Note: each tool takes a single ``arguments`` object (a dynamic gateway can't publish a static
-    per-field signature through FastMCP); the transport-agnostic :class:`MCPEndpoint` and the REST
-    adapter pass flat arguments. The dispatch + governance semantics are those of the (tested)
-    :class:`McpGatewayBridge` this delegates to.
+    Each tool publishes the capability's own input schema, so a client that has never heard of this gateway knows what to
+    send, and says whether it only reads. A call runs in a worker thread: a slow capability does not stall the server.
+    (A call shaped ``{"arguments": {...}}``, the first release's only form, is still accepted for a capability that has no
+    input of that name.) The dispatch + governance semantics are those of the (tested) :class:`McpGatewayBridge`.
     """
+    import functools
+    import json
+
+    from anyio import to_thread
     from fastmcp import FastMCP
     from fastmcp.server.auth import AccessToken, TokenVerifier as _FastMCPTokenVerifier
     from fastmcp.server.dependencies import get_access_token
     from fastmcp.server.middleware import Middleware
-    from fastmcp.tools import Tool
+    from fastmcp.tools import Tool, ToolResult
+    from mcp_types import ToolAnnotations
 
     bridge = McpGatewayBridge(gateway, verifier)
 
@@ -117,16 +122,24 @@ def build_fastmcp_server(gateway: AgentGateway, verifier: TokenVerifier, *,
     # "Error calling tool '<name>'" only; its text stays in the server log.
     server = FastMCP(name, auth=_Verifier(), mask_error_details=True)
 
-    def _make_tool(capability: str):
-        async def _tool(arguments: Optional[dict] = None):
+    class _CapabilityTool(Tool):
+        async def run(self, arguments: Dict[str, Any]) -> ToolResult:
+            args = dict(arguments or {})
+            if set(args) == {"arguments"} and "arguments" not in (self.parameters.get("properties") or {}):
+                inner = args["arguments"]
+                if inner is not None and not isinstance(inner, dict):
+                    return ToolResult(content="invalid arguments: send the capability's inputs as an object", is_error=True)
+                args = inner or {}
             at = get_access_token()
-            return bridge.call_tool(at.token if at else "", capability, arguments or {})
-        _tool.__name__ = capability.replace(".", "_")
-        return _tool
+            view = await to_thread.run_sync(functools.partial(bridge.call_tool, at.token if at else "", self.name, args))
+            view = json.loads(json.dumps(view, default=str))              # what is sent must be plain JSON
+            # an MCP client learns that a call failed from isError; the text is the same view REST returns
+            return ToolResult(content=json.dumps(view), structured_content=view, is_error=view.get("status") in ("error", "denied"))
 
     for manifest in gateway.registry.all():
-        server.add_tool(Tool.from_function(_make_tool(manifest.name), name=manifest.name,
-                                           description=manifest.description))
+        schema = {"type": "object", "properties": {}, **dict(manifest.input_schema or {})}
+        server.add_tool(_CapabilityTool(name=manifest.name, description=manifest.description, parameters=schema,
+                                        annotations=ToolAnnotations(readOnlyHint=not manifest.side_effecting)))
 
     class _PrincipalFilter(Middleware):
         async def on_list_tools(self, context, call_next):

@@ -1,0 +1,62 @@
+{
+ "candidates": [
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "outcome": {
+    "cost_usd": 0.0,
+    "details": {
+     "e1": "NEVER-SHOW-THIS reply text for e1",
+     "e2": "NEVER-SHOW-THIS reply text for e2",
+     "e3": "NEVER-SHOW-THIS reply text for e3",
+     "e4": "NEVER-SHOW-THIS reply text for e4"
+    },
+    "failed": [
+     "e2",
+     "e3",
+     "e4"
+    ],
+    "harness_id": "",
+    "passed": [
+     "e1"
+    ],
+    "score": 0.25,
+    "seconds": 0.0
+   },
+   "predicted": [
+    "e1",
+    "e3"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "markers are missing",
+   "screened_in": true,
+   "what": "try again on the target"
+  }
+ ],
+ "chosen": null,
+ "current": {
+  "cost_usd": 0.0,
+  "details": {
+   "e1": "NEVER-SHOW-THIS reply text for e1",
+   "e2": "NEVER-SHOW-THIS reply text for e2",
+   "e3": "NEVER-SHOW-THIS reply text for e3",
+   "e4": "NEVER-SHOW-THIS reply text for e4"
+  },
+  "failed": [
+   "e1",
+   "e2",
+   "e3"
+  ],
+  "harness_id": "",
+  "passed": [
+   "e4"
+  ],
+  "score": 0.25,
+  "seconds": 0.0
+ },
+ "note": "no candidate was accepted: the harness and the memory are unchanged",
+ "promoted": null,
+ "round": 1
+}

@@ -25,6 +25,8 @@ KEYRING_SERVICE = "redevops"
 # Live bundle: KV v2 mount `vibexgen`, path `agentic-os/stack` (API path vibexgen/data/agentic-os/stack).
 DEFAULT_VAULT_MOUNT = "vibexgen"
 DEFAULT_VAULT_PATH = "agentic-os/stack"
+#: a deployed host whose secrets are rendered from Vault records that here (the stack's ``secrets`` role writes it)
+AUTHORITY_FILE = "/etc/redevops/secrets-authority"
 
 
 class SecretsError(RuntimeError):
@@ -250,6 +252,29 @@ class Bootstrap:
         self.home = self.home or Path(self.environ.get("HOME") or Path.home())
 
     # -- config
+    def vault_authority(self) -> Optional[str]:
+        """The record that says this host's secrets come from Vault, or None. A record that exists but cannot be read
+        counts: the safe mistake is to create no second store."""
+        configured = self.environ.get("REDEVOPS_SECRETS_AUTHORITY_FILE")
+        if not configured and self.plat == "windows":
+            return None
+        path = Path(configured or AUTHORITY_FILE)
+        try:
+            first = path.read_text(encoding="utf-8").split("\n", 1)[0].strip()
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeDecodeError):
+            return str(path)
+        return str(path) if first == "vault" else None
+
+    def _refuse_second_store(self) -> None:
+        record = self.vault_authority()
+        if record:
+            raise SecretsError(
+                f"this host's secrets are rendered from Vault ({record}). A local secrets file, and a shell block that "
+                "exports it, would override the rendered values. Change the secret in Vault and render it again, or set "
+                "VAULT_ADDR and VAULT_TOKEN to work against Vault directly.")
+
     @property
     def file(self) -> Path:
         return secrets_file_path(self.environ, self.platform)
@@ -303,6 +328,8 @@ class Bootstrap:
         use_vault = backend == "vault" or (backend == "auto" and self.vault_configured())
         if use_vault and not self.vault_configured():
             raise SecretsError("--backend vault needs VAULT_ADDR and VAULT_TOKEN to be set.")
+        if not use_vault:
+            self._refuse_second_store()
         vdata: Optional[Dict[str, str]] = None
         if self.vault_configured() and backend != "file" or use_vault:
             vdata = self.vault().read()
@@ -405,7 +432,9 @@ class Bootstrap:
         if not m:
             raise SecretsError(f"unknown managed secret '{name}'")
         new = m.generate()
-        if self.vault_configured() and not read_secrets_file(self.file).get(name):
+        if self.vault_authority() and not self.vault_configured():
+            self._refuse_second_store()
+        if self.vault_configured() and (self.vault_authority() or not read_secrets_file(self.file).get(name)):
             b = self.vault()
             merged = b.read()
             merged[name] = new

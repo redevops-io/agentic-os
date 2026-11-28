@@ -13,13 +13,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.ref }}
+  # a pull request drops its superseded runs; every pushed or dispatched commit keeps its own: a later merge never
+  # cancels the checks of a commit that is being released
+  group: tests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # the desktop line's full suite takes 16-22 minutes on a shared runner and the app suites follow it: 25 minutes cancelled a passing run
+    timeout-minutes: 40
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       # the dashboard behaviour tests run the page scripts with node (preinstalled on ubuntu-latest): a missing node must FAIL here, not skip
@@ -45,15 +48,32 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
           REDEVOPS_CONNECTORS_FIXTURES: ${{ runner.temp }}/redevops-connectors/fixtures
-        run: pytest -q -p no:cacheprovider tests
+        run: pytest -q -p no:cacheprovider tests --junitxml="$RUNNER_TEMP/kernel-tests.xml"
+      - name: Report the run to the QA portfolio dashboard
+        # main only: the dashboard shows the state of main, not of every pull request. Failures are reported too (always());
+        # a dashboard outage never fails the build, and with no token (a fork) nothing is reported.
+        if: ${{ always() && github.event_name == 'push' }}
+        uses: ./.github/actions/report-qa
+        with:
+          junit: ${{ runner.temp }}/kernel-tests.xml
+          project: agentic-os
+          suite: kernel-tests
+          url: ${{ vars.QA_DASHBOARD_URL }}
+          token: ${{ secrets.QA_DASHBOARD_TOKEN }}
       - name: The real FastMCP HTTP transport test must run, not skip
         # always() so that its result is visible even when an unrelated test in the full suite above fails
         if: ${{ !cancelled() }}
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
         run: |
-          pytest -v -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py | tee "$RUNNER_TEMP/fastmcp.out"
+          pytest -v -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py tests/test_mcp_under_base_path.py | tee "$RUNNER_TEMP/fastmcp.out"
           if grep -q "SKIPPED" "$RUNNER_TEMP/fastmcp.out"; then echo "::error::a FastMCP transport test was skipped (is the mcp extra installed?)"; exit 1; fi
+      - name: App-level suite (the test files directly under apps/)
+        # Cross-app checks: route authorisation registry, fail-closed operator seams, permission classification, capability
+        # manifests. The per-app loop below only enters apps/*/, so for a long time these ran nowhere.
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
+        run: pytest -q -p no:cacheprovider apps/test_*.py --junitxml="$RUNNER_TEMP/apps/_app_level.xml"
       - name: The drill-down contract tests must run, not skip
         # jsonschema and the pinned duckdb are required test dependencies ([dev] extra): a skip here means the environment is wrong
         if: ${{ !cancelled() }}
@@ -72,13 +92,24 @@ jobs:
           for d in apps/*/; do
             ls "$d" | grep -q '^test_.*\.py$' || continue
             echo "::group::pytest $d"
-            pytest -q -p no:cacheprovider "$d" && rc=0 || rc=$?
+            pytest -q -p no:cacheprovider "$d" --junitxml="$RUNNER_TEMP/apps/$(basename "$d").xml" && rc=0 || rc=$?
             # exit 5 = "no tests collected": an import-level skip (e.g. video-ad needs the external `reel`
             # package) is not a failure; any other non-zero exit is.
             [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ] || fail=1
             echo "::endgroup::"
           done
           exit $fail
+      - name: Report Edge Sentinel's suite to the QA portfolio dashboard
+        # Edge Sentinel has no repository of its own: its tests are apps/edge-sentinel, run by the loop above
+        if: ${{ always() && github.event_name == 'push' }}
+        uses: ./.github/actions/report-qa
+        with:
+          junit: ${{ runner.temp }}/apps/edge-sentinel.xml
+          allow-missing: "true"
+          project: edge-sentinel
+          suite: unit
+          url: ${{ vars.QA_DASHBOARD_URL }}
+          token: ${{ secrets.QA_DASHBOARD_TOKEN }}
       - name: Tests must not dirty the working tree
         # Guards test hygiene: no test/fixture may rewrite tracked files (e.g. the vendored agentic_os/projects_ui)
         # or leave stray untracked files behind.

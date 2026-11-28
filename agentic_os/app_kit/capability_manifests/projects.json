@@ -1,0 +1,1758 @@
+{
+ "app": "projects",
+ "digest": "sha256:864371a5ca92b23ca524a2cfc05fa99bf4fcd46a1457a17664ed7f0a99f39e96",
+ "operations": [
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.find_companies",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.find_people",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.request_company",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.request_person",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "crm.request_status",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "DELETE",
+     "path": "/api/dashboards/views/{view_id}"
+    }
+   ],
+   "id": "dashboards.delete_view",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "dashboards.get",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "DELETE",
+     "path": "/api/dashboards/qa/results"
+    },
+    {
+     "method": "POST",
+     "path": "/api/dashboards/qa/results"
+    }
+   ],
+   "id": "dashboards.ingest_qa",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "dashboards.list",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "PUT",
+     "path": "/api/dashboards/views"
+    }
+   ],
+   "id": "dashboards.save_view",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/dashboards/{dashboard_id}/track"
+    }
+   ],
+   "id": "dashboards.track",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.find_records",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.get_record",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.request_comment",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.request_draft_purchase_order",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "erp.request_status",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "findings.consolidate",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "missions.explain",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "missions.get",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "missions.list",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "missions.list_pending_approvals",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/app-directory/record-link"
+    }
+   ],
+   "id": "projects.app_directory_record_link",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/app-directory/ref-link"
+    }
+   ],
+   "id": "projects.app_directory_ref_link",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/capture"
+    }
+   ],
+   "id": "projects.capture",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/capture/{capture_id}/archive"
+    }
+   ],
+   "id": "projects.capture_archive",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/capture/{capture_id}/resolve"
+    }
+   ],
+   "id": "projects.capture_resolve",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/sources/confirm"
+    }
+   ],
+   "id": "projects.confirm_sources",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/apps/{provider}/connect"
+    }
+   ],
+   "id": "projects.connect_app",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/apps/{provider}/connect/start"
+    }
+   ],
+   "id": "projects.connect_app_start",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "projects.get_status",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "projects.list",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/policy/promotion-cycle"
+    }
+   ],
+   "id": "projects.policy_promotion_cycle",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no typed inputs and outputs",
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/sources/propose"
+    }
+   ],
+   "id": "projects.propose_sources",
+   "route_access": [
+    "read_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/outcomes"
+    }
+   ],
+   "id": "projects.record_outcome",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/sources/remove"
+    }
+   ],
+   "id": "projects.remove_source",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/sidekick"
+    }
+   ],
+   "id": "projects.sidekick",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/notifications/ack"
+    }
+   ],
+   "id": "projects.today_ack",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/{item_id}/approve"
+    }
+   ],
+   "id": "projects.today_approve",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/batch"
+    }
+   ],
+   "id": "projects.today_batch",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/batch/undo"
+    }
+   ],
+   "id": "projects.today_batch_undo",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/{item_id}/dismiss"
+    }
+   ],
+   "id": "projects.today_dismiss",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "PUT",
+     "path": "/api/projects/{project_id}/today/notification-prefs"
+    }
+   ],
+   "id": "projects.today_prefs",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/{item_id}/reconcile"
+    }
+   ],
+   "id": "projects.today_reconcile",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/{item_id}/simulate-outcome"
+    }
+   ],
+   "id": "projects.today_simulate_outcome",
+   "route_access": [
+    "human_only"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/projects/{project_id}/today/{item_id}/snooze"
+    }
+   ],
+   "id": "projects.today_snooze",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.plan_generate",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_cancel_run",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_estimate",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_get_evidence",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_get_run",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_info",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_list_profiles",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_list_runs",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_list_targets",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_run_events",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_start_run",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.qa_verify",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "quality.ui_audit",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.deployment_scan",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_get_case",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_list_actions",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_list_cases",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_posture",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_propose_ban",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_propose_unban",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_read_back",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "security.sentinel_request_decision",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "sources.search",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.get_conversation",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.list_conversations",
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.request_private_note",
+   "typed": false
+  },
+  {
+   "action": "read",
+   "action_source": "gateway",
+   "declared_by": [
+    "gateway"
+   ],
+   "external_access": {
+    "gateway": true
+   },
+   "gateway_candidate": false,
+   "http": [],
+   "id": "support.request_status",
+   "typed": false
+  }
+ ],
+ "problems": [
+  "the Projects web UI is built from another repository (redevops-projects): its calls are not inventoried"
+ ],
+ "routes": [
+  {
+   "gate": "route_policy",
+   "method": "DELETE",
+   "path": "/api/dashboards/qa/results",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "dashboards.ingest_qa",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "DELETE",
+   "path": "/api/dashboards/views/{view_id}",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "dashboards.delete_view",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/about/"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/about/about.json"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/about/app.css"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/about/app.js"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/app-directory"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/app-directory/receipts/{mission_id}"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/apps/connect/callback"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/dashboards"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/dashboards/views"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/dashboards/{dashboard_id}"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/dashboards/{dashboard_id}/drill"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/activity"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/apps"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/attention"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/capture"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/deployment-inspection"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/discovery"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/missions"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/missions/{mission_id}"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/overview"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/priorities"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/runtime"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/social-intelligence"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/sources"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/templates"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/today"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/today/notifications"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/today/{item_id}"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/projects/{project_id}/workflows"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/sidekick/help"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/ui-config"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/docs"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/docs/oauth2-redirect"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/healthz"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/openapi.json"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/redoc"
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/app-directory/record-link",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.app_directory_record_link",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/app-directory/ref-link",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.app_directory_ref_link",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/apps/{provider}/connect",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.connect_app",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/apps/{provider}/connect/start",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.connect_app_start",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/dashboards/qa/results",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "dashboards.ingest_qa",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/dashboards/{dashboard_id}/track",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "dashboards.track",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/outcomes",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.record_outcome",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/capture",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.capture",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/capture/{capture_id}/archive",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.capture_archive",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/capture/{capture_id}/resolve",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.capture_resolve",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/policy/promotion-cycle",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.policy_promotion_cycle",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/batch",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.today_batch",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/batch/undo",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.today_batch_undo",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/notifications/ack",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.today_ack",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/{item_id}/approve",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.today_approve",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/{item_id}/dismiss",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.today_dismiss",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/{item_id}/reconcile",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.today_reconcile",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/{item_id}/simulate-outcome",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.today_simulate_outcome",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/projects/{project_id}/today/{item_id}/snooze",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.today_snooze",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/sidekick",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.sidekick",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/sources/confirm",
+   "write_policy": {
+    "access": "human_only",
+    "agent_actions": [],
+    "capability": "projects.confirm_sources",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/sources/propose",
+   "write_policy": {
+    "access": "read_only",
+    "agent_actions": [],
+    "capability": "projects.propose_sources",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/sources/remove",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.remove_source",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "PUT",
+   "path": "/api/dashboards/views",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "dashboards.save_view",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "PUT",
+   "path": "/api/projects/{project_id}/today/notification-prefs",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.today_prefs",
+    "permission": "projects:write"
+   }
+  }
+ ],
+ "schema": "rails.app-capabilities/1",
+ "status": "incomplete",
+ "summary": {
+  "gateway_candidates": 0,
+  "operations": 72,
+  "reachable_by_external_agents": 46,
+  "routes": 64,
+  "routes_without_a_gate_decision": 0,
+  "typed": 0,
+  "ui_calls": 0,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 36
+ },
+ "ui_calls": []
+}

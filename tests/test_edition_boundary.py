@@ -4,8 +4,8 @@ They work from names, hashes and symbols: they cannot read what a real enterpris
 * no module outside a reviewed allow-list names an enterprise package, and every such import is lazy (inside a function);
 * no module or top-level definition uses enterprise vocabulary (SSO, OIDC, SAML, SCIM, JWKS, ABAC, break-glass, tenant provisioning);
 * no plug-in entry-point group and no enterprise dependency is declared, and the kernel reads no entry points;
-* decision B3: a permissions Grant carries no tenant or revocation epoch and authorize() takes no tenant;
-* decision B1: the legacy single-deployment tenant surface is exactly the catalogued one;
+* decision B3: a tenant or revocation epoch on a permissions Grant is ENFORCED, fail-closed, and authorize() takes no tenant;
+* decision B1: the modules that read the tenant settings are exactly the catalogued ones;
 * the catalogue names tests that exist, and the document carries the licence wording rule.
 """
 from __future__ import annotations
@@ -110,15 +110,23 @@ def test_no_entry_point_group_and_no_enterprise_dependency():
         assert not re.search(r"\bentry_points\s*\(", t), f"{rel} reads plug-in entry points"
 
 
-def test_grants_and_authorize_carry_no_tenant_or_epoch_b3():
+def test_a_tenant_or_epoch_on_a_grant_is_enforced_and_never_a_caller_argument_b3(tmp_path):
     from dataclasses import fields
 
-    from agentic_os import permissions
+    from agentic_os import permissions as p
 
-    names = {f.name for f in fields(permissions.Grant)}
-    assert not {n for n in names if "tenant" in n or "epoch" in n}, names
-    assert "tenant" not in inspect.signature(permissions.PermissionsPlane.authorize).parameters
-    assert not {n for n in {f.name for f in fields(permissions.Identity)} if "tenant" in n or "epoch" in n}
+    assert {"tenant", "revocation_epoch"} <= {f.name for f in fields(p.Grant)}
+    assert "tenant" in {f.name for f in fields(p.Identity)}
+    assert "tenant" not in inspect.signature(p.PermissionsPlane.authorize).parameters      # it is the identity's, not a caller's
+    store = p.GrantStore(str(tmp_path / "grants.json"))
+    store.add("app", "support", "table", "public.tickets", tenant="t1")
+    store.add("role", "admin", "table", "public.tickets", tenant="t1")
+    plane = p.PermissionsPlane(store)
+    allowed = lambda **who: plane.authorize(p.Identity(app="support", **who), "table", "public.tickets").allowed  # noqa: E731
+    assert allowed(tenant="t1") and not allowed(tenant="t2") and not allowed()
+    assert not allowed(tenant="t2", roles=["admin"])                                       # a privileged role crosses no tenant
+    store.revoke_epoch("app", "support", "t1")
+    assert not allowed(tenant="t1")                                                        # a revoked epoch ends the grant
 
 
 def test_the_legacy_tenant_surface_is_exactly_the_catalogued_one_b1():

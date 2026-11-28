@@ -60,10 +60,25 @@ def _quoted_in_app(app: str, tool: str) -> bool:
     return any(any(n in f.read_text() for n in needle) for f in (APPS / app).glob("*.py") if "test" not in f.name)
 
 
+#: planes of the kernel itself that are classified here although no app directory registers them
+KERNEL_PLANES = ("governed-writes",)
+
+
+def test_the_governed_writes_plane_is_classified_exactly():
+    """Its table is exactly what the plane offers, each at what it does: a proposal writes, everything else reads."""
+    from agentic_os.agent_gateway.app_record_capabilities import manifests
+    from agentic_os.agent_gateway.economics_capabilities import manifests as economics
+    from agentic_os.agent_gateway.app_definition_capabilities import manifests as applications
+    from agentic_os.agent_gateway.market_capabilities import manifests as market
+    from agentic_os.agent_gateway.media_capabilities import manifests as media
+    offered = {m.name: ("write" if m.side_effecting else "read") for m in (*manifests(), *economics(), *media(), *market(), *applications())}
+    assert TOOL_ACTIONS["governed-writes"] == offered
+
+
 def test_no_classification_outlives_its_tool():
     reg, caps = _registered(), _operator_capabilities()
     stale = {app: sorted(t for t in tools if t not in reg.get(app, {}) and t not in caps.get(app, set()) and not _quoted_in_app(app, t))
-             for app, tools in TOOL_ACTIONS.items()}
+             for app, tools in TOOL_ACTIONS.items() if app not in KERNEL_PLANES}
     assert {a: m for a, m in stale.items() if m} == {}
 
 

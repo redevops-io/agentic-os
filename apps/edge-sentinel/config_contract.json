@@ -14,6 +14,7 @@
     { "name": "PARTNERS_BASIC_AUTH_USER", "owner": "edge-sentinel", "default": "", "purpose": "Shared operator credential pair accepted as an alternative to SENTINEL_BASIC_AUTH_*." },
     { "name": "PARTNERS_BASIC_AUTH_PASS", "owner": "edge-sentinel", "default": "", "purpose": "Password half of the shared operator credential pair." },
     { "name": "SENTINEL_BLOCK_ENABLED", "owner": "edge-sentinel", "default": "off", "purpose": "Without it an authenticated execution is a dry run." },
+    { "name": "SENTINEL_ENFORCEMENT_PROBE", "owner": "edge-sentinel", "default": "off", "purpose": "Opt-in read-only page GET /enforcement/<address>: whether a documentation address (RFC 5737, RFC 3849) has an active ban. 404 for any other address; never on with the fixture core; reported on /health as enforcement_probe." },
     { "name": "EDGE_SENTINEL_DEMO", "owner": "edge-sentinel", "default": "", "purpose": "Opt-in fixture core (P4): reads come from synthetic RFC 5737 data, and no external side effect is performed - block_ip/unblock_ip/cscli refuse at core and NetBird, Portabase, deploy-scan, Wazuh, ClamAV and the model are held back too, so demo mode reads no external service and changes none. /health reports the scope as demo.scopes. Grants no exposure and no exemption from the bind, exposure and credential rules." },
     { "name": "EDGE_SENTINEL_DEMO_SCENARIO", "owner": "edge-sentinel", "default": "mixed", "purpose": "Which fixture story to serve: mixed, or unavailable so LAPI reads fail and KPIs report 'not read'; an unknown value falls back to mixed." },
     { "name": "SENTINEL_PROTECTED_IPS", "owner": "edge-sentinel", "default": "", "purpose": "Addresses/CIDRs that are never banned." },
@@ -36,7 +37,9 @@
     { "name": "REDEVOPS_LLM_SETTINGS_FILE", "owner": "agentic-os", "default": "", "purpose": "JSON file holding the endpoint, model and a non-secret key reference instead of the environment." },
     { "name": "REDEVOPS_LLM_TIMEOUT", "owner": "agentic-os", "default": "60", "purpose": "Seconds allowed for the model request." },
     { "name": "OPENAI_API_KEY", "owner": "agentic-os", "default": "EMPTY", "purpose": "Bearer token sent to the operator's own configured endpoint - the OpenAI-compatible wire format, not a subscription to any vendor." },
-    { "name": "REDEVOPS_PRIVACY_MODE", "owner": "agentic-os", "default": "private_with_engineering_assist", "purpose": "Kernel-wide routing mode. The app's narration call registers only the in-boundary endpoint, so no external endpoint is a candidate for it in any mode." }
+    { "name": "REDEVOPS_PRIVACY_MODE", "owner": "agentic-os", "default": "private_with_engineering_assist", "purpose": "Kernel-wide routing mode. The app's narration call registers only the in-boundary endpoint, so no external endpoint is a candidate for it in any mode." },
+    { "name": "SENTINEL_SYNC_INTERVAL_S", "owner": "edge-sentinel", "default": "15", "purpose": "Seconds between background ingestions of CrowdSec alerts into cases; 0 turns the loop off. Reads never ingest." },
+    { "name": "EDGE_SENTINEL_DEMO_NOW", "owner": "edge-sentinel", "default": "", "purpose": "Pins the demo fixture's 'now' (2026-11-26T12:00:00Z form) so a qualification run is reproducible across restarts." }
   ],
   "model_narration": {
     "doc": "Verified behaviour of the optional `triage` narration blurb. The README's prose is checked against these values so a claim here and a claim there cannot drift apart.",

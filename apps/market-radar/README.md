@@ -133,3 +133,33 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8204:8204 \
 ## Authorization note
 
 Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.
+
+
+## The loop on your own site
+
+`radar.brief` says what changed on the pages you watch. Five more capabilities close the loop on your own site, and the mission template
+`market_intelligence_loop` chains them (start it with a goal that names the site, for example "Run the market intelligence loop for
+https://example.com"):
+
+| Step | Capability | What it does |
+|---|---|---|
+| Research | `radar.brief`, `radar.site_audit`, `growth.analyze` | watched pages that changed; the site as a search engine and a first-time visitor read it (robots.txt, sitemap, status, title, description, canonical, indexability, first heading, buttons without an analytics event); where visitors come from |
+| Recommend | `radar.recommend` | a ranked list; each item names its evidence and the checks that will show it was done; the list has a digest |
+| Approve | `radar.approve_plan` | a person's decision, bound to that digest: a list that changed after it was shown is not approved |
+| Implement | (outside the mission) | the change is made in the site's own repository |
+| QA | `radar.verify_change` | the approved items' checks run against the live site; the step fails until they pass |
+| Analytics | `growth.remeasure` | the attribution reading again |
+| Reassess | `radar.reassess` | a second audit: resolved, remaining, new. Its output is the next round's input |
+
+The audit fetches public pages of the one site named, follows no redirect, and writes nothing. It checks what can be checked from the
+pages themselves; it does not know search volume, rankings or conversion.
+
+### Research without waiting for a person
+
+The mission template `market_intelligence_research` runs the research half alone: `radar.brief`, `radar.site_audit`, `growth.analyze`,
+`radar.recommend`. Every step only reads (public pages, your analytics), none is consequential, so the template has no approval step
+and the mission finishes by itself. It decides nothing. The list it ends with says what it is: `recommendations.plan_kind` is `read_only`
+when no item asks for a change to the site (for example "three watched pages changed: re-read what quotes them") and `changes` when at
+least one does. A list that proposes changes goes through `market_intelligence_loop`, where a person approves it by its digest before
+anything is verified against it. In the production profile the mission still runs only inside the authority the deployment recorded
+for it: an envelope that grants the read capabilities and forbids the rest.

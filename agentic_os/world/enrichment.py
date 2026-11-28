@@ -247,6 +247,16 @@ def title_keywords(titles: "list[str]") -> "list[str]":
 def get_provider(name: Optional[str] = None):
     """The configured enrichment provider: explicit name, or REDEVOPS_ENRICHMENT_PROVIDER, or the first with
     a key set. Returns None if none is configured (so callers keep leads at NO_EMAIL, never fabricate one)."""
+    p = _select_provider(name)
+    if p is None:
+        return None
+    # Deployed metering (ENRICHMENT_LEDGER_PATH): every call site that asks for "the provider" gets it
+    # metered, budget-checked and provenance-stamped, with no change at the call site.
+    from .enrichment_metering import metered_from_env  # noqa: PLC0415
+    return metered_from_env(p) or p
+
+
+def _select_provider(name: Optional[str] = None):
     chosen = (name or os.environ.get("REDEVOPS_ENRICHMENT_PROVIDER", "")).lower()
     if chosen in _PROVIDERS:
         p = _PROVIDERS[chosen]()
@@ -256,6 +266,11 @@ def get_provider(name: Optional[str] = None):
         if p.configured():
             return p
     return None
+
+
+def _provenance(*steps: Any) -> "list[Dict[str, Any]]":
+    """The provenance records of the provider calls a result was built from (empty when unmetered)."""
+    return [s["provenance"] for s in steps if isinstance(s, dict) and s.get("provenance")]
 
 
 def resolve_verified_email(*, domain: str, first_name: str, last_name: str,
@@ -273,7 +288,8 @@ def resolve_verified_email(*, domain: str, first_name: str, last_name: str,
         ver = p.verify_email(email)
         verified = bool(ver.get("verified")) or (found.get("confidence", 0) >= 0.8)
         return {"email": email, "verified": verified, "provider": p.name,
-                "confidence": max(found.get("confidence", 0), ver.get("score") or 0)}
+                "confidence": max(found.get("confidence", 0), ver.get("score") or 0),
+                "provenance": _provenance(found, ver)}
     except EnrichmentError as e:
         return {"email": None, "verified": False, "provider": p.name, "reason": str(e)}
 
@@ -314,11 +330,13 @@ def resolve_contact(*, domain: str, titles: "list[str]", provider: Optional[Any]
                 continue
             if person.get("verified"):
                 return {"name": person.get("name"), "first_name": person.get("first_name", ""),
-                        "email": email, "verified": True, "provider": p.name}
+                        "email": email, "verified": True, "provider": p.name,
+                        "provenance": _provenance(person)}
             best = best or person
         if best:
             return {"name": best.get("name"), "first_name": best.get("first_name", ""),
-                    "email": best["email"], "verified": False, "provider": p.name}
+                    "email": best["email"], "verified": False, "provider": p.name,
+                    "provenance": _provenance(best)}
         return {"email": None, "verified": False, "provider": p.name, "reason": "no contact email found"}
     except EnrichmentError as e:
         return {"email": None, "verified": False, "provider": p.name, "reason": str(e)}

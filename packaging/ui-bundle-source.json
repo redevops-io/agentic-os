@@ -1,18 +1,18 @@
 {
- "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-e6032e8e.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. RE-PINNED 2026-11-19: the source commit is now a PUBLISHED commit of the public redevops-projects repository (source_commit_published: true) -- see packaging/projects_ui.lock.json's own _comment for why (the previous local, unpublished commit this bundle was built from was lost in the 2026-11-07 scratchpad wipe and could not be recovered; this build drops the features that only existed there). index.html, the JavaScript and the CSS are build output; hero.jpg is not (D-LIC-8 option c: it is dropped, never packed). RE-PINNED 2026-11-24 to e6032e8e (redevops-projects PRs #28 and #29 on top of 2bbb9811).",
+ "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-e6032e8e.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. RE-PINNED 2026-11-19: the source commit is now a PUBLISHED commit of the public redevops-projects repository (source_commit_published: true) -- see packaging/projects_ui.lock.json's own _comment for why (the previous local, unpublished commit this bundle was built from was lost in the 2026-11-07 scratchpad wipe and could not be recovered; this build drops the features that only existed there). index.html, the JavaScript and the CSS are build output; hero.jpg is not (D-LIC-8 option c: it is dropped, never packed). RE-PINNED 2026-11-24 to e6032e8e (redevops-projects PRs #28 and #29 on top of 2bbb9811). RE-PINNED 2026-11-27 to 616f5069 (release v0.4.0: the installed app's screens).",
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "84f17fceddb84d1af909a5919b5efbb2956b2b22",
  "base_commit_public": true,
- "source_commit": "5ad1ebbca673fa25f5fcec5a56a125ff20d517be",
- "source_tree": "e7c7befc48436011d885c0567d00fcc67e6b8073",
+ "source_commit": "616f50697504a6fa948accd607b6c7ca3a851a2c",
+ "source_tree": "847b54a73e3b686b5389f5019060a3d0146abe5c",
  "source_commit_published": true,
- "source_status": "public commit on the redevops-projects repository's own main branch, reachable today at https://github.com/redevops-io/redevops-projects/commit/5ad1ebbca673fa25f5fcec5a56a125ff20d517be (\"Portable page: one list of unavailable dashboards; kernel 0.4.16 (0.3.9)\", #40; release tag v0.3.9); descends from the public v0.2.0 release (base_commit) via PR #24 (shared routing, restore-last-place and connection states), PR #25 (agent audit findings) and #26.",
- "previous_source_commit": "33c1a3e096cb7c5e36a204f1f18fb39b95f3ffdd",
+ "source_status": "public commit on the redevops-projects repository's own main branch, reachable today at https://github.com/redevops-io/redevops-projects/commit/616f50697504a6fa948accd607b6c7ca3a851a2c (\"Desktop screens: approvals, agents, applications (0.4.0)\", #42; release tag v0.4.0); descends from the public v0.2.0 release (base_commit).",
+ "previous_source_commit": "5ad1ebbca673fa25f5fcec5a56a125ff20d517be",
  "previous_bundle": "the entire previous local-source lineage (assets/index-76LJRJ18.js sha256 828bb55cbbdbc60df8ecad9fffc76ec3c0d2ba918c9b072d0d1d92b3a728649c, built from the now-unrecoverable local commit ea9e53e5, and its own ancestor chain back through 9a1788b1/5751e9e5/312a811a/2f24719e/ee958a01/2fdef7f5) is superseded; see packaging/projects_ui.lock.json's previous_pin for the full chain, kept as history.",
- "package_json_git_blob": "94cf162a296f5334f5256d63ec3514aeda10d507",
- "package_json_sha256": "c8dba2b01030dc80f748f02348cf5e44003286b2dc5d77d096a581b8b3fa3626",
- "package_lock_git_blob": "365424367eee0c1ac6b5db374dc9cbf85c5c352b",
- "package_lock_sha256": "f08c3e40e4da8df9250503329fe29092e8f261af7335143c562de9088bd5e240",
+ "package_json_git_blob": "580fbdc2a5a671bf1fafbbec197f4f5314ded3ae",
+ "package_json_sha256": "fe699cd1a1f2589499b05c2339bc930f49b63944428ee1539ad825d12efbaa77",
+ "package_lock_git_blob": "4f4b09f4d6100e5bb896cd2fdb1f053ad5ad9454",
+ "package_lock_sha256": "be9131dcbb9eb5237f084ac9365b2b6ffd884772e9421090d305c3bb694fbec0",
  "lock_unchanged_since_base": false,
  "build": {
   "node": "v24.22.3",
@@ -22,17 +22,17 @@
    "npm ci",
    "VITE_PROJECTS_API=/ npm run build -- --base=/"
   ],
-  "reproduced": "built once on 2026-11-25 from a clean `git archive` of the source commit in a throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.3, npm 11.19.1); index.html, the JavaScript and the CSS are byte-identical to the files of the published v0.3.9 release asset."
+  "reproduced": "built three times on 2026-11-27 from a clean `git archive` of the source commit, each in its own throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.3, npm 11.19.1): identical archives; index.html, the JavaScript and the CSS are byte-identical to the files of the published v0.4.0 release asset."
  },
  "files": {
-  "index.html": "2ff435d9c51c2e93dee0fb6bd75d40ee4fb19a81d04ac06625a5cb699bf9efd8",
-  "assets/index-CLW4eln8.css": "3a101e43384909a49493b4cfd59d13fdc1dcc6e9e081089999d5d524fff9d846",
-  "assets/index-Cu-cxBE5.js": "58e040ad68893c2fe61439ca58a4910687b8bf98e6a2dd702f32711ca04ade7a",
+  "index.html": "c41aeba50a1426bf545a96913da35ad2f66420a8c1f082847b72d539ce409e1f",
+  "assets/index-BHfw9Wkv.css": "7c31ca8ae1f7e60c6a9e0840649c2080d7f7f2bb8a765cebd177f6307db15b35",
+  "assets/index-CtpXm1g8.js": "22d81e3a929c061385c71b8d86dc824f9f3c855b712ad9b70b1f8f8e872f2ca2",
   "assets/mockDashboards-Lw4QGbeP.js": "6959df5eb1bdc38bbd3eb77e354093ab5c9e11ae514ad1298d96f21215245e08"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-5ad1ebbc.tgz",
-  "sha256": "9e0fd6bd630401228f8278008d37f8a27adaef57e488a157af1d7c35b21ae437",
+  "path": "packaging/ui-artifacts/projects-ui-root-616f5069.tgz",
+  "sha256": "829e6e4b1b6535c7b3b07473d28943ec19bbbba32ec254b3a72cd47b2c0dde92",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",
@@ -42,7 +42,7 @@
   "tag": "v0.2.0",
   "commit": "84f17fceddb84d1af909a5919b5efbb2956b2b22"
  },
- "lock_change_since_base": "compared package by package with the v0.2.0 base: the five production packages (react, react-dom and what they need) are byte-identical entries (same version and integrity); the root entry changed (version 0.3.9, one script, one devDependency) and one dev-only package was added, pyodide 0.27.7 (MPL-2.0), which the build of this artifact does not use",
+ "lock_change_since_base": "compared package by package with the v0.2.0 base: the five production packages (react, react-dom and what they need) are byte-identical entries (same version and integrity); the root entry changed (version 0.4.0, one script, one devDependency) and one dev-only package was added, pyodide 0.27.7 (MPL-2.0), which the build of this artifact does not use",
  "environment_flags_note": "the only build variable is VITE_PROJECTS_API=/; VITE_PROJECTS_SAMPLE_DATA no longer exists in this source line either",
  "lock_production_unchanged_since_base": true,
  "lock_dev_additions_since_base": [

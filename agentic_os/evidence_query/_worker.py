@@ -53,17 +53,30 @@ def _apply_rlimits(req: dict) -> None:
     # fail intermittently (seen on Linux). Memory is bounded by DuckDB's memory_limit, the RSS watchdog below and the container cgroup.
 
 
+def _peak_rss_bytes() -> int:
+    """The most memory THIS process has held. On Linux ``getrusage().ru_maxrss`` is not that: it survives ``execve``, so a new
+    worker starts with its parent's peak, and a parent that once used much memory made every query fail with ``limit``.
+    ``VmHWM`` belongs to the process's own memory, which starts anew at exec (the OS sandbox mounts /proc)."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+
+
 def _start_watchdog(memory_mb: int) -> None:
     """RSS watchdog: DuckDB's memory_limit does not cover every allocation, and RLIMIT_AS is not enforced on macOS."""
     if resource is None:                       # no POSIX rusage on this platform (e.g. Windows)
         return
     cap = (memory_mb * 2 + 200) * 1024 * 1024
-    div = 1 if sys.platform == "darwin" else 1024
 
     def run():
         while True:
             time.sleep(0.05)
-            if resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * div > cap:
+            if _peak_rss_bytes() > cap:
                 os.write(1, b'{"ok": false, "code": "limit"}')
                 os._exit(3)
     threading.Thread(target=run, daemon=True).start()

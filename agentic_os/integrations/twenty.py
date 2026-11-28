@@ -42,6 +42,10 @@ def _domain(company: dict) -> str:
     return (dn.get("primaryLinkUrl") or "").strip() if isinstance(dn, dict) else (str(dn or "").strip())
 
 
+class TwentyReadError(Exception):
+    """A read of Twenty failed. The text names the object and the status, never a body or a credential."""
+
+
 @dataclass
 class TwentyClient:
     base_url: str
@@ -60,6 +64,39 @@ class TwentyClient:
             return (data.get(key) if isinstance(data, dict) else data) or []
         except Exception:  # noqa: BLE001
             return []
+
+    def read_page(self, obj: str, *, limit: int = 60, after: Optional[str] = None) -> Tuple[list, Optional[str]]:
+        """One page of a Twenty collection (``notes``, ``noteTargets``, ``companies``, ``people``, ``opportunities``, ``tasks``) and the cursor of the next, or
+        ``None`` at the end. RAISES where the other reads return ``[]``: a caller that must tell "nothing there" from "could not read" uses this."""
+        import httpx
+        params: dict = {"limit": limit, "order_by": "createdAt,id"}
+        if after:
+            params["starting_after"] = after
+        try:
+            r = httpx.get(f"{self.base_url}/rest/{obj}", params=params, headers={"Authorization": f"Bearer {self.api_key}"}, timeout=self.timeout)
+        except Exception as e:  # noqa: BLE001
+            raise TwentyReadError(f"{obj}: could not be reached ({type(e).__name__})") from None
+        if r.status_code >= 400:
+            raise TwentyReadError(f"{obj}: the application answered HTTP {r.status_code}")
+        try:
+            body = r.json()
+        except ValueError:
+            raise TwentyReadError(f"{obj}: the answer could not be read") from None
+        data = body.get("data") or {}
+        rows = list(data.get(obj) or []) if isinstance(data, dict) else []
+        info = body.get("pageInfo") or {}
+        return rows, (info.get("endCursor") if info.get("hasNextPage") else None)
+
+    def read_all(self, obj: str, *, limit: int = 60, max_pages: int = 200) -> list:
+        """Every row of a collection, following the cursor. Raises if a page cannot be read, or if the collection is longer than ``max_pages`` pages."""
+        out: list = []
+        cursor: Optional[str] = None
+        for _ in range(max_pages):
+            rows, cursor = self.read_page(obj, limit=limit, after=cursor)
+            out.extend(rows)
+            if not cursor:
+                return out
+        raise TwentyReadError(f"{obj}: more than {max_pages} pages; the read was cut")
 
     def opportunities(self, *, limit: int = 60) -> list:
         return self._get("/rest/opportunities", {"limit": limit})

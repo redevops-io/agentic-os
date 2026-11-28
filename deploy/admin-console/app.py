@@ -3,15 +3,49 @@
 The governance/admin view over the world-runtime: which OSS cores are wired LIVE vs the in-memory demo store,
 whether every governed mission's invariants held (zero violations), what budgets are committed vs remaining,
 and where each mission sits on the autonomy ladder. It runs the real engine and reports what actually
-happened — never a hand-maintained status page. Read-only; nothing here sends or spends.
+happened — never a hand-maintained status page.
+
+Requires an admin credential (B3): the snapshot runs the real engine against whatever cores a deployment
+has configured, and ``ExecutionMode.SIMULATE`` (world/seeder.py's own fail-closed default, not this app)
+is what keeps a run from reaching a real external system — this route is not safe to serve anonymously
+just because today's default mode happens to be simulate-only, since a future caller or config could ask
+for LIVE. ``ADMIN_CONSOLE_API_KEY`` via ``X-API-Key`` or ``Authorization: Bearer``, compared in constant
+time, reusing the same admin-gate primitives as the permissions admin API. Fails closed: no key, a short
+key, or a wrong one is never 2xx (``/healthz`` stays open — it reports nothing).
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+import os
+
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from runtime_contracts import AuthorityContext, PrincipalRef
 from agentic_os.world import ALL_WORLDS, build_admin_snapshot
+from agentic_os.permissions_http import MIN_ADMIN_KEY_LENGTH, log_disabled, require_admin_key
+
+ADMIN_KEY_ENV = "ADMIN_CONSOLE_API_KEY"
+
+
+def _admin_key_from_env() -> str:
+    """The usable admin-console key, or "" when none may be used (unset, or shorter than
+    ``MIN_ADMIN_KEY_LENGTH`` — a server misconfiguration treated exactly like no key: the route stays
+    DISABLED, 503, never open)."""
+    raw = os.environ.get(ADMIN_KEY_ENV, "")
+    if not raw or len(raw) < MIN_ADMIN_KEY_LENGTH:
+        if raw:
+            log_disabled("the admin console", f"set {ADMIN_KEY_ENV} to a key of at least "
+                         f"{MIN_ADMIN_KEY_LENGTH} characters")
+        return ""
+    return raw
+
+
+def require_admin_console(request: Request) -> None:
+    """The ONE admin dependency of every ``/admin``-* route — reuses ``agentic_os.permissions_http``'s
+    battle-tested gate (constant-time compare, backoff on repeated failures, no query-string credentials)
+    with this app's own, separately-scoped key."""
+    require_admin_key(request, _admin_key_from_env())
+
 
 _SCOPES = ("read:crm", "read:geo", "write:quote", "write:crm", "read:secrets", "write:vendor", "write:billing")
 _SEEDS = {"after-hours-lead": "8842", "kyc-ownership": "clean", "finance-leakage": "4471",
@@ -44,12 +78,12 @@ def healthz():
     return {"ok": True}
 
 
-@app.get("/api/admin")
+@app.get("/api/admin", dependencies=[Depends(require_admin_console)])
 def api_admin():
     return JSONResponse(_snapshot())
 
 
-@app.get("/admin", response_class=HTMLResponse)
+@app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin_console)])
 def page():
     return _PAGE
 

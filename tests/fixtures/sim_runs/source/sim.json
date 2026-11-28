@@ -1,0 +1,83 @@
+{
+ "aliases": {},
+ "carried_from": null,
+ "next_id": 2,
+ "problems": [
+  {
+   "attempts": [
+    {
+     "accepted": true,
+     "backfilled": false,
+     "candidate_harness": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+     "evaluated": true,
+     "files": [
+      "systemprompt.md"
+     ],
+     "fixed": [
+      "e1"
+     ],
+     "missed": [
+      "e2"
+     ],
+     "passed": 2,
+     "predicted": [
+      "e1",
+      "e2"
+     ],
+     "provenance": {
+      "benchmark": "synthetic-bench",
+      "domain": "synthetic",
+      "evaluator": "scripted",
+      "harness_version": "29beae470c93ac0a73ebc9636ff032995e1c8a0abdfb07420808e0c0daaf36ea",
+      "optimizer": "scripted",
+      "policy": "model-a@1",
+      "run": "source"
+     },
+     "rationale": "synthetic rationale",
+     "regressed": [],
+     "round": 1,
+     "sample": 0,
+     "total": 4,
+     "what": "add one marker"
+    },
+    {
+     "accepted": true,
+     "backfilled": false,
+     "candidate_harness": "9266d153c7fa6e5d8ae953c3cc6e951e31d0850042b4ab8148200499e06faf34",
+     "evaluated": true,
+     "files": [
+      "systemprompt.md"
+     ],
+     "fixed": [
+      "e2"
+     ],
+     "missed": [],
+     "passed": 3,
+     "predicted": [
+      "e2"
+     ],
+     "provenance": {
+      "benchmark": "synthetic-bench",
+      "domain": "synthetic",
+      "evaluator": "scripted",
+      "harness_version": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+      "optimizer": "scripted",
+      "policy": "model-a@1",
+      "run": "source"
+     },
+     "rationale": "synthetic rationale",
+     "regressed": [],
+     "round": 2,
+     "sample": 0,
+     "total": 4,
+     "what": "add the second marker"
+    }
+   ],
+   "id": "P1",
+   "name": "markers are missing",
+   "opened_round": 1
+  }
+ ],
+ "run": "source",
+ "schema": "agent-harness.sim/1"
+}

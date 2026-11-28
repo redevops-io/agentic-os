@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PUBLISH_ACTIONS = ("softprops/action-gh-release", "actions/create-release", "actions/upload-release-asset",
                    "ncipollo/release-action", "marvinpinto/action-automatic-releases", "pypa/gh-action-pypi-publish",
                    "docker/build-push-action", "JamesIves/github-pages-deploy-action", "peaceiris/actions-gh-pages")
-PUBLISH_COMMANDS = re.compile(r"gh\s+release|gh\s+api\b|twine\s+upload|npm\s+publish|cargo\s+publish|docker\s+push|"
+PUBLISH_COMMANDS = re.compile(r"gh\s+release(?!\s+download\b)|gh\s+api\b|twine\s+upload|npm\s+publish|cargo\s+publish|docker\s+push|"
                               r"git\s+push|git\s+tag|vsce\s+publish|uv\s+publish|pip\s+upload", re.I)
 WRITE_PERMS = re.compile(r"^\s*(contents|packages|id-token|deployments|pages|releases|attestations|statuses)\s*:\s*write\b|"
                          r"^\s*permissions\s*:\s*write-all", re.I | re.M)
@@ -62,6 +62,31 @@ def workflows() -> list[Path]:
 # narrow: it only lifts the "uses secrets.*" finding, never the publishing/permission findings (convergence stage 2, decision F7).
 READ_ONLY_SECRET_WORKFLOWS = {"pin-currency.yml": "weekly pin-currency report; optional read-only PAT, falls back to github.token"}
 
+# Workflows that main carries and that REPORT or READ, and can publish nothing. Each exception is per file and checked
+# below: the token stays read-only (`violations` still reports any write permission), the only secret named is the one
+# listed, and every `gh api` call is a plain GET.
+REPORT_SECRET = "QA_DASHBOARD_TOKEN"                  # sends test results to the QA dashboard; no repository right
+REPORTING_WORKFLOWS = {"tests.yml": "reports the test results", "report-qa-jobs.yml": "reports a finished run's job results"}
+READ_ONLY_API_WORKFLOWS = {"report-qa-jobs.yml": "reads a finished run's job list",
+                           "published-artifacts-acceptance.yml": "reads a published release's record to check it"}
+_API_WRITES = re.compile(r"(^|\s)(-X|--method|-f|-F|--field|--raw-field|--input)([\s=]|$)")
+
+
+def read_only_exceptions(name: str, text: str, found: list[str]) -> list[str]:
+    code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    if name in REPORTING_WORKFLOWS and "uses secrets.*" in found:
+        named = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", code))
+        assert named == {REPORT_SECRET}, f"{name} may name only {REPORT_SECRET}, not {sorted(named)}"
+        found = [v for v in found if v != "uses secrets.*"]
+    if name in READ_ONLY_API_WORKFLOWS:
+        calls = re.findall(r"gh\s+api\b[^\n]*", code)
+        assert calls and not [c for c in calls if _API_WRITES.search(c.split("--jq")[0])], f"{name}: every gh api call must only read"
+        without = re.sub(r"gh\s+api\b", "gh read", text)
+        found = [v for v in found if not (v.endswith("publishing command in a run step") and not any(
+            x.endswith("publishing command in a run step") for x in violations(without)))]
+    return found
+
+
 # id-token: write used ONLY to authenticate to a real signing service via OIDC (azure/login) - never to publish a
 # release, push an image or write any secret. The exception lifts just the one "write permission" finding; a
 # publish action, a release-shaped job name, or secrets.* usage in the same file would still fail this test.
@@ -77,6 +102,8 @@ OIDC_SIGNING_WORKFLOWS = {
 PUBLISH_ALLOWED_WORKFLOWS = {
     "oci-edge-sentinel.yml": "signed GHCR publish of the Edge Sentinel standalone image",
     "oci-redevops-ts-bundle.yml": "signed GHCR publish of the combined bundle (Projects+Sidekick, redevops-qa, Edge Sentinel) OCI artifact",
+    "oci-redevops-ts.yml": "signed GHCR publish of the single-pull bundle, from main only; container images and a compose artifact, never installers",
+    "oci-release.yml": "signed GHCR publish of the runtime and Projects images, built from a release tag contained in main; never installers",
     "oci-redevops-projects.yml": "signed GHCR publish of the Projects UI standalone image (redevops-projects), gated on the UI source actually being published",
     "release-publish.yml": "GitHub Release of the signed R0-prime Windows installers, gated on the distribution gate passing",
     "snap-railsapps.yml": "build and Snap Store edge-channel publish of railsapps, gated on the distribution gate passing and a confirmation phrase naming the known SNAP-D1 defect",
@@ -96,6 +123,7 @@ def test_the_tree_has_workflows_and_none_can_publish():
             found = [v for v in found if v != "uses secrets.*"]
         if p.name in OIDC_SIGNING_WORKFLOWS:
             found = [v for v in found if v != "a write permission (contents/packages/id-token/... : write, or write-all)"]
+        found = read_only_exceptions(p.name, text, found)
         if p.name in PUBLISH_ALLOWED_WORKFLOWS:
             doc = yaml.safe_load(text)
             triggers = doc.get(True, doc.get("on", {})) or {}
@@ -105,6 +133,51 @@ def test_the_tree_has_workflows_and_none_can_publish():
                 f"{p.name}: a publish-allowed workflow must require a typed confirmation input"
             found = []
         assert found == [], str(p.relative_to(ROOT))
+
+
+def test_only_the_signed_desktop_publisher_creates_a_github_release():
+    """Whatever else may publish an image or a store listing, installers reach a release through one workflow."""
+    makers = []
+    for p in workflows():
+        code = "\n".join(l for l in p.read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("#"))
+        if re.search(r"gh\s+release\s+(create|upload)", code) or any(a in code for a in PUBLISH_ACTIONS[:5]):
+            makers.append(p.name)
+    assert makers == ["release-publish.yml"]
+
+
+def test_the_bundle_publisher_runs_from_main_only_signs_by_digest_and_overwrites_nothing():
+    text = (ROOT / ".github/workflows/oci-redevops-ts.yml").read_text(encoding="utf-8")
+    assert '[ "$GITHUB_REF" = "refs/heads/main" ]' in text and '[ "$CONFIRM" = "PUBLISH $TAG" ]' in text
+    assert re.search(r'cosign sign --yes --recursive "ghcr\.io/redevops-io/redevops-projects@\$\{\{ steps\.build\.outputs\.digest \}\}"', text)
+    assert "Refuse to overwrite an existing" in text and "contents: write" not in text
+
+
+def test_the_release_image_publisher_builds_only_a_tag_contained_in_main_signs_it_and_overwrites_nothing():
+    text = (ROOT / ".github/workflows/oci-release.yml").read_text(encoding="utf-8")
+    assert '[ "$GITHUB_REF" = "refs/tags/$REF" ]' in text and '[ "$CONFIRM" = "PUBLISH $REF" ]' in text
+    assert 'git merge-base --is-ancestor "$COMMIT" origin/main' in text and "Refuse to overwrite an existing tag" in text
+    assert 'cosign sign --yes --recursive "ghcr.io/redevops-io/${NAME}@${{ steps.build.outputs.digest }}"' in text
+    assert "contents: write" not in text
+
+
+@pytest.mark.parametrize("name,added", [
+    ("report-qa-jobs.yml", 'run: gh api -X POST "repos/x/y/releases" -f tag_name=v1'),
+    ("report-qa-jobs.yml", "token: ${{ secrets.RELEASE_TOKEN }}"),
+    ("published-artifacts-acceptance.yml", "run: gh release create v1 dist/*"),
+    ("tests.yml", "token: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}"),
+])
+def test_a_read_only_exception_does_not_cover_anything_that_writes(name, added):
+    """Each exception, tried against the change it must still refuse."""
+    text = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    doc["jobs"]["zz_added"] = {"runs-on": "ubuntu-latest", "steps": [
+        {"run": added[5:]} if added.startswith("run: ") else {"uses": "actions/checkout@v4", "with": {"token": added[7:]}}]}
+    changed = yaml.safe_dump(doc, sort_keys=False)
+    try:
+        found = read_only_exceptions(name, changed, violations(changed))
+    except AssertionError:
+        return                                                          # the exception itself refused it
+    assert found, f"{name} would have been let through with: {added}"
 
 
 def test_native_packaging_has_no_release_job_and_a_read_only_token():

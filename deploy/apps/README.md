@@ -10,6 +10,7 @@ networking, the local registry) removed and every image pulled from GHCR.
 | Layer | Services | Registry |
 |---|---|---|
 | **Operating console** | `projects-console` (the `demo.redevops.io/demo` surface) | public (GHCR) |
+| **Projects and dashboards** | `projects` (signed `redevops-projects` image, pinned by digest) on port 8090 | public (GHCR) |
 | **6 governed domain agents** | revenue · intelligence · finance · customer-success · content · security-compliance | public (GHCR) |
 | **OSS cores** | Twenty CRM · Metabase · Postiz (+ their Postgres/Redis) | public (Docker Hub) |
 | **Front door** | Caddy | public |
@@ -32,11 +33,11 @@ git clone https://github.com/redevops-io/agentic-os.git
 cd agentic-os/deploy/apps
 
 cp .env.example .env
-# edit .env: set POSTIZ_JWT_SECRET (openssl rand -base64 32),
-# point REDEVOPS_LLM_BASE_URL at your model, set TENANT.
+# edit .env: point REDEVOPS_LLM_BASE_URL at your model, set TENANT.
 
 # Platform secrets (TWENTY_APP_SECRET, AGENTIC_OS_APPROVAL_SECRET, OUTREACH_BASIC_AUTH) are generated
 # for you, idempotently, into ~/.config/redevops/secrets.env (Windows: .\bootstrap-secrets.ps1):
+# It also writes this installation's own database passwords and Postiz signing key into .env.
 ./bootstrap-secrets.sh               # or: make secrets
 docker compose --env-file .env --env-file ~/.config/redevops/secrets.env up -d   # public images — no login needed
 # (or simply: make up).  See docs/SECRETS.md.
@@ -47,6 +48,26 @@ docker compose ps
 
 Open **http://\<host\>:8080** — the operating console, with a tile per business
 system and a cross-domain attention queue.
+
+Open **http://\<host\>:8090** — Projects, with the dashboards (`PROJECTS_HTTP_PORT` in `.env` changes the port). It asks for the operator sign-in that
+`bootstrap-secrets` generated (`agentic-os secrets get OUTREACH_BASIC_AUTH`, or read it in
+`~/.config/redevops/secrets.env`: the part before the colon is the user, the rest is the password). A dashboard is
+offered when its application is connected: put `TWENTY_API_KEY`, `POSTIZ_API_KEY` or the Metabase admin sign-in in `.env`
+and edit `dashboards.yaml`. The QA dashboard appears when the first test results are reported to it
+(`docs/DASHBOARDS.md`). An application without a credential is shown as not connected, never as zero.
+
+### Upgrading an existing install
+
+The database passwords no longer have a default. A database keeps the password its volume was created with, so
+`bootstrap-secrets` does not generate one for a database that already exists: it names the missing setting and stops.
+
+1. Put the current password in `.env`. If you had never set `TWENTY_DB_PASSWORD`, `METABASE_DB_PASSWORD` or
+   `POSTIZ_DB_PASSWORD`, the database was created with the fallback that your previous `compose.yml` carried
+   (`git show <your previous version>:deploy/apps/compose.yml`). If you had set it, it is already in your `.env`.
+2. Run `./bootstrap-secrets.sh` again and start the stack. Nothing is changed in any database.
+3. A password that was a published default is public. Replace it when convenient: change it inside the database
+   (`docker compose exec twenty-db psql -U postgres -c '\password'`, likewise `metabase-db` with `-U metabase` and
+   `postiz-db` with `-U postiz`), put the same value in `.env`, then `docker compose up -d`.
 
 ## First-run wiring
 

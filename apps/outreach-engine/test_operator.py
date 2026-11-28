@@ -76,6 +76,9 @@ def _fake_twenty(monkeypatch):
     core._LIVE_CACHE.update(ts=0.0, rows=[])            # no cached live signals
     monkeypatch.setattr(core, "TWENTY_API_KEY", "test-key")
     monkeypatch.setattr(core.urllib.request, "urlopen", _fake_urlopen)
+    # hermetic against this machine's real ~/.zshrc exports: no test may attempt a real SMTP connection
+    monkeypatch.setattr(core, "GMAIL_SMTP_USER", "")
+    monkeypatch.setattr(core, "GMAIL_SMTP_APP_PASSWORD", "")
     yield
 
 
@@ -114,16 +117,26 @@ def test_capabilities_manifest(client):
     m = client.get("/capabilities").json()
     assert m["operator"] == "outreach-engine"
     caps = {c["name"]: c for c in m["capabilities"]}
-    assert set(caps) == {"outreach.refresh", "outreach.approve", "outreach.send_all"}
+    assert set(caps) == {"outreach.refresh", "outreach.enrich", "outreach.draft_pitch",
+                         "outreach.approve", "outreach.send_all", "outreach.check_replies",
+                         "outreach.follow_up"}
     # the gate is modules.yaml `approval_required: [send_sequence]` — only the send is gated
     assert caps["outreach.send_all"]["approval_required"] is True
     assert caps["outreach.refresh"]["approval_required"] is False
+    assert caps["outreach.enrich"]["approval_required"] is False      # spends provider credits, not trust
+    assert caps["outreach.draft_pitch"]["approval_required"] is False  # only writes the in-memory draft
     assert caps["outreach.approve"]["approval_required"] is True      # syncs a lead to Twenty -> gated
-    # side_effecting = writes/sends: refresh only reads, approve + send_all mutate the world
+    # side_effecting = writes/sends: refresh/enrich/draft_pitch only read, approve + send_all mutate the world
     assert caps["outreach.refresh"]["side_effecting"] is False
+    assert caps["outreach.enrich"]["side_effecting"] is False
+    assert caps["outreach.draft_pitch"]["side_effecting"] is False
+    assert caps["outreach.check_replies"]["side_effecting"] is False
+    assert caps["outreach.follow_up"]["side_effecting"] is False
     assert caps["outreach.approve"]["side_effecting"] is True
     assert caps["outreach.send_all"]["side_effecting"] is True
     assert "outreach_pipeline" in caps["outreach.refresh"]["provides"]
+    assert "contact_email" in caps["outreach.enrich"]["provides"]
+    assert "pitch_drafted" in caps["outreach.draft_pitch"]["provides"]
     assert "lead_synced" in caps["outreach.approve"]["provides"]
     assert "sequences_sent" in caps["outreach.send_all"]["provides"]
     assert "outreach:write" in caps["outreach.approve"]["permissions"]
@@ -135,6 +148,32 @@ def test_invoke_refresh_builds_pipeline_no_write(client):
     assert res["ok"] is True and res["action"] == "refresh"
     assert res["n"] == len(core.DEMO)          # offline signal sources → DEMO leads ranked
     assert _Twenty.posts == []                 # read-only: nothing written to Twenty
+
+
+def test_invoke_draft_pitch_via_the_operator_sdk(client, monkeypatch):
+    """The Sidekick/Mission-Runtime-relevant path: /invoke, not /api/run -- proves the deferred
+    operator->app import actually resolves through the real HTTP capability surface."""
+    import importlib as _il
+    app_mod = _il.import_module("outreach-engine.app")
+    monkeypatch.setattr(app_mod, "_llm", lambda *a, **k: "")   # deterministic: template fallback
+    _result(client, "outreach.refresh", {})
+    acct = core.DEMO[0]["account"]
+    res = _result(client, "outreach.draft_pitch", {"account": acct})
+    assert res["ok"] is True and res["action"] == "draft_pitch" and res["draft_source"] == "template"
+    assert "<table" in res["html"]
+    row = next(r for r in core._STATE["accounts"] if r["account"] == acct)
+    assert row["draft"]["body"] == res["body"]
+
+
+def test_invoke_follow_up_via_the_operator_sdk(client, monkeypatch):
+    import importlib as _il
+    app_mod = _il.import_module("outreach-engine.app")
+    monkeypatch.setattr(app_mod, "_llm", lambda *a, **k: "")
+    _result(client, "outreach.refresh", {})
+    acct = core.DEMO[0]["account"]
+    res = _result(client, "outreach.follow_up", {"account": acct})
+    assert res["ok"] is True and res["action"] == "follow_up" and res["follow_up_for"] == "no_reply"
+    assert "<table" in res["html"]
 
 
 def test_invoke_approve_syncs_pilot_to_twenty(client):
@@ -232,3 +271,61 @@ def test_opener_depends_on_icp():
 def test_pipeline_rows_label_play_as_fixed_policy():
     rows = core.build_pipeline(live=False)
     assert rows and all(r["play_policy"] == "fixed policy (not learned)" for r in rows)
+
+
+# ── when the pilot is NOT written to Twenty, the answer says why (found by running against a real Twenty) ──────────────────
+def _row():
+    return {"account": "northwind-check", "source": "manual", "stars": 0, "url": "https://northwind-check.example.com"}
+
+
+def _http_error(code):
+    import urllib.error
+    return urllib.error.HTTPError("http://twenty/rest/companies", code, "refused", None, None)
+
+
+def test_a_sync_is_reported_only_with_the_id_twenty_returned(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+    monkeypatch.setattr(core.urllib.request, "urlopen", _fake_urlopen)
+    out = core.twenty_sync_result(_row())
+    assert out["synced"] is True and out["opportunity_id"] == "op-1" and out["reason"] == "" and core.twenty_sync(_row()) is True
+
+
+@pytest.mark.parametrize("failure, reason, http", [
+    (lambda: _http_error(400), "twenty_refused_record", 400),          # what a real Twenty answers to a second company with the same address
+    (lambda: _http_error(401), "twenty_refused_credentials", 401),
+    (lambda: _http_error(403), "twenty_refused_credentials", 403),
+    (lambda: OSError("connection refused"), "twenty_unreachable", None),
+])
+def test_a_refusal_or_an_outage_is_named_and_is_never_a_sync(monkeypatch, failure, reason, http):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+
+    def refuse(req, timeout=None):
+        raise failure()
+    monkeypatch.setattr(core.urllib.request, "urlopen", refuse)
+    out = core.twenty_sync_result(_row())
+    assert out == {"synced": False, "reason": reason, "step": "company", "http": http} and core.twenty_sync(_row()) is False
+
+
+def test_an_answer_without_a_record_is_not_a_sync(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+    monkeypatch.setattr(core.urllib.request, "urlopen", lambda req, timeout=None: _Resp({"data": {}}))
+    out = core.twenty_sync_result(_row())
+    assert out["synced"] is False and out["reason"] == "twenty_returned_no_record" and out["step"] == "opportunity"
+
+
+def test_without_a_key_nothing_is_attempted(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "")
+    monkeypatch.setattr(core.urllib.request, "urlopen", lambda *a, **k: pytest.fail("no request is made without a key"))
+    assert core.twenty_sync_result(_row()) == {"synced": False, "reason": "no_api_key", "step": None, "http": None}
+
+
+def test_an_approved_lead_that_twenty_refused_says_so_in_the_result(monkeypatch):
+    monkeypatch.setattr(core, "TWENTY_API_KEY", "k")
+
+    def refuse(req, timeout=None):
+        raise _http_error(400)
+    monkeypatch.setattr(core.urllib.request, "urlopen", refuse)
+    core._STATE["accounts"] = [_row()]
+    out = core.approve({"account": "northwind-check", "_approval": {"approved": True}})
+    assert out["twenty_synced"] is False and out["twenty_sync"] == {"reason": "twenty_refused_record", "step": "company", "http": 400}
+    assert core.approve({"account": "northwind-check"})["status"] == "pending_approval", "the gate is where it was"

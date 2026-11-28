@@ -201,6 +201,7 @@ class RoutePolicy:
     permission: str = ""                      # default "<app>:write" (set at install)
     agent_actions: tuple = ()                 # body.action values an AGENT may approve on this route (allowlist; default none)
     rationale: str = ""
+    max_body: int = 0                         # largest request body this route accepts, in bytes; 0 = the default (MAX_BODY)
 
     def __post_init__(self) -> None:
         if self.access not in ACCESS:
@@ -428,7 +429,16 @@ class RouteAuthzMiddleware:
                 self._warned.add(label)
                 log.warning("write request %s to %s matches no RoutePolicy (refused in production)", label, self.app_name)
             return await self.app(scope, receive, send)
-        body_bytes, receive = await self._buffer(scope, receive) if scope["type"] == "http" else (b"", receive)
+        limit = policy.max_body or MAX_BODY
+        if scope["type"] == "http":
+            # A body over the route's limit is REFUSED, never cut: a truncated body used to reach the handler and fail there as
+            # "invalid JSON", which told the client nothing about the real cause.
+            cl = {k.lower(): v for k, v in scope.get("headers", [])}.get(b"content-length", b"")
+            if cl.isdigit() and int(cl) > limit:
+                return await self._refuse(scope, send, 413, f"request body exceeds {limit} bytes")
+        body_bytes, receive = await self._buffer(scope, receive, limit) if scope["type"] == "http" else (b"", receive)
+        if len(body_bytes) > limit:
+            return await self._refuse(scope, send, 413, f"request body exceeds {limit} bytes")
         try:
             body = json.loads(body_bytes) if body_bytes else {}
         except Exception:  # noqa: BLE001
@@ -448,7 +458,7 @@ class RouteAuthzMiddleware:
             _marker.reset(token)
 
     @staticmethod
-    async def _buffer(scope, receive):
+    async def _buffer(scope, receive, limit: int = MAX_BODY):
         chunks, more = [], True
         while more:
             msg = await receive()
@@ -456,7 +466,7 @@ class RouteAuthzMiddleware:
                 break
             chunks.append(msg.get("body", b""))
             more = msg.get("more_body", False)
-            if sum(map(len, chunks)) > MAX_BODY:
+            if sum(map(len, chunks)) > limit:
                 break
         data = b"".join(chunks)
         sent = False
@@ -474,7 +484,7 @@ class RouteAuthzMiddleware:
         if scope["type"] == "websocket":
             await send({"type": "websocket.close", "code": 1008})
             return
-        payload = json.dumps({"error": "unauthorized" if status == 401 else "forbidden", "reason": reason}).encode()
+        payload = json.dumps({"error": "unauthorized" if status == 401 else "too_large" if status == 413 else "forbidden", "reason": reason}).encode()
         headers = [(b"content-type", b"application/json"), (b"content-length", str(len(payload)).encode())]
         if status == 401:
             headers.append((b"www-authenticate", b'Basic realm="operator"'))
@@ -513,7 +523,7 @@ def unclassified(app, policies: dict) -> "list[str]":
 def install(app, app_name: str, policies: dict, *, replay_guard=None) -> None:
     """Apply `policies` ({'POST /path': RoutePolicy}) to `app`. Safe to call once per app, after the app object exists."""
     from agentic_os.mission.approval import default_replay_guard
-    norm = {k: (v if v.permission else RoutePolicy(v.capability, v.access, f"{app_name}:write", v.agent_actions, v.rationale))
+    norm = {k: (v if v.permission else RoutePolicy(v.capability, v.access, f"{app_name}:write", v.agent_actions, v.rationale, v.max_body))
             for k, v in policies.items()}
     app.add_middleware(RouteAuthzMiddleware, owner=app, app_name=app_name, policies=norm,
                        replay_guard=replay_guard or default_replay_guard())

@@ -312,14 +312,18 @@ def ai_costs(b: Build) -> None:
     steps = b.track(b.metric("steps", "Steps executed", needs=S, value=len(use), drill="usage", note=f"across {n_m} mission(s) in the range"),
                     {p: (len(v), None) for p, v in per.items()} or {"": (0, None)})
     missing = "the runtime's step records carry no spend or token figure"
+    paid = b.money("ai_usage")                  # without the grant the spend fields were removed: that is not "none recorded"
+    held = "spend is withheld: it needs the financial-data grant (egress:financial)"
     d.panels.append(panel("summary", "Usage", "stats", sources=S, span=2, metrics=[
         steps, b.metric("missions", "Missions with activity", needs=S, value=n_m),
-        b.metric("cost", "Model spend, recorded", needs=S, value=cost, unit="USD", drill="usage", good="down", unknown="" if costed else "no_data",
-                 note=f"{len(costed)} of {len(use)} step(s) carry a spend figure" if costed else missing),
+        b.metric("cost", "Model spend, recorded", needs=S, value=cost, unit="USD", drill="usage", good="down",
+                 unknown="unauthorized" if not paid else "" if costed else "no_data",
+                 note=held if not paid else f"{len(costed)} of {len(use)} step(s) carry a spend figure" if costed else missing),
         b.metric("tokens", "Tokens, recorded", needs=S, value=tokens, drill="usage", unknown="" if tokened else "no_data",
                  note=f"{len(tokened)} of {len(use)} step(s) carry a token count" if tokened else missing),
-        b.metric("projected", "Projected cost of plans", needs=S, value=round(sum(proj), 4) if proj else None, unit="USD", drill="plans", unknown="" if proj else "no_data",
-                 note=f"the planner's own estimate for {len(proj)} plan(s) — a projection, not a bill" if proj else "no plan carries a projection"),
+        b.metric("projected", "Projected cost of plans", needs=S, value=round(sum(proj), 4) if proj else None, unit="USD", drill="plans",
+                 unknown="unauthorized" if not paid else "" if proj else "no_data",
+                 note=held if not paid else f"the planner's own estimate for {len(proj)} plan(s) — a projection, not a bill" if proj else "no plan carries a projection"),
         b.metric("step_p50", "Median step duration", needs=S, value=round(median(durs) / 1000.0, 2) if durs else None, unit="s", good="down", unknown="" if durs else "no_data"),
         b.metric("step_failed", "Failed steps", needs=S, value=len(failed), drill="usage:failed", tone="bad" if failed else "ok", good="down")]))
     days = b.days()
@@ -343,8 +347,9 @@ def ai_costs(b: Build) -> None:
                                     tone="warn" if r.get("within_budget") is False else "", ref=r.ref) for r in plans[:50]],
                           columns=[col("workflow", "Workflow"), col("plan", "Plan"), col("projected", "Projected USD", "right"), col("success", "Expected success", "right"),
                                    col("approvals", "Approvals", "right"), col("budget", "Budget")],
-                          note="Projected figures are the planner's estimates when the plan was made."))
-    d.summary = (f"{len(use)} step(s) across {n_m} mission(s); " + (f"{cost} USD recorded." if costed else "actual spend is not recorded by this runtime."))
+                          note="Projected figures are the planner's estimates when the plan was made." if paid else held.capitalize() + "."))
+    d.summary = (f"{len(use)} step(s) across {n_m} mission(s); "
+                 + ("spend is withheld from you." if not paid else f"{cost} USD recorded." if costed else "actual spend is not recorded by this runtime."))
 
 
 # ── knowledge, retrieval and data quality ───────────────────────────────────────────────────────────────────────────

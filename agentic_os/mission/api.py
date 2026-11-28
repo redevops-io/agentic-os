@@ -9,12 +9,22 @@ import math
 from typing import Any
 
 from .api_gate import GATE, admin_only, caller_of, public
-from .control_auth import approver_tokens, tenant_limits
+from .control_auth import separation_applies, tenant_limits
 from .approval import strip_approval_keys
 from .principal import PrincipalError
 from .runtime import MissionRuntime, ResumeNotAuthorized
 from .simulator import simulate
 from .types import Budget, to_jsonable
+
+
+def _tenancy_enabled() -> bool:
+    """Does this deployment define tenants? A tenant config we cannot read counts as YES: the rule this
+    serves is that a tenant claim needs a principal, and an unreadable config proves nothing safe."""
+    from .control_auth import ConfigError, tenant_tokens  # noqa: PLC0415
+    try:
+        return bool(tenant_tokens())
+    except ConfigError:
+        return True
 
 
 def build_router(runtime: MissionRuntime):
@@ -76,12 +86,36 @@ def build_router(runtime: MissionRuntime):
             "active_plan": to_jsonable(plan) if plan else None,
             "pending_human": runtime.repo.pending_human(mid),
             "pending_reconciliation": runtime.repo.pending_reconciliation(mid),
+            "failure": _failure_of(mid) if m.state.value == "failed" else None,
         }
+
+    def _failure_of(mid: str) -> "dict | None":
+        """Why a failed mission stopped, from its own event log: the last block reason or the last failed node with the operator's error. The
+        cockpit shows it; without it a mission just reads "failed"."""
+        why = None
+        for e in runtime.repo.timeline(mid):
+            p = e.get("payload") or {}
+            if e["type"] == "MissionBlocked":
+                why = {"kind": "blocked", "reason": p.get("reason"), "detail": str(p.get("detail") or p.get("notes") or "")[:500]}
+            elif e["type"] in ("NodeFailed", "VerificationFailed"):
+                res = p.get("operator") if isinstance(p.get("operator"), dict) else {}
+                why = {"kind": "node", "capability": p.get("capability"), "reason": res.get("error") or p.get("reason") or p.get("decision"),
+                       "detail": str(res.get("summary") or p.get("error") or "")[:500]}
+        return why
 
     @router.post("")
     def create(body: CreateMission, request: Request):
         _deny_approver(request)
         c = caller_of(request)
+        if c is None and _tenancy_enabled():
+            # Defence in depth, not a new behaviour on any mounted router in this repo: build_router
+            # attaches GATE, whose non-GET branch always resolves a caller (503 unconfigured, 401 invalid),
+            # so an unauthenticated POST cannot reach a handler here. A mount that drops the dependency
+            # would otherwise let an anonymous caller pick the tenant of a governed mission — the one thing
+            # tenancy exists to prevent. An isolated single-operator demo (no tenant tokens configured)
+            # is untouched.
+            raise HTTPException(401, "this deployment is tenancy-enabled: a mission must be created by an "
+                                     "authenticated caller, not by a tenant named in the request body")
         tenant = c.tenant if (c is not None and c.tenant is not None) else body.tenant
         req_usd = body.budget_usd
         if req_usd is not None and (not math.isfinite(req_usd) or req_usd < 0):
@@ -134,8 +168,8 @@ def build_router(runtime: MissionRuntime):
     def approve(mid: str, body: Approve, request: Request):
         _authorize_mission(mid, request)
         c = caller_of(request)
-        if c is not None and c.role == "requester" and approver_tokens():
-            # separation of duty: AGENTIC_OS_APPROVER_TOKENS is set, so the requester credential cannot approve
+        if c is not None and c.role == "requester" and separation_applies(c.tenant):
+            # separation of duty: this tenant has its own approver, so its requester credential cannot approve
             raise HTTPException(403, "approval requires an approver credential")
         if body.decision not in _DECISIONS:
             raise HTTPException(422, f"decision must be one of {sorted(_DECISIONS)}")
@@ -198,14 +232,14 @@ def build_router(runtime: MissionRuntime):
     def compensation(mid: str, action: str, body: CompensationAction, request: Request):
         """Operator path for COMPENSATION_FAILED (docs/COMPENSATION.md): retry | approve | acknowledge |
         verify_manually. Behind the router-level gate; tenant-scoped (404 cross-tenant); approve/acknowledge/
-        verify_manually need the approver credential when AGENTIC_OS_APPROVER_TOKENS is set; retry is not
+        verify_manually need the approver credential when the tenant has one (AGENTIC_OS_APPROVER_TOKENS); retry is not
         available to an approver-only credential. Who/when/why is recorded in the mission log."""
         _authorize_mission(mid, request)
         if action not in _COMP_ACTIONS:
             raise HTTPException(404, "unknown compensation action")
         c = caller_of(request)
         if action in _COMP_APPROVER_ACTIONS:
-            if c is not None and c.role == "requester" and approver_tokens():
+            if c is not None and c.role == "requester" and separation_applies(c.tenant):
                 raise HTTPException(403, "this compensation action requires an approver credential")
         else:
             _deny_approver(request)
@@ -262,6 +296,24 @@ def build_capabilities_router(runtime: MissionRuntime):
     return router
 
 
+def _approval_binding(runtime, mid: str, node_id: str) -> "dict | None":
+    """What an approval of this node is bound to. A capability that applies a saved plan (infra.provision) refuses to run unless the approval
+    carries the digest of the plan that was reviewed. The digest comes from the result of the plan step this node depends on, exactly as it
+    was recorded; the cockpit shows it and sends it back as the approval's `plan_digest` edit. The server never fills it in at approval time:
+    an approver who was shown an older plan sends the older digest, and the operator refuses it (stale or swapped plan)."""
+    plan = runtime._plans.get(mid)
+    node = next((n for n in (plan.graph.nodes if plan else []) if n.id == node_id), None)
+    if node is None:
+        return None
+    deps, found = set(node.depends_on or []), None
+    for e in runtime.repo.timeline(mid):
+        p = e.get("payload") or {}
+        res = p.get("result")
+        if e["type"] == "NodeSucceeded" and p.get("node_id") in deps and isinstance(res, dict) and res.get("plan_digest"):
+            found = {"plan_digest": str(res["plan_digest"]), "from": p.get("capability"), "summary": str(res.get("summary") or "")[:300]}
+    return found
+
+
 def build_cockpit_router(runtime: MissionRuntime):
     """P6 — the human-facing shell: an inbox of open human tasks + a one-page cockpit to launch,
     watch, approve/resolve and EXPLAIN a mission. No build step; vanilla JS over the JSON API."""
@@ -277,7 +329,18 @@ def build_cockpit_router(runtime: MissionRuntime):
         if c is not None and c.tenant is not None:
             rows = [r for r in rows
                     if (getattr(runtime._missions.get(r["mission_id"]), "tenant", "") or "") == c.tenant]
+        for r in rows:
+            if r.get("kind") == "approval" and r.get("node_id"):
+                binding = _approval_binding(runtime, r["mission_id"], r["node_id"])
+                if binding:
+                    r["binding"] = binding
         return {"inbox": rows}
+
+    @router.get("/templates")
+    def templates(request: Request):
+        """The mission templates this runtime can plan, for the cockpit's menu."""
+        from .templates import TEMPLATES  # noqa: PLC0415
+        return {"templates": sorted(TEMPLATES)}
 
     @router.get("/buildinfo")
     @public
@@ -387,17 +450,15 @@ pre{white-space:pre-wrap;font-size:12px;color:#cfd0d8;margin:6px 0 0;background:
 <div class=top>
   <h1>🛰 Mission Plane <span class=dim style="font-weight:500">· redevops.io Agentic OS v5</span></h1>
   <div class=row>
-    <input id=goal placeholder="New mission goal…" style="width:230px">
-    <select id=tpl><option value="">no template</option><option value=product_launch>product_launch</option>
-      <option value=revenue_rescue>revenue_rescue</option><option value=onboarding>onboarding</option>
-      <option value=invoice_recovery>invoice_recovery</option></select>
+    <input id=goal aria-label="Mission goal" placeholder="New mission goal…" style="width:230px">
+    <select id=tpl aria-label="Mission template"><option value="">no template</option></select>
     <button data-act=launch>Launch</button>
     <button class="sec" data-act=refresh>↻</button>
   </div>
 </div>
 <form id=authbar hidden class=row style="padding:8px 20px;background:#271f13;border-bottom:1px solid var(--line)">
   <span>Bearer token required (control or tenant token). Held in memory only.</span>
-  <input id=tokin type=password autocomplete=off placeholder="token" style="width:240px">
+  <input id=tokin aria-label="Control or tenant token" type=password autocomplete=off placeholder="token" style="width:240px">
   <button type=submit class=sm>Use token</button>
 </form>
 
@@ -435,9 +496,12 @@ async function launch(){
     body:JSON.stringify({goal:g,template:t})});
   document.getElementById('goal').value=''; CUR=m.id; await refreshAll(); openMission(m.id);
 }
-async function decide(mid,node,decision,kind){
+async function decide(mid,node,decision,kind,digest){
   let edit=null;
   if(kind==='disambiguation'){const v=(document.getElementById('v_'+node)||{}).value; edit={value:v};}
+  // An approval of a plan-applying step carries the digest of the plan THIS page showed. It is the value rendered in the packet, never one
+  // fetched now: if the plan changed since, the operator refuses the older digest.
+  if(decision==='approve'&&digest){edit={plan_digest:digest};}
   await api(`/missions/${mid}/approve`,{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify({node_id:node,decision,edit})});
   await refreshAll(); if(CUR)openMission(CUR);
@@ -445,7 +509,16 @@ async function decide(mid,node,decision,kind){
 async function simulate(mid){await api(`/missions/${mid}/simulate`,{method:'POST'}); openMission(mid);}
 
 /* ── left rail ── */
+let TPL_LOADED=false;
+async function loadTemplates(){
+  if(TPL_LOADED) return;
+  const r=await api('/templates'); if(!r||!Array.isArray(r.templates)) return;
+  const sel=document.getElementById('tpl'), keep=sel.value;
+  sel.innerHTML='<option value="">no template</option>'+r.templates.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  sel.value=keep; TPL_LOADED=true;
+}
 async function refreshAll(){
+  loadTemplates();
   const [ib,ml]=await Promise.all([api('/inbox'),api('/missions')]);
   const inb=ib.inbox||[];
   document.getElementById('ibx_n').textContent=inb.length?`(${inb.length})`:'';
@@ -454,12 +527,13 @@ async function refreshAll(){
     const ctl = t.kind==='disambiguation'
       ? `<input id="v_${esc(t.node_id)}" placeholder="authoritative value" style="width:150px">
          <button class=sm ${A('decide',t.mission_id,t.node_id,'resolve','disambiguation')}>Resolve</button>`
-      : `<button class=sm ${A('decide',t.mission_id,t.node_id,'approve')}>Approve</button>
+      : `<button class=sm ${A('decide',t.mission_id,t.node_id,'approve','approval',(t.binding||{}).plan_digest||'')}>Approve</button>
          <button class="sm red" ${A('decide',t.mission_id,t.node_id,'reject')}>Reject</button>`;
+    const bind = t.binding ? `<div class="ev mut" data-plan-digest="${esc(t.binding.plan_digest)}">· approving binds plan <code>${esc(String(t.binding.plan_digest).slice(0,16))}…</code>${t.binding.summary?' · '+esc(t.binding.summary):''}</div>` : '';
     return `<div class=packet><div class=row style="justify-content:space-between">
         <b>${esc(t.kind)}</b><a ${A('open',t.mission_id)}>open ↗</a></div>
       <div class="mut" style="font-size:12px">${esc(t.goal||'')}</div>
-      <div style="margin:5px 0">${esc(t.prompt||'')}</div>${ev}
+      <div style="margin:5px 0">${esc(t.prompt||'')}</div>${ev}${bind}
       <div class=row style="margin-top:8px">${ctl}</div></div>`;
   }).join('') : '<div class=dim>Nothing waiting. 🎉</div>';
 
@@ -561,6 +635,9 @@ function renderDetail(){
      <div class=stat><b>${Math.round((proj.expected_latency_ms||0)/1000)}s</b><span>latency</span></div>
      <div class=stat><b>${esc(proj.expected_approvals||0)}</b><span>approvals</span></div></div>` : '';
 
+  const why = m.failure ? `<div class=packet data-failure><b>Why it failed</b>
+     <div style="margin:5px 0">${esc(m.failure.capability||m.failure.kind||'')}${m.failure.reason?' · <code>'+esc(m.failure.reason)+'</code>':''}</div>
+     <div class=mut style="font-size:12px">${esc(m.failure.detail||'')}</div></div>` : '';
   const tabs=['graph','world','timeline','explain'];
   const tabbar=tabs.map(t=>`<div class="tab${t===TAB?' on':''}" ${A('tab',t)}>${t==='graph'?'Graph · Tasks':t[0].toUpperCase()+t.slice(1)}</div>`).join('');
 
@@ -623,6 +700,7 @@ function renderDetail(){
         <div class=dim style="font-size:12px">${esc(m.template||'no template')}
           ${m.outcome?' · outcome: <code>'+esc(m.outcome)+'</code>':''}</div></div>
       ${pill(m.state)}</div>
+    ${why}
     ${projStrip}
     <div class=tabs style="margin-top:14px">${tabbar}</div>
     ${body}`;

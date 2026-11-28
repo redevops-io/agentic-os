@@ -1,0 +1,138 @@
+{
+ "app": "zoning",
+ "digest": "sha256:2f84c6b7109a580fa9a6951c77bcda8b9dc39dc44f3b31147ca011a11d145c48",
+ "operations": [
+  {
+   "action": "read",
+   "action_source": "operator",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [],
+   "id": "zoning.acquire_evidence",
+   "inputs": {},
+   "outputs": {
+    "zoning_evidence": "official base zoning, ordinance link and overlays for the parcel"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "operator",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [],
+   "id": "zoning.evaluate_use",
+   "inputs": {},
+   "outputs": {
+    "use_disposition": "PERMITTED | PROHIBITED | UNKNOWN — fail-safe, false-permit=0"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "operator",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [],
+   "id": "zoning.resolve_parcel",
+   "inputs": {},
+   "outputs": {
+    "parcel_resolved": "canonical GeoRef identity for the parcel"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  },
+  {
+   "action": "read",
+   "action_source": "operator",
+   "approval_required": false,
+   "data_classifications": [],
+   "declared_by": [
+    "operator"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_blockers": [
+    "no GET route",
+    "no data classification"
+   ],
+   "gateway_candidate": false,
+   "http": [],
+   "id": "zoning.search_parcels",
+   "inputs": {},
+   "outputs": {
+    "compatible_parcels": "parcels a use is not prohibited on, with dispositions"
+   },
+   "reversibility": {
+    "kind": "not_applicable"
+   },
+   "side_effecting": false,
+   "typed": true
+  }
+ ],
+ "problems": [],
+ "routes": [],
+ "schema": "rails.app-capabilities/1",
+ "status": "complete",
+ "summary": {
+  "gateway_candidates": 0,
+  "operations": 4,
+  "reachable_by_external_agents": 0,
+  "routes": 0,
+  "routes_without_a_gate_decision": 0,
+  "typed": 4,
+  "ui_calls": 0,
+  "ui_calls_not_matched": 0,
+  "writes_or_deletes": 0
+ },
+ "ui_calls": []
+}

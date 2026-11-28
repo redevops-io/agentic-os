@@ -7,7 +7,13 @@ separate body field, and the operator re-injects the marker only from a token th
 
 Token: ``b64url(payload_json) + "." + b64url(HMAC-SHA256(secret, payload_bytes))``. The payload is canonical
 JSON (sorted keys, no whitespace) binding: operator, capability, mission_id, node_id, ``inputs_sha256``,
-the approval ``marker``, ``exp`` (epoch seconds) and a random ``nonce``.
+``tenant`` (whose work it approves), ``approver`` (who approved), the approval ``marker``, ``exp`` (epoch seconds) and a
+random ``nonce``.
+
+Tenant binding is always enforced: a bound token authorises nothing for another tenant (neither the caller's own nor one
+claimed in the inputs), and a caller signed in as a tenant needs a token bound to that tenant. A token that names no
+approver is refused where an identity is required: a production deployment with tenants, or
+``AGENTIC_OS_REQUIRE_APPROVER_IDENTITY=1``.
 
 ``inputs_sha256`` is the SHA-256 of the canonical JSON of the inputs after removing runtime-meta keys:
 any key whose lowercased name starts with ``_approval`` (or ``__approval``), plus ``_mission``, ``_goal`` and
@@ -100,9 +106,23 @@ def _binding_ok(bound: object, presented: object) -> bool:
     return hmac.compare_digest(b.encode(), p.encode())
 
 
+ENV_REQUIRE_APPROVER = "AGENTIC_OS_REQUIRE_APPROVER_IDENTITY"
+
+
+def approver_identity_required() -> bool:
+    """Whether an approval has to name who gave it: switched on explicitly, or a production deployment with tenants."""
+    if os.environ.get(ENV_REQUIRE_APPROVER, "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    from .control_auth import ENV_TENANT_LIMITS  # noqa: PLC0415
+    from .profile import is_production  # noqa: PLC0415
+    return is_production() and bool(os.environ.get(ENV_TENANT_LIMITS, "").strip())
+
+
 def mint_approval_token(secret: "bytes | str | None" = None, *, operator: str, capability: str,
                         mission_id: "str | None", node_id: "str | None", inputs: dict, marker: dict,
+                        tenant: "str | None" = None, approver: "str | None" = None,
                         ttl_s: int = 300, now: "float | None" = None) -> "str | None":
+    """``tenant`` and ``approver`` default to the marker's ``tenant`` and ``by``."""
     key = _secret_bytes(secret)
     if not key:
         return None
@@ -110,6 +130,8 @@ def mint_approval_token(secret: "bytes | str | None" = None, *, operator: str, c
         "operator": operator, "capability": capability,
         "mission_id": _norm_id(mission_id), "node_id": _norm_id(node_id),
         "inputs_sha256": inputs_hash(inputs), "marker": marker,
+        "tenant": _norm_id(tenant if tenant is not None else (marker or {}).get("tenant")),
+        "approver": _norm_id(approver if approver is not None else (marker or {}).get("by")),
         "exp": (time.time() if now is None else now) + ttl_s, "nonce": _secrets.token_hex(16)})
     return _b64(payload) + "." + _b64(hmac.new(key, payload, hashlib.sha256).digest())
 
@@ -117,8 +139,14 @@ def mint_approval_token(secret: "bytes | str | None" = None, *, operator: str, c
 def verify_approval_token(secret: "bytes | str | None" = None, token: object = None, *, operator: str,
                           capability: str, inputs: dict, now: "float | None" = None,
                           mission_id: "str | None" = None, node_id: "str | None" = None,
+                          caller_tenant: "str | None" = None, require_approver: "bool | None" = None,
+                          binding: "dict | None" = None,
                           replay_guard: "ReplayGuard | None" = None) -> "dict | None":
-    """Return the approval marker iff the token fully verifies, else None. Never raises."""
+    """Return the approval marker iff the token fully verifies, else None. Never raises.
+
+    ``caller_tenant`` is the tenant the caller AUTHENTICATED as (``None`` for a caller that is not a tenant). On success
+    ``binding``, when given, receives the signed ``tenant`` and ``approver``. ``require_approver`` defaults to
+    :func:`approver_identity_required`. A refused token is not consumed."""
     key = _secret_bytes(secret)
     if not key or not isinstance(token, str):
         return None
@@ -143,8 +171,18 @@ def verify_approval_token(secret: "bytes | str | None" = None, token: object = N
         marker = d["marker"]
         if not isinstance(marker, dict):
             return None
+        tenant, approver = _norm_id(d.get("tenant")), _norm_id(d.get("approver"))
+        if caller_tenant is not None and tenant != caller_tenant:
+            return None
+        claimed = (inputs or {}).get("_tenant")
+        if tenant is not None and claimed not in (None, "") and str(claimed) != tenant:
+            return None
+        if approver is None and (approver_identity_required() if require_approver is None else require_approver):
+            return None
         if replay_guard is not None and not replay_guard.consume(str(d["nonce"]), float(d["exp"]), now=t):
             return None
+        if binding is not None:
+            binding.update(tenant=tenant, approver=approver)
         return marker
     except Exception:  # noqa: BLE001 - malformed token of any shape fails closed
         return None

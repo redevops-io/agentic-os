@@ -19,13 +19,16 @@ EXPECTED = {
     # the permissions admin key
     ("GET", "/api/permissions/status"): PERM, ("GET", "/api/permissions/grants"): PERM, ("POST", "/api/permissions/grants"): PERM, ("PUT", "/api/permissions/grants/{gid}"): PERM,
     ("DELETE", "/api/permissions/grants/{gid}"): PERM, ("POST", "/api/permissions/preview"): PERM, ("POST", "/api/permissions/authorize"): PERM,
+    # B1 fix (2026-11-22): mass-revocation of epoch-protected grants for one (subject_kind, subject, tenant) —
+    # same admin dependency as every other write route under /api/permissions/*, nothing public about it.
+    ("POST", "/api/permissions/revoke-epoch"): PERM,
     # public on purpose
     ("GET", "/"): PUBLIC, ("GET", "/health"): PUBLIC, ("GET", "/modules"): PUBLIC, ("GET", "/overview"): PUBLIC, ("GET", "/permissions"): PUBLIC,
     ("GET", "/buildinfo"): PUBLIC, ("GET", "/capabilities"): PUBLIC, ("GET", "/cockpit"): PUBLIC,
     # anonymous today: the module proxy (issue #528)
     ("GET", "/m/{name}"): PROXY, ("GET", "/m/{name}/raw"): PROXY, ("GET", "/m/{name}/api/{path:path}"): PROXY, ("POST", "/m/{name}/api/{path:path}"): PROXY,
     # the mission routers' gate
-    ("GET", "/inbox"): GATE, ("GET", "/missions"): GATE, ("POST", "/missions"): GATE, ("GET", "/missions/{mid}"): GATE, ("POST", "/missions/{mid}/approve"): GATE,
+    ("GET", "/inbox"): GATE, ("GET", "/templates"): GATE, ("GET", "/missions"): GATE, ("POST", "/missions"): GATE, ("GET", "/missions/{mid}"): GATE, ("POST", "/missions/{mid}/approve"): GATE,
     ("POST", "/missions/{mid}/compensation/{action}"): GATE, ("GET", "/missions/{mid}/events"): GATE, ("GET", "/missions/{mid}/explain"): GATE,
     ("GET", "/missions/{mid}/plans"): GATE, ("POST", "/missions/{mid}/reconcile"): GATE, ("POST", "/missions/{mid}/simulate"): GATE,
     ("GET", "/learning"): GATE_ADMIN,

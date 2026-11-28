@@ -12,6 +12,11 @@ services:
     image: sidekick-devops:latest
     ports: ["8000:8000"]
     environment:
+      # The image refuses to start without an explicit profile. `development` (the .env.example value) states that this is an evaluation where
+      # authority is not enforced; for anything that acts on real systems use `production` with AGENTIC_OS_AUTHORITY_DB and AGENTIC_OS_REPLAY_DB.
+      AGENTIC_OS_PROFILE: ${AGENTIC_OS_PROFILE:?set AGENTIC_OS_PROFILE in .env (production, or development for an evaluation)}
+      AGENTIC_OS_AUTHORITY_DB: ${AGENTIC_OS_AUTHORITY_DB:-}
+      AGENTIC_OS_REPLAY_DB: ${AGENTIC_OS_REPLAY_DB:-}
       MODEL_ENDPOINT: ${MODEL_ENDPOINT:-}         # your OpenAI-compatible LLM (for narration/advisors)
       INSPECT_NAMESPACE: ${INSPECT_NAMESPACE:-default}
       KUBECONFIG: /home/app/.kube/config          # read-only cluster inspection
@@ -42,7 +47,7 @@ services:
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set your own in .env, see .env.example}
     volumes: ["./observability/grafana/provisioning:/etc/grafana/provisioning:ro"]
     depends_on: [prometheus, loki]
     restart: unless-stopped

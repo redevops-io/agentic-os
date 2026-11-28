@@ -1,0 +1,46 @@
+{
+ "candidates": [
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "predicted": [
+    "e2"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "P1",
+   "screened_in": true,
+   "what": "add the second marker"
+  },
+  {
+   "files": [
+    "systemprompt.md"
+   ],
+   "predicted": [
+    "e3"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "",
+   "root_cause": "markers are missing",
+   "screened_in": false,
+   "what": "screen me out"
+  },
+  {
+   "files": [
+    "guardrails/policy.md"
+   ],
+   "predicted": [
+    "e3"
+   ],
+   "rationale": "synthetic rationale",
+   "refused": "guardrails/policy.md is not a file of the opencode harness surface",
+   "root_cause": "guardrails are in the way",
+   "screened_in": true,
+   "what": "edit a protected file"
+  }
+ ],
+ "harness": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+ "memory_condition": "full",
+ "round": 2
+}

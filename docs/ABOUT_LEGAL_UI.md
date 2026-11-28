@@ -83,8 +83,9 @@ The checks run in `check-distribution-gate.py` (every distribution build, `--dis
 `generate_about.py` (exit 3), `check_about.py --distribution` and the signing scripts (below). No private key is ever generated or handled by
 these tools. **Choose a separate legal-decision key.** The owner's ssh-agent signs any namespace, so a key that is also the release signer would make the legal gate only as trustworthy as access to the release key. The gate REFUSES the published release fingerprint (`SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA`) in `legal_signer_fingerprints` or in `legal-allowed-signers`, in every build mode (exit 2; the About generator and checker refuse it too); the owner picks a separate legal-decision key, ideally hardware-backed with touch confirmation.
 
-A CODEOWNERS draft for `docs/legal/**`, the gate file and the allowed-signers file is `docs/legal/CODEOWNERS.proposed`: it is
-inactive until the owner moves it to `.github/CODEOWNERS` and enables code-owner review.
+`.github/CODEOWNERS` is advice only: it asks for the owner's review and requires none. Requiring code-owner review is inactive
+by the owner's decision (2026-11-27), so authenticity rests on the detached signatures, never on a review. The earlier draft for
+`docs/legal/**`, the gate file and the allowed-signers file is kept as `docs/legal/CODEOWNERS.proposed`.
 
 | Decision state | Private build | Distribution build (`REDEVOPS_DISTRIBUTION_BUILD` anything but the empty string or exactly `0`, no trimming, or `--distribution`) |
 |---|---|---|

@@ -776,12 +776,14 @@ class ForkJoinController:
         if bs.approval is not None and bs.approval == node.capability:
             marker: dict = {"approved": True}
             edit = None
+            approver = ""
             for e in rt.store.for_mission(m.id):
                 if e.type == "ApprovalGranted" and e.payload.get("node_id") == node.id:
                     edit = e.payload.get("edit")
+                    approver = str(e.payload.get("approver") or "")
             if isinstance(edit, dict):
                 marker.update({k: v for k, v in edit.items() if not is_approval_key(k)})
-            resolved["_approval"] = marker
+            resolved["_approval"] = rt._bind_identity(marker, m.id, approver)
             resolved["_node"] = node.id
         return resolved
 
@@ -1274,7 +1276,7 @@ class ForkJoinController:
         rt._set_state(m, MissionState.WAITING_HUMAN)
 
     def approve_branch(self, mission_id: str, node_id: str, decision: str = "approve",
-                       edit: dict | None = None, identity: "dict | None" = None) -> Mission:
+                       edit: dict | None = None, actor: str = "", identity: "dict | None" = None) -> Mission:
         """Called by ``MissionRuntime.approve`` for a branch node id. Only a currently parked branch can be
         approved/rejected (no pre-approval). The approval is bound to the branch's capability."""
         rt = self.rt
@@ -1305,7 +1307,7 @@ class ForkJoinController:
             if decision == "approve":
                 rt.store.append("ApprovalGranted", mission_id, {
                     "node_id": node_id, "edit": edit, "capability": b.capability,
-                    "fork_id": st.fork_id, "branch_id": b.branch_id, **(identity or {})})
+                    "fork_id": st.fork_id, "branch_id": b.branch_id, **(identity or ({"approver": actor} if actor else {}))})
                 rt.store.append("NodeResumed", mission_id, {"node_id": node_id})
             else:
                 rt.store.append("ApprovalRejected", mission_id, {"node_id": node_id, **(identity or {})})

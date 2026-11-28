@@ -600,12 +600,18 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "renewal outreach, or just monitor) with a predicted value and — because they're outbound "
             "— an approval gate; the shared runtime selects the highest-utility one and LEARNS from "
             "observed outcomes (reply → meeting → conversion → loss) which action actually works, "
-            "correcting its priors over time. Two honesty caveats: this is validated IN SIMULATION "
-            "(observing outcomes measurably improves selection on a controlled environment) — it is "
-            "NOT a real-world commercial-lift claim, which needs live deal outcomes; and the loop keeps "
-            "governance intact (a consequential send still needs approval) no matter what it learns."),
+            "correcting its priors over time. Three honesty caveats: the learning mechanism itself is "
+            "validated IN SIMULATION (observing outcomes measurably improves selection on a controlled "
+            "environment) — it is still NOT A REAL-WORLD commercial-lift claim, which needs an actually "
+            "promoted policy, not just a connected signal; the conversion/loss half of the outcome "
+            "signal is now CONNECTED TO LIVE Twenty opportunity data (closed_won/closed_lost) — "
+            "connected to live outcomes, no promotion yet, since nothing has been separately approved "
+            "through the promotion gate; the reply/meeting half of the signal still has no live source. "
+            "The loop keeps governance intact (a consequential send still needs approval, and nothing "
+            "promotes automatically from a connected signal) no matter what it learns."),
         source="Shipped producer: agentic_os/crm_nba.py → shared loop (priority_engine select_action + "
-               "outcome_learning UtilityModel), simulation-validated · Roadmap: live commercial outcomes"),
+               "outcome_learning UtilityModel) · conversion/loss connected to live Twenty opportunities "
+               "via agentic_os/crm_outcome_live.py (2026-11-15) · reply/meeting still simulation-only"),
     KnowledgeEntry(
         id="support-resolution-intelligence",
         topic="Proactive intelligence (roadmap)",
@@ -868,6 +874,30 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "replay, and the runtime must explain why a learned strategy changed."),
         source="Governance path shipped: integrations/execution.py GovernedEnvelope (tiers+approval+audit) · "
                "Roadmap: common outcome telemetry + offline/online evaluation before any self-improvement claim"),
+    KnowledgeEntry(
+        id="vault-sealed",
+        topic="Platform secrets",
+        keywords=("vault is sealed", "vault sealed", "sealed vault", "unseal", "vault seal", "seal state",
+                  "secrets cannot be read", "vault restarted", "vault restart", "stay sealed", "stayed sealed", "remained sealed",
+                  "why is vault sealed", "how do i unseal", "vault incident", "vault outage", "vault is down"),
+        question="Vault is sealed. What happened and how do I recover?",
+        answer=(
+            "A sealed Vault holds its data encrypted and cannot decrypt it: nothing can read or write a secret until "
+            "it is unsealed. Vault seals itself on EVERY restart (a host reboot, a pod restart, an upgrade) when it "
+            "uses Shamir key shares, so a sealed Vault after a reboot is expected, not a breach. What stops: "
+            "rendering the stack configuration, rotating or adding a secret, and any service that fetches a secret "
+            "at start. What keeps working: services already running with the secrets they loaded. Check it: "
+            "`vault status` (Sealed true/false, and how many key shares have been entered). Recover: the key "
+            "holders each run `vault operator unseal` and type their own share at the hidden prompt, until the "
+            "threshold is reached (commonly 3 of 5); on Kubernetes `kubectl -n vault exec -it vault-0 -- vault "
+            "operator unseal`. Then re-run whatever failed while it was sealed (for this stack: the secrets "
+            "rendering step, and a restart of services that started without their secrets). Never paste an unseal "
+            "key into a chat, a ticket or this assistant, and never store the shares next to Vault. To stop it "
+            "recurring, move Vault to an auto-unseal seal backed by a cloud KMS key (`vault operator unseal "
+            "-migrate`): it then unseals itself after a restart, and the recovery keys are only needed for "
+            "recovery operations. Projects shows the seal state under runtime health and as a 'needs you' item "
+            "when the host's seal check is installed."),
+        source="docs/VAULT_SEAL.md (agentic-os-stack) · scripts/vault-seal-check.sh · PROJECTS_STATUS_DIR"),
     KnowledgeEntry(
         id="secrets-where",
         topic="Platform secrets",

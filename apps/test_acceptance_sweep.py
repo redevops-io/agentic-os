@@ -18,6 +18,10 @@ from agentic_os import app_gate  # noqa: E402
 from agentic_os.tool_actions import TOOL_ACTIONS  # noqa: E402
 
 
+#: gated like apps, with no app directory: held to the same two scenarios
+KERNEL_PLANES = ("governed-writes",)
+
+
 def _kinds(out):
     return {(v["surface"], v["what"]) for v in out["violations"]}
 
@@ -41,11 +45,14 @@ def test_every_write_classified_tool_is_denied_to_a_read_only_principal_and_to_a
     assert len(writes) >= 60                                              # the sweep is not vacuous
     for mode, expect_denied in (("read-only", writes), ("unprovisioned", {(a, t) for a, tb in TOOL_ACTIONS.items() for t in tb})):
         seen = set()
-        for app in sweep.APPS:
+        for app in (*sweep.APPS, *KERNEL_PLANES):
             mp = sweep.MonkeyPatch()
             try:
                 sweep.configure(mp, mode, str(tmp_path / f"{mode}-{app}"))
-                sweep.start_app(mp, app)
+                if app in KERNEL_PLANES:
+                    app_gate.install_gate(app)                            # a plane of the kernel installs its gate itself
+                else:
+                    sweep.start_app(mp, app)
                 for t in TOOL_ACTIONS[app]:
                     if app_gate.tool_denial(app, t) is not None:
                         seen.add((app, t))

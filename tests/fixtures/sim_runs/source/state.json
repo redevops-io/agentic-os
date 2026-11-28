@@ -1,0 +1,44 @@
+{
+ "condition": "full",
+ "current": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+ "promotions": [
+  {
+   "harness": "29beae470c93ac0a73ebc9636ff032995e1c8a0abdfb07420808e0c0daaf36ea",
+   "kind": "start",
+   "round": 0
+  },
+  {
+   "harness": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+   "kind": "promotion",
+   "parent": "29beae470c93ac0a73ebc9636ff032995e1c8a0abdfb07420808e0c0daaf36ea",
+   "problem": "P1",
+   "round": 1
+  },
+  {
+   "harness": "9266d153c7fa6e5d8ae953c3cc6e951e31d0850042b4ab8148200499e06faf34",
+   "kind": "promotion",
+   "parent": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+   "problem": "P1",
+   "round": 2
+  },
+  {
+   "from": "9266d153c7fa6e5d8ae953c3cc6e951e31d0850042b4ab8148200499e06faf34",
+   "harness": "cc2be5c7e1c0519f184b0715ee4ae1ba2b6cd396eff65fdf10b86149fc0f92e7",
+   "kind": "rollback",
+   "reason": "synthetic rollback for the fixtures",
+   "round": 2
+  }
+ ],
+ "provenance": {
+  "benchmark": "synthetic-bench",
+  "domain": "synthetic",
+  "evaluator": "scripted",
+  "harness_version": "",
+  "optimizer": "scripted",
+  "policy": "model-a@1",
+  "run": "source"
+ },
+ "round": 2,
+ "run": "source",
+ "schema": "agent-harness.sim-run/1"
+}

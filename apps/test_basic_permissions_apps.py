@@ -32,7 +32,12 @@ ROUTES = {a: [r for r in v if r[4] != "route-or-auth"] for a, v in _ALL_ROUTES.i
 KNOWN_FLAG_DISAGREEMENTS = {("compliance", "compliance.scan"),
                             # FR-04: `terraform plan -out=redevops-approved.tfplan` overwrites the plan file infra.provision applies, with caller-supplied vars, and starts a
                             # provider-running process; infra.drift launches terraform / ansible with caller inputs: write by their actual effect (registered non-side-effecting)
-                            ("infra", "infra.plan"), ("infra", "infra.drift")}
+                            ("infra", "infra.plan"), ("infra", "infra.drift"),
+                            # radar.synthetic_study is registered non-side-effecting ("read-only synthetic study") but classified write, the stricter of the two:
+                            # it runs model calls when enabled. Found when these files were first run in CI.
+                            ("market-radar", "radar.synthetic_study"),
+                            # radar.approve_plan records a person's approval (approval_required=True) and is registered non-side-effecting; classified write, the stricter
+                            ("market-radar", "radar.approve_plan")}
 APPS = tuple(ROUTES)
 assert len(APPS) == 17
 
@@ -85,6 +90,25 @@ def _start(monkeypatch, app):
     return importlib.import_module(f"{app}.app")
 
 
+def _executions(attempts):
+    """The caught attempts that would have RUN something the gate governs.
+
+    Asking an MCP server which tools it has means starting that server, and asking is how a mounted tool gets
+    registered — registration is allowed, the tool's own execution still needs its class and a grant. So the one
+    spawn this is not evidence of is the discovery of the bundled, reviewed MCP servers (this list, in this test
+    file — not something an app can add itself). A scanner, a bouncer call, a core request: all still caught."""
+    discovery = ("context_runtime.tools.mcp_servers.",)
+    kept = []
+    for attempt in attempts:
+        if isinstance(attempt, tuple) and attempt and attempt[0] == "process":
+            argv = attempt[1]
+            if isinstance(argv, (list, tuple)) and any(
+                    isinstance(part, str) and part.startswith(discovery) for part in argv):
+                continue
+        kept.append(attempt)
+    return kept
+
+
 def _operator(app):
     m = importlib.import_module(f"{app}.operator")
     return getattr(m, next(n for n in dir(m) if n.startswith("build_") and n.endswith("operator")))()
@@ -129,7 +153,7 @@ class TestEveryApp:
             assert _denied(r, kind), (method, path, tool, r.status_code, r.text[:200])
             if kind != "console":
                 assert "agentic-os permissions init" in r.text, (method, path)            # actionable
-        assert net == []                                                                    # nothing executed
+        assert _executions(net) == []                                                     # nothing executed
 
     def test_every_operator_capability_is_denied_and_nothing_executes(self, monkeypatch, app, net):
         _start(monkeypatch, app)
@@ -138,7 +162,7 @@ class TestEveryApp:
         for cap in op.manifest.capabilities:
             out = op.invoke(cap.name, {"tenant": "t", "doc_id": "d", "cloud": "aws"})
             assert out["status"] == "denied" and out["executed"] is False and "[blocked]" in out["error"], cap.name
-        assert net == []
+        assert _executions(net) == []
 
     def test_every_capability_and_route_tool_is_classified_and_matches_what_it_is_registered_as(self, monkeypatch, app):
         """Evidence cross-check: the trusted table classifies every capability, and read <=> not side_effecting."""
@@ -151,6 +175,13 @@ class TestEveryApp:
             assert (table[cap.name] != "read") == bool(cap.side_effecting), f"{cap.name}: table says {table[cap.name]}, registered side_effecting={cap.side_effecting}"
         for _, _, _, tool, _ in ROUTES[app]:
             assert tool in table, tool
+
+    def test_a_listed_disagreement_still_disagrees(self, monkeypatch, app):
+        """An exception that is no longer needed must be removed, so the list cannot hide a later change."""
+        _start(monkeypatch, app)
+        caps = {c.name: c for c in _operator(app).manifest.capabilities}
+        for _, name in [k for k in KNOWN_FLAG_DISAGREEMENTS if k[0] == app]:
+            assert name in caps and (TOOL_ACTIONS[app][name] != "read") != bool(caps[name].side_effecting), name
 
     def test_a_read_grant_runs_read_tools_and_still_denies_write_tools(self, monkeypatch, app, tmp_path, net):
         init_local_profile(str(tmp_path / "perm"))                                         # read grants only
@@ -179,7 +210,7 @@ class TestEveryApp:
         client = TestClient(mod.app, raise_server_exceptions=False)
         for method, path, body, tool, kind in ROUTES[app]:
             assert _denied(_call(client, method, path, body), kind), (method, path, tool)
-        assert net == []
+        assert _executions(net) == []
 
     def test_request_headers_cannot_choose_the_principal_or_gain_an_admin_bypass(self, monkeypatch, app, tmp_path, net):
         init_local_profile(str(tmp_path / "perm"), user="alice")                           # read only

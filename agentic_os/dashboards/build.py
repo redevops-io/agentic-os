@@ -6,7 +6,10 @@ are never averaged across projects; a portfolio ratio is the ratio of the summed
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+from agentic_os import financial_access
 
 from .access import Access
 from .contracts import safe_url, NOT_CONNECTED, OK, STALE, UNAUTHORIZED, Dashboard, Drill, Filters, Metric, Panel, Record, SourceStatus
@@ -39,6 +42,7 @@ class Build:
         self.since = filters.since or (now - max(1, filters.days) * DAY)
         self.until = filters.until or now
         self._status: Dict[str, SourceStatus] = {}
+        self._money_withheld: set = set()
         self._facets: Dict[str, set] = {"product": set(), "environment": set(), "platform": set()}
         self.d.filters, self.d.generated_at = filters, now
         self.d.scope = "project" if filters.project else "portfolio"
@@ -53,7 +57,11 @@ class Build:
         if not self.access.source(sid):
             from .sources import SOURCE_META  # noqa: PLC0415
             label, app, _ = SOURCE_META[sid]
-            st = SourceStatus(id=sid, label=label, app=app, state=UNAUTHORIZED, detail="You do not have access to this source.")
+            detail = "You do not have access to this source."
+            if self.access.lacks_money(sid):
+                detail = financial_access.refusal(label)
+                self._money_withheld.add(label)
+            st = SourceStatus(id=sid, label=label, app=app, state=UNAUTHORIZED, detail=detail)
         else:
             st = self.cache.get(sid).status
             if st.state == OK and st.observed_at and self.now - st.observed_at > STALE_AFTER_S:
@@ -75,6 +83,11 @@ class Build:
         if not self.status(sid).usable:
             return []
         out = []
+        # The one place money leaves a source that holds other things too: without the grant the money fields are removed
+        # here, so no total, table, drill-down or explanation built from these records can carry them.
+        hidden = () if self.money(sid) else financial_access.FIELDS.get(sid, ())
+        if hidden:
+            self._money_withheld.add(self.status(sid).label)
         for r in self.cache.get(sid).records:
             if kind and r.kind != kind:
                 continue
@@ -92,8 +105,15 @@ class Build:
                 continue
             if timed and not all_time and r.at and not (self.since <= r.at <= self.until):
                 continue
+            if hidden:
+                r = replace(r, fields={k: v for k, v in r.fields.items() if k not in hidden})
             out.append(r)
         return out
+
+    def money(self, sid: str) -> bool:
+        """Whether this caller may see the money in this source. A builder asks before it says anything about an amount,
+        so a withheld figure reads as withheld: never as zero and never as "the system records none"."""
+        return not financial_access.carries_money(sid) or self.access.financial(sid)
 
     # ── drill-downs ───────────────────────────────────────────────────────────────────────────────
     def drill(self, key: str, title: str, records: Iterable[Record], *, note: str = "", columns: Sequence[str] = ()) -> str:
@@ -135,6 +155,8 @@ class Build:
     def track(self, m: Metric, per_project: Mapping[str, Tuple[Optional[float], Optional[float]]]) -> Metric:
         """Remember today's value per project (only for the unfiltered default view, so history means one thing) and
         attach the trend over the projects in scope. ``per_project`` maps project id -> (numerator, denominator|None)."""
+        if m.unknown == "unauthorized":
+            return m                    # the history was recorded by callers who may see it: it is withheld with the value
         neutral = not (self.f.product or self.f.environment or self.f.platform or self.f.since or self.f.until)
         if neutral and m.value is not None and not m.unknown:
             self.store.record_points(self.d.id, [(m.id, pid or "_", n, dn) for pid, (n, dn) in per_project.items()], now=self.now)
@@ -165,9 +187,16 @@ class Build:
         return pid or "Unassigned"
 
     def finish(self) -> Dashboard:
+        if self._money_withheld:
+            self.d.withheld = {"partial": True, "financial": True, "detail": (self.d.withheld.get("detail", "") + " " if self.d.withheld else "")
+                               + financial_access.refusal("Money from " + ", ".join(sorted(self._money_withheld)))}
         self.d.facets = {k: sorted(v) for k, v in self._facets.items() if v}
         if not self.d.panels and not self.d.empty:
             self.d.empty = "There is nothing to show for these filters."
+        for p in self.d.panels:
+            # a panel with nothing to draw says so in words: an empty frame reads as "not loaded" or as zero
+            if not (p.metrics or p.series or p.items or p.rows) and not p.empty:
+                p.empty = "Nothing to show here for this range and these filters."
         return self.d
 
 

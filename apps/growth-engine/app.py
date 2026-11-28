@@ -39,7 +39,7 @@ import os
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
 # Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
 # be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
-from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
+from agentic_os.app_gate import RequestContext as _RequestContext, console_authorizer as _console_authorizer, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
 from agentic_os.app_gate import with_authorization as _with_authorization
 _GATE_APP = "growth-engine"
 _req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
@@ -382,9 +382,16 @@ def _reallocate_budget(body: dict) -> dict:
 
 # ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
 try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
+    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole
+    from agentic_os.app_gate import validate_console as _validate_console
+    from agentic_os.tool_actions import console_tool as _console_tool
 except Exception:  # noqa: BLE001 — context-runtime absent → no console
     _AgentConsole = None
+
+# The risk class of every tool below is read from agentic_os/tool_actions.py — the one reviewed table — and never
+# written at the call site: a class typed here would be a second classification table, and the copy is the one
+# that drifts. An unclassified tool refuses to register, so a new tool without a reviewed class stops here.
+_crtool = _console_tool(_GATE_APP) if _AgentConsole is not None else None
 
 _GROWTH_PRIMER = """A PAGEVIEW is one load of a page. A VISITOR is one unique person (deduplicated by device), so 200 pageviews from 50 people = 200 pageviews / 50 visitors. A SESSION (Umami calls it a "visit") is one continuous browsing burst by a visitor; it ends after ~30 min of inactivity, so one visitor can have several sessions over a month.
 
@@ -448,8 +455,11 @@ if _AgentConsole is not None:
         suggestions=["How's my traffic?", "Top pages this week", "Where's my traffic from?", "What is bounce rate?"],
         subtitle="Ask how to read your analytics — or have the agent show your traffic, pages and sources.",
         model=_GovernedConsoleModel(),
+        # named, not inherited: the console answers on the gate's plane, in the shape a ToolRegistry reads
+        authorizer=_console_authorizer(_GATE_APP),
         allow_side_effects=[],  # all tools are read-only
     )
+    _validate_console(_GATE_APP, _GROWTH_CONSOLE)   # gated or not at all: the assistant must not serve before it can say what it may run
 else:
     _GROWTH_CONSOLE = None
 

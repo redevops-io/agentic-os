@@ -34,9 +34,31 @@ def test_every_reviewed_entry_point_has_a_real_rationale():
         assert len(e["rationale"]) > 40, e
 
 
+#: Write routes that carry no sign-in ON PURPOSE (not findings): an OAuth client calls them before it holds a credential.
+#: Each is held by tests/test_agent_gateway_oauth_http.py. Adding one here is a security decision and needs its reason.
+OPEN_BY_DESIGN = {
+    ("agent_gateway/oauth_http.py", "POST /oauth/register", "register"):
+        "dynamic client registration (RFC 7591): grants nothing; bounded number of clients, safe redirect URIs only",
+    ("agent_gateway/oauth_http.py", "POST /oauth/token", "token"):
+        "exchanges a code with its PKCE verifier, or rotates a refresh token: the secret presented is the credential",
+    ("agent_gateway/oauth_http.py", "POST /oauth/revoke", "revoke"):
+        "RFC 7009: ends only a token the caller both holds and was issued; the answer says nothing about whether it existed",
+    ("projects/approval_pages.py", "POST /approvals/signin", "_signin"):
+        "the sign-in itself: it verifies a configured credential, is refused cross-origin and over plain HTTP, and rate limits "
+        "failures (tests/test_approval_pages.py)",
+}
+
+
+def test_the_open_by_design_routes_exist_and_are_exactly_the_clients_oauth_routes_and_the_sign_in():
+    from agentic_os.agent_gateway.oauth_http import OPEN_ROUTES
+    from agentic_os.projects.approval_pages import OPEN_ROUTES as SIGN_IN
+    assert {r["route"] for r in inv.kernel_routes() if (r["file"], r["route"], r["handler"]) in OPEN_BY_DESIGN} == {
+        f"{method} {path}" for method, path in OPEN_ROUTES | SIGN_IN if method == "POST"} == {k[1] for k in OPEN_BY_DESIGN}
+
+
 def test_kernel_unauthenticated_write_routes_are_pinned_and_only_shrink():
     base = {(r["file"], r["route"], r["handler"]) for r in
             json.loads((ROOT / "audit" / "kernel_unauthenticated_routes.json").read_text())["routes"]}
-    now = {(r["file"], r["route"], r["handler"]) for r in inv.kernel_routes() if not r["auth_marker"]}
+    now = {(r["file"], r["route"], r["handler"]) for r in inv.kernel_routes() if not r["auth_marker"]} - set(OPEN_BY_DESIGN)
     assert now - base == set(), f"NEW write route(s) in agentic_os with no authentication marker: {sorted(now - base)}"
     assert base - now == set(), f"routes now authenticated or removed: shrink audit/kernel_unauthenticated_routes.json: {sorted(base - now)}"

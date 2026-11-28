@@ -83,6 +83,12 @@ def apply(env: Optional[MutableMapping[str, str]] = None, home: Optional[str] = 
         # directory admits nobody: an agent exists only after the user connects one (agentic_os/local_agents.py).
         if not (env.get(ENV_LOCAL_AGENTS_DIR) or "").strip():
             env[ENV_LOCAL_AGENTS_DIR] = d + dsep + "agents"
+        # Governed writes and portable applications, beside the other per-user state. Nothing is changed by this alone: an agent
+        # proposes only after the person at the app has connected it with that permission, and each change waits for them there.
+        if not (env.get("AGENTIC_OS_WRITES_DIR") or "").strip():
+            env["AGENTIC_OS_WRITES_DIR"] = d + dsep + "writes"
+        if not (env.get("AGENTIC_OS_APPS") or "").strip():
+            env["AGENTIC_OS_APPS"] = "1"
         if not (env.get(ENV_DASHBOARDS_FILE) or "").strip():
             default_file = env[ENV_DASHBOARDS_DIR] + dsep + "dashboards.yaml"
             env[ENV_DASHBOARDS_DEFAULT_FILE] = default_file

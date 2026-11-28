@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import time
 from dataclasses import dataclass
 
 ENV_TOKEN = "AGENTIC_OS_CONTROL_TOKEN"
@@ -102,6 +103,17 @@ def approver_tokens() -> "dict[str, str]":
     return out
 
 
+def separation_applies(tenant: "str | None") -> bool:
+    """Separation of duties, per tenant: once a tenant has its own approver credential, that tenant's requester credential no
+    longer decides. Another tenant's approver changes nothing for it. It is about DECIDING only: a requester stays
+    identified, with its own tenant's access. An expired approver still counts (expiry must never switch this off), and a
+    token table that cannot be read applies it."""
+    try:
+        return tenant in approver_tokens()
+    except ConfigError:
+        return True
+
+
 def tenant_limits(tenant: str) -> "tuple[list[str], float | None]":
     """Server-side ceiling for a tenant caller: (allowed grants, max budget USD or None = default cap).
 
@@ -129,6 +141,40 @@ def tenant_limits(tenant: str) -> "tuple[list[str], float | None]":
             raise ConfigError(f"{ENV_TENANT_LIMITS}: budget_usd for {tenant!r} must be a finite number >= 0")
         cap = float(cap)
     return refs, cap
+
+
+def tenant_expiry(tenant: str) -> "float | None":
+    """When this tenant's credentials stop working: epoch seconds from ``expires_at`` in ``AGENTIC_OS_TENANT_LIMITS``
+    (an RFC 3339 time WITH its offset, or epoch seconds); ``None`` when the entry sets none. A value that cannot be read
+    is ``0.0``, that is already expired: a typo must never turn a temporary credential into a standing one."""
+    import json  # noqa: PLC0415
+    import math  # noqa: PLC0415
+    from datetime import datetime  # noqa: PLC0415
+    raw = os.environ.get(ENV_TENANT_LIMITS, "").strip()
+    if not raw:
+        return None
+    try:
+        cfg = json.loads(raw)
+    except ValueError as e:
+        raise ConfigError(f"{ENV_TENANT_LIMITS}: not valid JSON") from e
+    entry = cfg.get(tenant) if isinstance(cfg, dict) else None
+    if not isinstance(entry, dict) or "expires_at" not in entry:
+        return None
+    value = entry["expires_at"]
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if math.isfinite(value) else 0.0
+    if isinstance(value, str):
+        try:
+            when = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        return when.timestamp() if when.tzinfo is not None else 0.0
+    return 0.0
+
+
+def tenant_expired(tenant: str, now: "float | None" = None) -> bool:
+    until = tenant_expiry(tenant)
+    return until is not None and (time.time() if now is None else now) >= until
 
 
 def validate_config() -> None:
@@ -181,6 +227,15 @@ def resolve_caller(authorization: "str | None", control_token: "str | None" = No
             found = Caller(tenant, "approver")
     if found is None:
         raise HTTPException(401, "invalid or missing bearer token", headers={"WWW-Authenticate": "Bearer"})
+    if found.tenant is not None:
+        # checked here and nowhere else: expired entries stay in the token tables, because other code asks "are there
+        # approver tokens?" to switch separation of duty on, and expiry must never switch it off
+        try:
+            expired = tenant_expired(found.tenant)
+        except ConfigError as e:
+            raise HTTPException(503, f"endpoints disabled: invalid token configuration ({e})")
+        if expired:
+            raise HTTPException(401, "this credential has expired", headers={"WWW-Authenticate": "Bearer"})
     return found
 
 
