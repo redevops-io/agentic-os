@@ -376,6 +376,36 @@ Limits operators/humans must know:
   stages visibly).
 - One executor serves one runtime; binding a second runtime's event log raises.
 
+## Applications from outside: the registration boundary
+
+Two kinds of code meet the runtime, and they are treated differently on purpose.
+
+* **Trusted internal infrastructure**: the kernel, the apps this distribution ships, and any in-process caller (a `MissionRuntime` or an `Operator` object held in the same process). An in-process call carries
+  the runtime's own markers (`_approval`, `policy_refs`); that is how the runtime delivers an approval to a handler, and it is why a runtime object must never be handed to code you do not trust.
+* **Untrusted callers**: anything that arrives over HTTP (`/invoke`, `/missions`), through the agent gateway (an external agent), or as an application that comes from outside (a portable, installed or imported app).
+  Over HTTP every client-supplied `_approval*` key is stripped and an approval is honoured only as a signed token bound to the operator, capability, mission, node and inputs, once; a mission never gets its
+  `policy_refs` from the caller (a tenant caller's are intersected with `AGENTIC_OS_TENANT_LIMITS`; a delegated agent mission carries none).
+
+This adds no authorization system. It decides where an application from outside is stopped **before** any of its capabilities can be planned or invoked: `AppRegistry.register_external(manifest, operator)`
+refuses, with a blocking finding,
+
+| finding | refused when |
+|---|---|
+| N2 | the operator can execute a capability the manifest does not declare (nothing unclassified is reachable), or the manifest declares one the operator lacks (also refused for bundled apps) |
+| N4 | a side-effecting capability has no verifier |
+| N12 | a side-effecting capability declares neither `approval_required` (a person decides) nor `required_authority` (a control point decides) |
+| N13 | a side-effecting capability declares no `permissions`: the scoped registry offers a capability to a mission only when the mission holds every permission the capability lists, so one that lists none is offered to **every** mission, including one granted nothing |
+| N14 | the operator's name differs from the manifest's, or the app takes the name of a bundled app (the gates, grants and approvals are keyed by name) |
+
+For a bundled app N12, N13 and N14's operator-name check are reported as non-blocking findings (several shipped apps declare side-effecting drafting capabilities without an approval flag; that is a visible
+decision, not a silent one). The kernel's `TOOL_ACTIONS` table classifies bundled tools only and is not extended for an external app: with the basic permissions plane on, an external app's tool is denied by the plane
+(fail closed), and its authority comes from the capability's `permissions` and the mission's `policy_refs`. A capability declared `approval_policy=AUTO` in the agent gateway that is also side-effecting is a *proposal*
+(it creates a request that a person approves in the governed-writes plane); it is not an executed effect.
+
+**Not claimed:** a registry cannot stop the Python code of an application from calling its own functions; the boundary is that the runtime never routes an unclassified or unapproved call to them. The development profile
+does not enforce authority (`AGENTIC_OS_PROFILE`); the production profile refuses a side effect with neither approval nor an execution authorization before the handler runs. Tests:
+`tests/test_portable_app_authorization_boundary.py`.
+
 ## Permissions plane — access-control admin
 
 Basic resource permissions and governed tool access, suitable for individual and trusted small-team deployments (not complete row/column enforcement across an estate; an application enforces grants by installing the authorizer over its tools, or with `AGENTIC_OS_PERMISSIONS=1`): grant a **subject** (app / role / user) read/write on a
