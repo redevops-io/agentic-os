@@ -1,6 +1,6 @@
 {
  "app": "projects",
- "digest": "sha256:f93e2d9f3154d7a3a44964858161b43d67ba8f35c4049ffc814cce8d00d3f633",
+ "digest": "sha256:864371a5ca92b23ca524a2cfc05fa99bf4fcd46a1457a17664ed7f0a99f39e96",
  "operations": [
   {
    "action": "read",
@@ -350,6 +350,52 @@
    "http": [
     {
      "method": "POST",
+     "path": "/api/app-directory/record-link"
+    }
+   ],
+   "id": "projects.app_directory_record_link",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/app-directory/ref-link"
+    }
+   ],
+   "id": "projects.app_directory_ref_link",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
      "path": "/api/projects/{project_id}/capture"
     }
    ],
@@ -571,6 +617,29 @@
     }
    ],
    "id": "projects.record_outcome",
+   "route_access": [
+    "authority_required"
+   ],
+   "typed": false
+  },
+  {
+   "action": "write",
+   "action_source": "route_policy",
+   "declared_by": [
+    "route_policy"
+   ],
+   "external_access": {
+    "gateway": false,
+    "reason": "not registered in the Governed Agent Gateway"
+   },
+   "gateway_candidate": false,
+   "http": [
+    {
+     "method": "POST",
+     "path": "/api/sources/remove"
+    }
+   ],
+   "id": "projects.remove_source",
    "route_access": [
     "authority_required"
    ],
@@ -1214,6 +1283,36 @@
   {
    "gate": "projects_sign_in",
    "method": "GET",
+   "path": "/about/"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/about/about.json"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/about/app.css"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/about/app.js"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/app-directory"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
+   "path": "/api/app-directory/receipts/{mission_id}"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
    "path": "/api/apps/connect/callback"
   },
   {
@@ -1339,6 +1438,11 @@
   {
    "gate": "projects_sign_in",
    "method": "GET",
+   "path": "/api/ui-config"
+  },
+  {
+   "gate": "projects_sign_in",
+   "method": "GET",
    "path": "/docs"
   },
   {
@@ -1360,6 +1464,28 @@
    "gate": "projects_sign_in",
    "method": "GET",
    "path": "/redoc"
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/app-directory/record-link",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.app_directory_record_link",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/app-directory/ref-link",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.app_directory_ref_link",
+    "permission": "projects:write"
+   }
   },
   {
    "gate": "route_policy",
@@ -1583,6 +1709,17 @@
   },
   {
    "gate": "route_policy",
+   "method": "POST",
+   "path": "/api/sources/remove",
+   "write_policy": {
+    "access": "authority_required",
+    "agent_actions": [],
+    "capability": "projects.remove_source",
+    "permission": "projects:write"
+   }
+  },
+  {
+   "gate": "route_policy",
    "method": "PUT",
    "path": "/api/dashboards/views",
    "write_policy": {
@@ -1608,14 +1745,14 @@
  "status": "incomplete",
  "summary": {
   "gateway_candidates": 0,
-  "operations": 69,
+  "operations": 72,
   "reachable_by_external_agents": 46,
-  "routes": 54,
+  "routes": 64,
   "routes_without_a_gate_decision": 0,
   "typed": 0,
   "ui_calls": 0,
   "ui_calls_not_matched": 0,
-  "writes_or_deletes": 33
+  "writes_or_deletes": 36
  },
  "ui_calls": []
 }
