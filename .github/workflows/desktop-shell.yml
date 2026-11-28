@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
+        os: [ubuntu-latest, windows-latest, macos-15]  # macos-14 was retired on 2026-11-02 (runner-images#13518)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:

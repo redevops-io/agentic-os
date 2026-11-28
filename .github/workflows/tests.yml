@@ -21,7 +21,8 @@ concurrency:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # the desktop line's full suite takes 16-22 minutes on a shared runner and the app suites follow it: 25 minutes cancelled a passing run
+    timeout-minutes: 40
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       # the dashboard behaviour tests run the page scripts with node (preinstalled on ubuntu-latest): a missing node must FAIL here, not skip
