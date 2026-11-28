@@ -107,3 +107,35 @@ def test_rejecting_a_long_action_runs_nothing_and_starts_no_job(slow):
     out = w.client.post(f"/api/writes/{asked['request_id']}/decision", headers=APPROVER,
                         json={"approved": False, "digest": shown(w, asked["request_id"])["digest"]}).json()
     assert out["state"] == "rejected" and "job" not in out and not generates(w) and not slow.writes._jobs
+
+
+def test_the_request_database_is_safe_for_jobs_running_beside_requests(world):  # noqa: F811
+    """Jobs run on their own threads beside request threads, all on the service's one connection: unserialized, sqlite3
+    raises InterfaceError or answers a lookup with nothing, and a job ends 'outcome unknown' though nothing was wrong."""
+    writes = world.client.app.state.governed_writes
+    world.studio.backend = "local-model"
+    asked = [world.ok("media.request_generate", kind="video", prompt=f"clip {n}")["request_id"] for n in range(4)]
+    failures: list = []
+    stop = threading.Event()
+
+    def read(rid):
+        while not stop.is_set():
+            try:
+                row = writes._row(rid)
+                assert row is not None and row["id"] == rid
+                writes.preauthorizations.list(tenant="acme")
+                writes._db.execute("UPDATE requests SET heartbeat=heartbeat WHERE id=?", (rid,))
+            except Exception as e:  # noqa: BLE001
+                failures.append(repr(e)[:200])
+                return
+    threads = [threading.Thread(target=read, args=(rid,)) for rid in asked for _ in range(2)]
+    [t.start() for t in threads]
+    try:
+        for _ in range(40):
+            if failures:
+                break
+            writes.list(tenant="acme", limit=50, for_approver=True)
+    finally:
+        stop.set()
+        [t.join() for t in threads]
+    assert not failures, failures[:3]
