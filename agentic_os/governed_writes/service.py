@@ -54,6 +54,33 @@ _BEAT_S = 15.0
 _STALE_BEAT_S = 120.0                        # a running job beats every _BEAT_S; this long without one, its worker is gone
 
 
+class _Rows:
+    """A finished statement: its rows already read and the count it changed. Nothing of the connection is left open."""
+
+    def __init__(self, rows: list, rowcount: int) -> None:
+        self._rows, self.rowcount = rows, rowcount
+
+    def fetchone(self) -> Any:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list:
+        return list(self._rows)
+
+
+class _SerialDb:
+    """The service's one SQLite connection, used by request threads and job threads alike. Each statement runs AND reads
+    its rows under one lock: without it, concurrent use raises ``InterfaceError`` or answers a lookup with nothing. It
+    takes no other lock, so it can be used while the service lock is held and by a worker that does not hold it."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection, self._lock = connection, threading.Lock()
+
+    def execute(self, sql: str, parameters: Any = ()) -> _Rows:
+        with self._lock:
+            cursor = self._connection.execute(sql, parameters)
+            return _Rows(cursor.fetchall() if cursor.description is not None else [], cursor.rowcount)
+
+
 class WriteError(Exception):
     """A refusal with a stable ``code``: not_found | invalid | conflict | unavailable | refused | too_many | denied."""
 
@@ -81,8 +108,9 @@ class GovernedWrites:
         db = root / "requests.sqlite"
         if not db.exists():
             os.close(os.open(db, os.O_CREAT | os.O_WRONLY, 0o600))
-        self._db = sqlite3.connect(str(db), check_same_thread=False, isolation_level=None, timeout=30)
-        self._db.row_factory = sqlite3.Row
+        connection = sqlite3.connect(str(db), check_same_thread=False, isolation_level=None, timeout=30)
+        connection.row_factory = sqlite3.Row
+        self._db = _SerialDb(connection)
         self._db.execute("PRAGMA secure_delete=ON")              # erased inputs do not linger in free pages
         self._db.execute("""CREATE TABLE IF NOT EXISTS requests(
             id TEXT PRIMARY KEY, tenant TEXT NOT NULL, requester TEXT NOT NULL, action TEXT NOT NULL, app TEXT NOT NULL,

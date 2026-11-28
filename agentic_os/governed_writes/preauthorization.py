@@ -140,7 +140,7 @@ def _checked_budget(budget: Any) -> Dict[str, float]:
 class Preauthorizations:
     """Kept beside the requests, in the same database, so a use and its request are one record."""
 
-    def __init__(self, db: sqlite3.Connection, clock: Callable[[], float]) -> None:
+    def __init__(self, db: Any, clock: Callable[[], float]) -> None:       # the service's serialized connection
         self._db, self.clock = db, clock
         db.execute("""CREATE TABLE IF NOT EXISTS preauthorizations(
             id TEXT PRIMARY KEY, tenant TEXT NOT NULL, requester TEXT NOT NULL, actions TEXT NOT NULL, match TEXT NOT NULL,
